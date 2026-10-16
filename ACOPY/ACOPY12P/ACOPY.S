@@ -1,6 +1,8 @@
 ; ACOPY.PRG  -  copy ST v1.2p  (Eurosystems 1988, written by Uwe Stahl)
 ; Disassembly in Devpac syntax.  Text 20030 bytes, data 1438 bytes, bss 20602 bytes.
 ;
+; This is the original uncracked version with it's own protection still intact.
+;
 ; Assembled with Devpac this source reproduces ACOPY.PRG byte for byte except that
 ; the original file lacks the $00 byte terminating its relocation table (it ends
 ; on the last relocation entry), so the Devpac output is one byte longer.
