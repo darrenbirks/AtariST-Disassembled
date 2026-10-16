@@ -1,34 +1,405 @@
 ; ACOPY.PRG  -  copy ST v1.2p  (Eurosystems 1988, written by Uwe Stahl)
 ; Disassembly in Devpac syntax.  Text 20030 bytes, data 1438 bytes, bss 20602 bytes.
 ;
-; Disk copier with a normal mode (sector copy through the FAT) and a protected
-; mode that reads tracks raw, analyses them (sector list, gaps, fuzzy bits,
-; known protection schemes) and rebuilds them on the target with Write Track
-; scripts interpreted by script_dispatch.  The program checks a key disk
-; (track 80 signature "EUROSYSTEMS") and its own copyright string in
-; several places; see the comments on verify_rsc_checksums and check_key_disk.
+; Assembled with Devpac this source reproduces ACOPY.PRG byte for byte except that
+; the original file lacks the $00 byte terminating its relocation table (it ends
+; on the last relocation entry), so the Devpac output is one byte longer.
 ;
-; Register conventions in the disk code: a4 -> disk_params, a5 = PSG ($ff8800),
-; a6 = FDC/DMA ($ff8604); d7 = FDC status / error bits.
-
-; ACOPY.RSC: tree 0 = main dialog (objects named in the comments), tree 1 = about
-; box, tree 2 = empty box used to blank the screen, tree 3 = BIOS parameter block
-; info.  Main dialog objects: 1 TITLE, 6/7 SRC_A/SRC_B, 10/11 TGT_A/TGT_B,
-; 14/15 VERIFY_YES/NO, 18/19 MULTI_YES/NO, 22/23 FORMAT_YES/NO, 26/27 MODE_NORM/
-; MODE_PROT, 32/33/34 SECT_9/10/11, 37/38 INTER_1/INTER_6, 43/44 SIDES_1/2,
-; 47/49/50 START_DOWN/START_TEXT/START_UP, 53/55/56 END_DOWN/END_TEXT/END_UP,
-; 57 INFO, 59 WAITING_TEXT, 60 DRIVE_TEXT, 61 COPY, 62 FORMAT, 63 EXIT.
+;=======================================================================
+; WHAT IT IS
+;=======================================================================
+; A GEM disk copier for the Atari ST with two modes:
 ;
-; Track-write script opcodes (see opcode_table and the op_* routines):
-;   $00 sync+mark+fill  $04 fill words   $08 gap+literal   $0c special sectors
-;   $10 skip            $14 $e5 fill     $18 data field    $1c fix mark bytes
-;   $20 ID field        $24 write+verify $28 gap           $2c end of part 1
-;   $30 timed sector    $34 end verify   $38 long gap      $3c nop
-;   $40 check special   $44 ID $ff       $48 ID zero       $4c verify sectors
-;   $50 ID $ff/1/3      $54 shifted sec. $58 fuzzy marker  $5c long track prep
-;   $60 long track      $64 RLE data     $68 ID cur track  $6c partial write
-;   $70 sync read       $74 fuzzy params
-
+;  Normal ("Norm"): the source BPB is read with Getbpb, boot sector and FATs are
+;   read with Rwabs, a usage map is built from the 12-bit FAT, and only the used
+;   sectors are read (Read Sector) into a big Malloc'd buffer and written back
+;   with Write Sector.  Sectors that consist of a single byte value are not
+;   stored (one flag byte in the map instead).  The target can be formatted on
+;   the fly (Write Track with a generated track image) and verified.
+;
+;  Protected ("Prot"): every track is read raw and rebuilt on the target with
+;   Write Track, including the things the FDC normally hides: sync marks in
+;   data, odd sector sizes, duplicate sector IDs, deleted data marks, bad CRCs,
+;   long tracks, fuzzy (weak) bits and sectors written out of byte alignment.
+;   How this works is described below under "track-write scripts" and "tricks".
+;
+;  The program is itself protected: a key disk check on track 80 and several
+;   checks of its own copyright string (see "key disk and anti-tamper").
+;
+;=======================================================================
+; HOW TO READ THIS FILE
+;=======================================================================
+; - Every routine and variable has been named from its behaviour.  Names of the
+;   form dat_xxxx / loc_xxxx are the few places with no better name; xxxx is
+;   the offset in the text segment of the original program.
+; - "; from: a, b" after a label lists the routines (or data tables) that refer
+;   to that label.  It is derived from the original binary and is documentation
+;   only; Devpac ignores it.  Labels referenced only from inside their own
+;   routine carry no note.
+; - Comments on trap calls give the GEMDOS/BIOS/XBIOS function, comments on
+;   bsr aes_call / vdi_call give the AES/VDI function, and writes to (a6) and
+;   2(a6) are annotated with the FDC command or DMA mode they select.
+; - Register conventions in the disk code: a4 -> disk_params (fields are the
+;   dp_* equates below), a5 = PSG ($ff8800), a6 = FDC/DMA ($ff8604),
+;   d7 = FDC status / error bits.  In the script code a0 = write position in
+;   the track image, a2 = script pointer.
+; - All FDC access goes through the DMA chip: 2(a6) selects the register
+;   ($80 = command/status, $82 = track, $84 = sector, $86 = data, $90 = sector
+;   count, +$100 = write direction) and (a6) reads or writes it.  Command
+;   completion is polled on MFP GPIP bit 5 (low = FDC interrupt).  The DMA
+;   address counter at $ff8609/b/d is read back to find out how far the FDC
+;   has got through a track; that counter is the program's "position on the
+;   track" in nearly all of the timing tricks.
+;
+;=======================================================================
+; THE DIALOG (ACOPY.RSC)
+;=======================================================================
+; The object numbers below are the ones used in the code (form_do returns the
+; exit object in d3, objc_change is called with the object in d3).  The names
+; in the third column are used in the comments.
+;
+; Tree 0: main dialog (tree_main)
+;    0 BOX  [SHADOWED]
+;      1 BOXTEXT  TITLE        "  copy ST  (v 1.2p)  (c)  Eurosystems 1988 "  [SELECTABLE DEFAULT EXIT SHADOWED]
+;      2 BOX  [SHADOWED]
+;        3 BOXTEXT               "General parameters"  [SHADOWED]
+;        4 STRING                "Source:"
+;        5 BOX  [OUTLINED SHADOWED]
+;          6 BOXCHAR  SRC_A        'A'  [SELECTABLE RBUTTON SELECTED]
+;          7 BOXCHAR  SRC_B        'B'  [SELECTABLE RBUTTON]
+;        8 STRING                "Target:"
+;        9 BOX  [OUTLINED SHADOWED]
+;         10 BOXCHAR  TGT_A        'A'  [SELECTABLE RBUTTON]
+;         11 BOXCHAR  TGT_B        'B'  [SELECTABLE RBUTTON SELECTED]
+;       12 STRING                "Verify:"
+;       13 BOX  [OUTLINED SHADOWED]
+;         14 BUTTON   VERIFY_YES   "Yes"  [SELECTABLE RBUTTON SELECTED]
+;         15 BUTTON   VERIFY_NO    "No"  [SELECTABLE RBUTTON]
+;       16 STRING                "Multiple:"
+;       17 BOX  [OUTLINED SHADOWED]
+;         18 BUTTON   MULTI_YES    "Yes"  [SELECTABLE RBUTTON]
+;         19 BUTTON   MULTI_NO     "No"  [SELECTABLE RBUTTON SELECTED]
+;       20 STRING                "Format:"
+;       21 BOX  [OUTLINED SHADOWED]
+;         22 BUTTON   FORMAT_YES   "Yes"  [SELECTABLE RBUTTON SELECTED]
+;         23 BUTTON   FORMAT_NO    "No"  [SELECTABLE RBUTTON]
+;       24 STRING                "Mode:"
+;       25 BOX  [OUTLINED SHADOWED]
+;         26 BUTTON   MODE_NORM    "Norm"  [SELECTABLE RBUTTON TOUCHEXIT SELECTED]
+;         27 BUTTON   MODE_PROT    "Prot"  [SELECTABLE RBUTTON TOUCHEXIT]
+;     28 BOX  [SHADOWED]
+;       29 BOXTEXT               "Format parameters"  [SHADOWED]
+;       30 STRING                "Sectors:"
+;       31 BOX  [OUTLINED SHADOWED]
+;         32 BOXCHAR  SECT_9       '9'  [SELECTABLE RBUTTON TOUCHEXIT SELECTED]
+;         33 BUTTON   SECT_10      "10"  [SELECTABLE RBUTTON TOUCHEXIT]
+;         34 BUTTON   SECT_11      "11"  [SELECTABLE RBUTTON TOUCHEXIT]
+;       35 STRING                "Inter:"
+;       36 BOX  [OUTLINED SHADOWED]
+;         37 BOXCHAR  INTER_1      '1'  [SELECTABLE RBUTTON SELECTED]
+;         38 BOXCHAR  INTER_6      '6'  [SELECTABLE RBUTTON]
+;       39 BOX
+;         40 BOXTEXT               "Format + Prot. parameters"  [SHADOWED]
+;         41 STRING                "Sides:"
+;         42 BOX  [OUTLINED SHADOWED]
+;           43 BOXCHAR  SIDES_1      '1'  [SELECTABLE RBUTTON]
+;           44 BOXCHAR  SIDES_2      '2'  [SELECTABLE RBUTTON SELECTED]
+;         45 STRING                "Start:"
+;         46 BOX  [OUTLINED SHADOWED]
+;           47 BOXCHAR  START_DOWN   char 2 (arrow)  [TOUCHEXIT]
+;           48 BOX
+;             49 STRING   START_TEXT   "00"
+;           50 BOXCHAR  START_UP     char 1 (arrow)  [TOUCHEXIT]
+;         51 STRING                "End:"
+;         52 BOX  [OUTLINED SHADOWED]
+;           53 BOXCHAR  END_DOWN     char 2 (arrow)  [TOUCHEXIT]
+;           54 BOX
+;             55 STRING   END_TEXT     "81"
+;           56 BOXCHAR  END_UP       char 1 (arrow)  [TOUCHEXIT]
+;     57 BOXTEXT  INFO         "Info"  [SELECTABLE EXIT SHADOWED]
+;     58 BOX  [OUTLINED SHADOWED]
+;       59 STRING   WAITING_TEXT " Waiting "
+;       60 STRING   DRIVE_TEXT   "Drive:    Side:    Track:   "
+;     61 BOXTEXT  COPY         "Copy"  [SELECTABLE EXIT SHADOWED]
+;     62 BOXTEXT  FORMAT       "Format"  [SELECTABLE EXIT SHADOWED]
+;     63 BOXTEXT  EXIT         "Exit"  [SELECTABLE EXIT SHADOWED]
+;
+; Tree 1: about box (tree_about)
+;    0 BOX  [SHADOWED]
+;      1 BOX  [SHADOWED]
+;        2 STRING                " copy ST was written in 1987"
+;        3 STRING                "by Uwe Stahl"
+;        4 STRING                "for EUROSYSTEMS Holland."
+;        5 STRING                "Special thanks to Stefan Poltnigg / Austria"
+;      6 BOXTEXT  ABOUT_OK     "OK"  [SELECTABLE DEFAULT EXIT SHADOWED]
+;
+; Tree 2: blank box (tree_blank)
+;    0 BOX
+;
+; Tree 3: BIOS parameter block info (tree_bpb)
+;    0 BOX  [SHADOWED]
+;      1 BOX  [SHADOWED]
+;        2 BOXTEXT               "BIOS parameter block"  [SHADOWED]
+;        3 STRING                "Bytes pro record:      512"
+;        4 STRING                "Records pro cluster:     2"
+;        5 STRING                "Bytes pro cluster:    1024"
+;        6 STRING                "Directory records:       7"
+;        7 STRING                "FAT records:             5"
+;        8 STRING                "FAT copy:                6"
+;        9 STRING                "First data cluster:     18"
+;       10 STRING                "Data clusters:         711"
+;       11 STRING                "Number of sides:         2"
+;       12 STRING                "Tracks pro side:        80"
+;       13 STRING                "Sectors pro track:      10"
+;       14 STRING                "Interleave:              1"
+;     15 BOXTEXT  BPB_OK       "OK"  [SELECTABLE DEFAULT EXIT SHADOWED]
+;
+;=======================================================================
+; PROTECTED MODE: HOW A TRACK GOES FROM SOURCE TO TARGET
+;=======================================================================
+; Read pass (copy_disk_protected, one track at a time, as many tracks as fit
+; in the buffer):
+;  1. fdc_read_track reads the raw track (including gaps, sync and marks) into
+;     track_buf.  While it runs, read_track_find_index samples the DMA address
+;     counter and watches for the index pulse, so the program learns where the
+;     index is relative to the data and how long the track is (over-long and
+;     unformatted tracks are flagged).
+;  2. read_ids_timed issues Read Address again and again and records, for each
+;     ID field, the FDC status and the time since the index (id_fields holds
+;     the 6 ID bytes, sector_buf the status/time pairs).  drive_speed, measured
+;     once per copy from the DMA count between two index pulses, converts time
+;     into bytes.
+;  3. scan_track_sectors walks the raw track matching the timed IDs to the
+;     $a1 $a1 $fe marks it finds (find_next_id tolerates a window because the
+;     timing is approximate), then looks for each data mark.  The result is
+;     sector_list, 18 bytes per sector:
+;        +0  flags: bit0 duplicate ID, bit1 data mark found, bit2 fuzzy bits,
+;            bit3 read error, bit4 no data field, bit5 data mark not $fb,
+;            bit7 sync bytes inside the ID; $ff = ID not matched in the buffer
+;        +1  ordinal among duplicate IDs (or fuzzy position / 16)
+;        +2  track, side, sector, size code       +6 CRC of the ID
+;        +8  gap start   +$a ID offset   +$c data offset   +$e data length
+;        +$10 ID mark byte   +$11 data mark byte
+;  4. calc_sector_gaps works out the gap lengths, choose_gap_size picks the
+;     gap to generate, mark_special_sectors flags IDs containing $f5..$f7 and
+;     numbers duplicate IDs, and read_track_sectors reads the data of every
+;     sector with Read Sector (duplicates with read_sector_timed, which starts
+;     the read at a chosen time after the index so the right copy is hit).
+;     Sectors that give a CRC error are read again and compared
+;     (detect_fuzzy_sector): if two reads differ the sector has fuzzy bits.
+;  5. The known schemes are detected (detect_scheme_*, rebuild_track79, the
+;     Kaiser/STARTER/$0b09 signatures) and emit_track_script writes a
+;     track-write script for the track into the copy buffer.
+;
+; Write pass (prot_write_pass): for each script write_track_from_script runs
+; part 1 to build the track image, issues Write Track, optionally creates fuzzy
+; bits, then runs part 2 which writes and verifies the awkward sectors
+; individually.  Up to three attempts per track.
+;
+;=======================================================================
+; TRACK-WRITE SCRIPTS
+;=======================================================================
+; A script is a small byte-code program, one per track, stored in the copy
+; buffer in place of the track.  The program does not keep the raw track;
+; it keeps a recipe for rebuilding it, which is why a whole disk of
+; protected tracks fits in memory.
+;
+; Script header (at buffer_ptr):
+;   +0 .w  length of part 1 (for raw scripts: number of longs - 1)
+;   +2 .w  total length (raw scripts only)
+;   +4 .w  total length, used by advance_script to step to the next script
+;   +6 .l  handler: script_build_image (normal) or script_copy_raw_image
+;          (the whole 6400-byte image stored as is)
+;   +$a    part 1 items ... ending with opcode $2c
+;          part 2 items ... ending with opcode $34
+;
+; Items: the first byte is the opcode, always a multiple of 4 because it is
+; used directly as the index into opcode_table (30 entries).  The second byte
+; of the opcode word usually is the first parameter.  script_dispatch loads the
+; opcode byte at (a2) and jumps to the handler; the handler reads its own
+; parameters from (a2)+, writes bytes to the image at (a0)+ and jumps back to
+; script_dispatch.  The two end opcodes return to the caller with d0 = 0, an
+; error returns d0 = -1 (or 1).
+;
+; Part 1 ("build") produces the track image in track_buf.  Part 2 ("verify")
+; runs after Write Track and uses the FDC directly: it writes individual
+; sectors with special timing and reads sectors back to check them.  Both
+; parts are written by emit_track_script (part 2 is built at buffer+$2000 and
+; appended afterwards, see emit_finish_script).
+;
+; Opcodes (parameters follow the opcode byte):
+;   $00 sync+mark+fill    second byte = mark, .w length, .w first byte: writes
+;                         byte, $f5 $f5, mark|$f0 then a data body as for $18
+;   $04 fill words        .w value: d0+1 copies of the word (d0 from before)
+;   $08 gap+literal       second byte <> 0: 16 x $4e first; .w n-1, n bytes
+;   $0c special sectors   second byte = count*4: sectors whose ID holds sync
+;                         bytes are written one by one with Write Sector,
+;                         bit-shifted (see tricks); each is followed by a $40
+;   $10 skip              one byte
+;   $14 fill $e5          .w count
+;   $18 data field        second byte = flags|mark low nibble: bit7 data
+;                         follows (else zeros), bit6 no 2 trailing zeros,
+;                         bit5 fill with one byte (.w), bit4 append $f7 (CRC);
+;                         .w length; three $f5 then mark|$f0, then the data
+;   $1c fix mark bytes    .w, .w: if a sync byte ended up in an ID, patch the
+;                         last bytes; $ffff -> put $a1 8 bytes back
+;   $20 ID field          second byte = mark, 4 ID bytes: three $f5, mark, ID,
+;                         then the CRC code taken from the key disk ($f7)
+;   $24 write+verify      (part 2) second byte = flags, .b track, .b sector,
+;                         .w length, data: Write Sector (bit5 deleted mark, bit3 timed
+;                         start, bit1 no read-back, bit2 read twice and expect
+;                         differences = fuzzy), up to 5 attempts
+;   $28 gap               second byte = count of $4e then 12 zeros; count 0:
+;                         run list of (count,value) words, value $ff inverted
+;   $2c end of part 1
+;   $30 timed sector      (part 2) .b count, .b sector, .b track, .w length,
+;                         data: Write Sector started a fixed delay after the
+;                         index pulse, count times, two passes
+;   $34 end of part 2
+;   $38 long gap          .w count of $4e, then 12 zeros
+;   $3c nop               as $10
+;   $40 check special     (part 2) after a $0c sector: read the track back,
+;                         note track/sector written, write the gap before the
+;                         next ID with Write Track aborted at the right place
+;   $44 ID $ff            ID with track $ff sector = special count, placed 60
+;                         bytes back; used to park a special sector
+;   $48 ID zero           ID 0/0/0/0 placed 44 bytes back
+;   $4c verify sectors    (part 2) second byte = count-1, (sector,track) pairs:
+;                         read each, any error fails the track
+;   $50 ID $ff/1/3        .w offset: ID $ff 0 1 3 (1024-byte sector) at offset
+;   $54 shifted sector    (part 2) .w length, data: the data is shifted one bit
+;                         and written with Write Sector exactly when the DMA
+;                         counter reaches a computed position, then the track
+;                         is read back and compared
+;   $58 fuzzy marker      marks the image position where fuzzy bits go
+;                         (fuzzy_pos) and which sector to verify, then an ID
+;   $5c long track prep   .l sector:track: prepare a track longer than one
+;                         revolution ($4e then $d3 $93 $93 ... pattern)
+;   $60 long track write  (part 2) write the long track in pieces aligned on
+;                         the DMA counter, then write the sector and verify
+;   $64 RLE data          run-length encoded bytes: (count,value) pairs, count
+;                         0 = literal block (.w length, bytes), (0,0) = end
+;   $68 ID current track  second byte = sector: ID with the current track and
+;                         side and size code 2
+;   $6c partial write     (part 2) Write Track aborted after $82 bytes: puts a
+;                         write splice right after the first ID
+;   $70 sync read         (part 2) Read Track until the bytes $14 $0b are seen
+;                         in the first 65 bytes, re-writing the track between
+;                         tries (synchronises the track start to the index)
+;   $74 fuzzy params      .b gap, .b offset: as $58 with explicit values
+;
+;=======================================================================
+; TRICKS USED TO REPRODUCE PROTECTIONS
+;=======================================================================
+; The WD1772 can only write what Write Track lets it: $f5 becomes an $a1 sync
+; byte, $f6 a $c2 sync byte, $f7 writes a CRC, and $f8..$ff are reserved, so
+; those values cannot appear as data.  Protections exploit exactly that.  What
+; the program does about it:
+;
+; - Sync bytes inside sector data: copy_raw_sector and fix_sync_bytes turn
+;   $a1 $a1 and $c2 $c2 $c2 runs back into $f5/$f6 so Write Track regenerates
+;   them, and a data field is closed with $f7 so the CRC comes out right.  A
+;   sector that still cannot be written this way is written separately with
+;   Write Sector in part 2.
+; - Sectors whose ID contains $f5..$f7 ("special"): opcode $0c writes them with
+;   Write Sector after the track exists.  Because Write Sector lets the FDC add
+;   its own marks, the data is first shifted one bit with roxr (shift_sector_
+;   buf), i.e. the sector is written out of byte alignment; Write Sector is
+;   started when the DMA counter shows the head is at the right place and is
+;   ended by deselecting the drive through PSG port A (the FDC loses the
+;   drive and stops writing).  Up to 18 attempts, adjusting write_delay from
+;   the number of IDs still readable afterwards.
+; - Fuzzy (weak) bits: write_fuzzy_bits re-issues Write Track, waits for the
+;   DMA counter to reach fuzzy_pos and then toggles the drive-select line 128
+;   times in a tight loop.  The interrupted write gate leaves bits that read
+;   differently each time.  The sector is then read three times and must
+;   differ in the first 16 bytes.
+; - Precisely placed sectors (opcodes $24 bit 3, $30, $54, timed_write_sector):
+;   Force Interrupt $d4 raises the FDC interrupt on the index pulse; the code
+;   waits for it, then counts DMA address nibbles up to the wanted position,
+;   delays (delay_count), starts Write Sector and ends it by deselecting the
+;   drive.  op_30 does this a fixed number of times per revolution to create
+;   the duplicate-ID sectors.
+; - Tracks longer than a revolution: op_5c/op_60 write the image in pieces,
+;   each Write Track being started with its DMA address adjusted so the data
+;   lands where the previous piece ended (long_track_pos).
+; - Duplicate sector IDs on the read side: read_sector_timed starts Read Sector
+;   a computed delay after the index so the wanted copy of the ID is the first
+;   one the FDC sees.  The timing (op_30 items) is measured with
+;   emit_dup_sector_timing by counting how many Read Sector commands complete
+;   after the index before a timeout (one per copy of the ID).
+; - Deleted data marks ($f8), IDs with bad CRC (the stored CRC is written as
+;   data by emit_id_with_crc instead of $f7), missing data fields, 128/256/
+;   1024 byte sectors, sector numbers $ff, a 1024-byte sector hidden in the
+;   gap (op_50), data that runs through the index (the last sector's data is
+;   written over the start of the track).
+; - Known schemes handled explicitly: the track 79 scheme with sectors 1..6,
+;   $f5 and a checksum of the track (rebuild_track79 rewrites the whole track
+;   from constants), the "Kaiser" signature, the $0b09 signature, the
+;   $a1a1 $00fd signature (detect_a1a1_scheme) and tracks with exactly one
+;   duplicated sector.  Gaps are generated, not copied, except for the parts
+;   that carry odd bytes.
+; - When the floppy is idle a VBL handler (vbl_deselect_drives) deselects both
+;   drives so that nothing is written by accident while the select line is
+;   being used as a write gate.
+;
+;=======================================================================
+; PATCHES APPLIED TO THE COPIED DATA (the naughty part)
+;=======================================================================
+; Some checks cannot be satisfied by any copy, so the program recognises the
+; checking code inside the sector data as it is read and rewrites it.  The
+; copy then contains cracked code.  The patterns are stored as data (pat_*)
+; and in the comparison routines:
+;
+; - patch_timing_loops: loops that measure the disk with the 200 Hz timer,
+;   move.l $4ba.w,d3 / move.w d3,(a0)+ / dbra ... / rts (and the absolute-long
+;   and d0 forms), become move.w #$3535,d0 or d3 plus nop, so the check sees
+;   a constant.  Run over the whole buffer when an unformatted track was seen,
+;   and over the data of track 3 (patch_track3).
+; - patch_cmp_sequence: on track 79, when the sector data starts with
+;   $f0f1f2f3 $f4f5f6f7, the loop cmp.l $54(a4),d1 / bne / cmp.l $a8(a4),d1 /
+;   bne / cmp.l (a4)+,d1 / bne / dbra has both bne instructions replaced by nop.
+; - patch_branches: a bne.s +$20 that follows pat_cmpi_fb or pat_move_a1 code
+;   is turned into bne.s -$e (loops back instead of failing); the word before
+;   a bne.s +$7e next to pat_cmpi_a1 / pat_bset becomes $98fa.
+; - patch_fffb_check: when a sector on track 2 contains sync bytes, the
+;   buffer is searched for move.b -5(a0),d0 followed by pat_cmp_loop and
+;   either two bytes are patched or a nop is inserted.
+; - patch_boot_scheme_a / _b: the boot sector (track 0 sector 1) is compared
+;   at the offsets in boot_a_offsets / boot_b_offsets and, if the original
+;   bytes are there, replaced with boot_a_replace / boot_b_replace.  Follow-up
+;   patches then hit sector $f5 of track 2 (scheme A) or of track 1 and track
+;   6 (scheme B, where a beq.s at offset $2c2 becomes bra.s).  For both schemes
+;   bit 4 is cleared in the track/sector numbers of every ID (f_fix_id_bit4),
+;   so the copy's IDs differ from the original's by design.
+; - patch_track2_sector2: clr.w $ff8240 / jmp $10000 at offset $82 of track 2
+;   sector 2 becomes subq.w #2,$11752.
+; - patch_track6_sector10: sub.l d0,$10c8 inside move.b (a2),(a0) / sub.l /
+;   move.w #$1f40,d0 / dbra on track 6 sector 10 is replaced by three nops.
+;
+;=======================================================================
+; KEY DISK AND ANTI-TAMPER
+;=======================================================================
+; - read_key_track runs at start-up: it seeks to track 80 and reads the raw
+;   track into track_buf.  check_key_disk (before the first format or
+;   protected copy) must find "E" + "UROSYSTEMS" in the first 81 bytes of that
+;   buffer and an $f7 byte within the following 4K, otherwise it hangs forever
+;   with interrupts off.  load_crc_from_key_track takes the two bytes used as
+;   the CRC code in generated ID and data fields from that track at offset
+;   $1000 (normally $f7 $f7), so without the key disk the generated tracks
+;   have no valid CRCs.
+; - The copyright string at copyright is read through relocated negative
+;   offsets (lea copyright+n-k,an then move.l k(an),key_x) into key_ems,
+;   key_euro, key_copyright and key_syst.  The bytes are compared one at a
+;   time deep inside the disk routines; a mismatch jumps into the middle of
+;   another routine, restarts the program or executes the key bytes.
+; - verify_rsc_checksums (called whenever the drive is restored before an
+;   operation) requires key_numn -
+;   key_numm = 1 and XOR checksums of five resource strings (the title and
+;   the about box lines) equal to rsc_checksums, otherwise it hangs.
+; - While regenerating its own key track (track 80 with a 1024-byte sector)
+;   the program writes "Hi Cracker! Try your best!!" into it (cracker_msg).
+;
 ; disk_params (bss disk_params, usually addressed through a4)
 dp_recsiz	equ	$00	; bytes per sector
 dp_clsiz	equ	$02	; sectors per cluster
@@ -69,10 +440,10 @@ dp_src_warned	equ	$ba	; write-protect warning for the source already shown
 
 	section	text
 
-start:	; xref: 37d6,3a38,4610
+start:	; from: op_0c_write_special_sectors, script_add_sector, op_24_write_verify
 	bra.s	prg_init
 
-key_numm:	; xref: 4250
+key_numm:	; from: verify_rsc_checksums
 	dc.b	'numm'
 
 ;----------------------------------------------------------------------
@@ -80,7 +451,7 @@ key_numm:	; xref: 4250
 ; install an extra VBL handler (vbl_deselect_drives) by copying the system VBL queue
 ; into vbl_queue, switch off key click, run main, then restore everything and exit.
 ;----------------------------------------------------------------------
-prg_init:	; xref: 0000
+prg_init:	; from: start
 	clr.l	-(sp)
 	move.w	#$20,-(sp)
 	trap	#1                              ; Super
@@ -103,7 +474,7 @@ prg_init:	; xref: 0000
 	lea	$4ca.w,a0                       ; _autopath
 	lea	vbl_queue,a1
 	movea.l	a1,a2
-copy_vbl_queue:	; xref: 0054
+copy_vbl_queue:
 	move.l	(a0)+,(a1)+
 	dbra	d0,copy_vbl_queue
 	move.l	a2,$456.w                       ; _vblqueue = vbl_queue
@@ -116,7 +487,7 @@ copy_vbl_queue:	; xref: 0054
 	move.w	#$49,-(sp)
 	trap	#1                              ; Mfree
 	addq.l	#6,sp
-prg_exit:	; xref: 0070
+prg_exit:
 	bset	#$0,$484.w                      ; conterm: key click on
 	move.b	#$8,$455.w                      ; nvbls = 8
 	move.l	#$4ca,$456.w                    ; _vblqueue = $4ca
@@ -130,7 +501,7 @@ prg_exit:	; xref: 0070
 ;----------------------------------------------------------------------
 ; AES trap: d0 = 200, d1 = parameter block
 ;----------------------------------------------------------------------
-aes_trap:	; xref: 0658
+aes_trap:	; from: aes_call
 	move.l	#aes_pb,d1
 	move.w	#$c8,d0
 	trap	#2                              ; AES
@@ -140,7 +511,7 @@ aes_trap:	; xref: 0658
 ;----------------------------------------------------------------------
 ; VDI trap: d0 = 115, d1 = parameter block
 ;----------------------------------------------------------------------
-vdi_trap:	; xref: 0652
+vdi_trap:	; from: vdi_call
 	move.l	#vdi_pb,d1
 	moveq	#115,d0
 	trap	#2                              ; VDI
@@ -156,7 +527,7 @@ copyright:
 ;----------------------------------------------------------------------
 ; Main program: open GEM, load ACOPY.RSC, read the key track, run the dialog loop.
 ;----------------------------------------------------------------------
-main:	; xref: 0068
+main:	; from: prg_init
 	move.w	#$4,-(sp)
 	trap	#14                             ; Getrez
 	addq.l	#2,sp
@@ -170,14 +541,14 @@ main:	; xref: 0068
 	lea	alert_resolution,a0             ; alert: use medium or high
 	bsr.w	alert
 	beq.s	exit_gem                        ; Cancel: leave
-main_get_drive:	; xref: 00fa
+main_get_drive:
 	move.w	#$19,-(sp)
 	trap	#1                              ; Dgetdrv
 	addq.l	#2,sp
 	cmpi.b	#$2,d0                          ; drive < 2?
 	bcs.s	loc_011e
 	clr.l	d0                              ; otherwise drive A
-loc_011e:	; xref: 011a
+loc_011e:
 	move.w	d0,cur_drive
 	bsr.w	load_resource
 	tst.w	intout                          ; rsrc_load ok?
@@ -185,17 +556,17 @@ loc_011e:	; xref: 011a
 	lea	alert_no_rsc,a0
 	bra.s	alert_and_exit
 
-alert_system_error:	; xref: 0152,016c,0182
+alert_system_error:
 	lea	alert_sys_error,a0
-alert_and_exit:	; xref: 0136
+alert_and_exit:
 	bsr.w	alert
-exit_gem:	; xref: 010c
+exit_gem:
 	bra.w	gem_exit
 
-main_load_trees:	; xref: 012e
+main_load_trees:
 	moveq	#3,d3                           ; trees 3..0 -> tree_bpb .. tree_main
 	lea	char_w,a3
-load_tree_loop:	; xref: 0156
+load_tree_loop:
 	bsr.w	get_tree
 	beq.s	alert_system_error
 	move.l	a0,-(a3)
@@ -228,7 +599,7 @@ load_tree_loop:	; xref: 0156
 	cmpi.b	#$2,d3
 	bcc.s	main_cache_strings
 	lea	single_drive_states,a4          ; disable the drive B buttons
-disable_drive_b_loop:	; xref: 01c6
+disable_drive_b_loop:
 	clr.l	d0
 	move.b	(a4)+,d0
 	beq.s	main_cache_strings
@@ -236,14 +607,14 @@ disable_drive_b_loop:	; xref: 01c6
 	move.b	(a4)+,$3(a0)                    ; set ob_state low byte
 	bra.s	disable_drive_b_loop
 
-main_cache_strings:	; xref: 01b0,01bc
+main_cache_strings:
 	lea	rsc_strings,a1
 	moveq	#1,d0                           ; cache ob_spec of TITLE
 	bsr.w	get_ob_spec
 	move.l	(a0),(a1)+
 	movea.l	tree_about,a3
 	moveq	#2,d2                           ; about box objects 2..5
-cache_string_loop:	; xref: 01ec
+cache_string_loop:
 	move.l	d2,d0
 	bsr.w	get_ob_spec
 	move.l	d0,(a1)+
@@ -251,12 +622,12 @@ cache_string_loop:	; xref: 01ec
 	cmpi.b	#$5,d2
 	ble.s	cache_string_loop
 	bsr.w	read_key_track                  ; key disk: read track 80
-main_draw_dialog:	; xref: 02e8,0328
+main_draw_dialog:	; from: main_loop
 	movea.l	tree_main,a4
 	bsr.w	redraw_main_dialog
 	lea	text_objects,a4
 	lea	obj_text_table,a5
-cache_text_pos_loop:	; xref: 021e
+cache_text_pos_loop:
 	clr.l	d0
 	move.b	(a4),d0
 	beq.s	main_calc_text_pos
@@ -268,7 +639,7 @@ cache_text_pos_loop:	; xref: 021e
 	move.l	d0,(a5)+
 	bra.s	cache_text_pos_loop
 
-main_calc_text_pos:	; xref: 020c
+main_calc_text_pos:
 	lea	drive_xy,a0
 	move.l	drive_label_xy,d0               ; x,y of "Drive: Side: Track:"
 	move.l	d0,(a0)+
@@ -285,7 +656,7 @@ main_calc_text_pos:	; xref: 020c
 ;----------------------------------------------------------------------
 ; Dialog event loop: form_do returns the exit object in d3.
 ;----------------------------------------------------------------------
-main_loop:	; xref: 026c,029e,02b2,02cc,0378,0410
+main_loop:	; from: button_track_arrows
 	bsr.w	do_dialog
 	cmpi.b	#$1a,d3                         ; MODE_NORM?
 	bne.s	button_mode_prot
@@ -297,10 +668,10 @@ main_loop:	; xref: 026c,029e,02b2,02cc,0378,0410
 	bsr.w	deselect_object                 ; deselect FORMAT_NO
 	moveq	#22,d3                          ; FORMAT_YES
 	bsr.w	select_object                   ; select FORMAT_YES
-loc_026c:	; xref: 0260
+loc_026c:
 	bra.s	main_loop
 
-button_mode_prot:	; xref: 0252
+button_mode_prot:
 	cmpi.b	#$1b,d3                         ; MODE_PROT?
 	bne.s	button_sectors_9
 	moveq	#43,d3                          ; SIDES_1
@@ -317,20 +688,20 @@ button_mode_prot:	; xref: 0252
 	bsr.w	deselect_object
 	moveq	#8,d1                           ; state 8 = DISABLED
 	bsr.w	change_object_state             ; disable FORMAT_NO
-loc_029e:	; xref: 028a
+loc_029e:
 	bra.s	main_loop
 
-button_sectors_9:	; xref: 0272
+button_sectors_9:
 	cmpi.b	#$20,d3                         ; SECT_9?
 	bne.s	button_sectors_10_11
-set_interleave_1:	; xref: 02b8
+set_interleave_1:
 	moveq	#37,d3                          ; INTER_1
 	bsr.w	select_object                   ; select INTER_1
 	moveq	#38,d3                          ; INTER_6
 	bsr.w	deselect_object                 ; deselect INTER_6
 	bra.s	main_loop
 
-button_sectors_10_11:	; xref: 02a4
+button_sectors_10_11:
 	cmpi.b	#$21,d3                         ; SECT_10?
 	beq.s	set_interleave_1
 	cmpi.b	#$22,d3                         ; SECT_11?
@@ -341,7 +712,7 @@ button_sectors_10_11:	; xref: 02a4
 	bsr.w	deselect_object                 ; deselect INTER_1
 	bra.w	main_loop
 
-button_title:	; xref: 02be
+button_title:
 	cmpi.b	#$1,d3                          ; TITLE (about box)?
 	bne.s	button_info
 	movea.l	tree_about,a4
@@ -350,7 +721,7 @@ button_title:	; xref: 02be
 	bsr.w	unselect_button_nodraw
 	bra.w	main_draw_dialog
 
-button_info:	; xref: 02d4
+button_info:
 	cmpi.b	#$39,d3                         ; INFO?
 	bne.s	button_format
 	bsr.w	read_settings
@@ -361,7 +732,7 @@ button_info:	; xref: 02d4
 	bsr.w	alert
 	bra.s	unselect_and_loop
 
-show_bpb_dialog:	; xref: 02fe
+show_bpb_dialog:
 	bsr.w	unselect_button_nodraw
 	movea.l	tree_bpb,a3
 	bsr.w	fill_bpb_dialog
@@ -371,7 +742,7 @@ show_bpb_dialog:	; xref: 02fe
 	bsr.w	unselect_button_nodraw
 	bra.w	main_draw_dialog
 
-button_format:	; xref: 02f0
+button_format:
 	cmpi.b	#$3e,d3                         ; FORMAT?
 	bne.s	button_copy
 	bsr.w	read_settings
@@ -379,7 +750,7 @@ button_format:	; xref: 02f0
 	bsr.w	format_disk
 	bra.s	unselect_and_loop
 
-button_copy:	; xref: 0330
+button_copy:
 	cmpi.b	#$3d,d3                         ; COPY?
 	bcs.s	button_track_arrows             ; below COPY: track arrows
 	bne.w	gem_exit                        ; above COPY: EXIT
@@ -391,16 +762,16 @@ button_copy:	; xref: 0330
 	moveq	#61,d3                          ; unselect COPY afterwards
 	bra.s	unselect_and_loop
 
-copy_normal_mode:	; xref: 0354
+copy_normal_mode:
 	bsr.w	read_source_bpb
 	beq.s	start_normal_copy
 	lea	alert_cannot_normal,a0          ; alert: cannot copy this disk
 	bsr.w	alert
 	bra.s	unselect_and_loop
 
-start_normal_copy:	; xref: 0362
+start_normal_copy:
 	bsr.w	copy_disk_normal
-unselect_and_loop:	; xref: 02f6,030a,0336,033c,034c,035c,036e
+unselect_and_loop:
 	bsr.w	unselect_button
 	bra.w	main_loop
 
@@ -408,7 +779,7 @@ unselect_and_loop:	; xref: 02f6,030a,0336,033c,034c,035c,036e
 ;----------------------------------------------------------------------
 ; Start/end track arrow buttons (objects 47/50 and 53/56).
 ;----------------------------------------------------------------------
-button_track_arrows:	; xref: 0342
+button_track_arrows:	; from: main_loop
 	bsr.w	mouse_off
 	clr.l	d2
 	lea	start_track,a4
@@ -421,7 +792,7 @@ button_track_arrows:	; xref: 0342
 	addq.l	#4,a1
 	movea.l	(a1)+,a0                        ; a0 -> END_TEXT
 	move.b	(a5),d2
-adjust_start_track:	; xref: 039a
+adjust_start_track:
 	cmpi.b	#$35,d3                         ; '5', END_DOWN
 	bcc.s	adjust_end_track
 	cmpi.b	#$2f,d3                         ; START_DOWN?
@@ -429,31 +800,31 @@ adjust_start_track:	; xref: 039a
 	tst.w	d2
 	beq.s	loc_03c0
 	subq.b	#1,d2
-loc_03b4:	; xref: 03ac
+loc_03b4:
 	cmpi.b	#$32,d3                         ; START_UP?
 	bne.s	loc_03c0
 	cmp.b	(a5),d2                         ; start < end?
 	bcc.s	loc_03c0
 	addq.b	#1,d2
-loc_03c0:	; xref: 03b0,03b8,03bc
+loc_03c0:
 	move.b	d2,(a4)
 	bra.s	show_track_number
 
-adjust_end_track:	; xref: 03a6
+adjust_end_track:
 	cmpi.b	#$35,d3                         ; END_DOWN?
 	bne.s	loc_03d0
 	cmp.b	(a4),d2                         ; end > start?
 	beq.s	loc_03de
 	subq.b	#1,d2
-loc_03d0:	; xref: 03c8
+loc_03d0:
 	cmpi.b	#$38,d3                         ; END_UP?
 	bne.s	loc_03de
 	cmpi.b	#$55,d2                         ; max 85
 	bcc.s	loc_03de
 	addq.b	#1,d2
-loc_03de:	; xref: 03cc,03d4,03da
+loc_03de:
 	move.b	d2,(a5)                         ; PSG register select
-show_track_number:	; xref: 03c2
+show_track_number:
 	divu.w	#$a,d2                          ; two decimal digits
 	ori.b	#$30,d2
 	move.b	d2,(a0)
@@ -467,23 +838,23 @@ show_track_number:	; xref: 03c2
 	bne.s	disable_format_button
 	cmpi.b	#$4f,(a5)                       ; end track >= 79?
 	bcc.s	set_format_button_state
-disable_format_button:	; xref: 0400
+disable_format_button:
 	moveq	#40,d1                          ; SHADOWED|DISABLED
-set_format_button_state:	; xref: 0406
+set_format_button_state:
 	moveq	#62,d3                          ; FORMAT button
 	bsr.w	change_object_state
 	bra.w	main_loop
 
 
-show_about_dialog:	; xref: 02dc
+show_about_dialog:	; from: main_loop
 	bsr.w	unselect_button_nodraw
 
-redraw_main_dialog:	; xref: 01f8,031c
+redraw_main_dialog:	; from: main, main_loop
 	movea.l	tree_blank,a3
 	bsr.s	center_and_draw
 	movea.l	a4,a3
 
-center_and_draw:	; xref: 041e
+center_and_draw:	; from: redraw_main_dialog
 	bsr.w	center_dialog
 	bra.w	draw_tree
 
@@ -491,7 +862,7 @@ center_and_draw:	; xref: 041e
 ;----------------------------------------------------------------------
 ; GEM initialisation: appl_init, graf_handle, v_opnvwk
 ;----------------------------------------------------------------------
-gem_init:	; xref: 00ea
+gem_init:	; from: main
 	moveq	#10,d0                          ; appl_init
 	move.l	#$100,d1
 	bsr.w	aes_call                        ; AES appl_init
@@ -505,7 +876,7 @@ gem_init:	; xref: 00ea
 	move.l	d0,char_w
 	lea	intin,a0
 	moveq	#9,d0
-workin_loop:	; xref: 0468
+workin_loop:
 	move.w	#$1,(a0)+                       ; work_in[0..9] = 1
 	dbra	d0,workin_loop
 	move.w	#$2,(a0)                        ; work_in[10] = 2
@@ -519,7 +890,7 @@ workin_loop:	; xref: 0468
 ;----------------------------------------------------------------------
 ; Leave GEM: rsrc_free, v_clsvwk, appl_exit
 ;----------------------------------------------------------------------
-gem_exit:	; xref: 0142,0344
+gem_exit:	; from: main, main_loop
 	moveq	#111,d0                         ; rsrc_free
 	move.l	#$100,d1
 	bsr.w	aes_call                        ; AES rsrc_free
@@ -534,7 +905,7 @@ gem_exit:	; xref: 0142,0344
 ;----------------------------------------------------------------------
 ; form_alert with string in a0; returns Z set if button 1 was chosen
 ;----------------------------------------------------------------------
-alert:	; xref: 0108,013e,0306,036a,0706,0990,0dfc,101c...
+alert:	; from: main, main_loop, read_settings, fdc_error_alert, copy_disk_protected, copy_disk_normal
 	move.l	a0,addrin
 	move.w	#$1,intin                       ; intin[0] = 1 (default button)
 	moveq	#52,d0                          ; form_alert
@@ -548,7 +919,7 @@ alert:	; xref: 0108,013e,0306,036a,0706,0990,0dfc,101c...
 ;----------------------------------------------------------------------
 ; wind_get(0, WF_WORKXYWH) -> desk_xy/desk_wh
 ;----------------------------------------------------------------------
-get_desktop_area:	; xref: 00ee
+get_desktop_area:	; from: main
 	clr.w	intin                           ; intin[0] = 0 (desktop)
 	move.w	#$4,intin_1                     ; intin[1] = WF_WORKXYWH
 	moveq	#104,d0                         ; wind_get
@@ -560,31 +931,31 @@ get_desktop_area:	; xref: 00ee
 	rts
 
 
-mouse_on:	; xref: 03f8,0938,0c2c,0df2,1012,104a,107c,11de...
+mouse_on:	; from: read_source_bpb, copy_disk_normal, fdc_error_alert, copy_disk_protected, button_track_arrows
 	move.w	#$101,d0                        ; M_ON
 	bra.s	graf_mouse_call
 
 
-mouse_off:	; xref: 037c,0996,0a22,0c1c,0cb0,0e04,1026,105c...
+mouse_off:	; from: read_source_bpb, format_disk, fdc_error_alert, copy_disk_protected, copy_disk_normal, button_track_arrows
 	move.w	#$100,d0                        ; M_OFF
 	bra.s	graf_mouse_call
 
 
-mouse_arrow:	; xref: 019e,0a1a,0c18
+mouse_arrow:	; from: main, read_source_bpb, advance_track
 	moveq	#0,d0                           ; ARROW
 	bra.s	graf_mouse_call
 
 
-mouse_busy:	; xref: 0b92
+mouse_busy:	; from: read_source_bpb
 	moveq	#2,d0                           ; BUSY_BEE
-graf_mouse_call:	; xref: 04fe,0504,0508
+graf_mouse_call:	; from: mouse_arrow, mouse_on, mouse_off
 	move.w	d0,intin
 	moveq	#78,d0                          ; graf_mouse
 	move.l	#$10101,d1
 	bra.w	aes_call                        ; AES graf_mouse
 
 
-get_mouse_button:	; xref: 0900
+get_mouse_button:	; from: check_abort
 	moveq	#79,d0                          ; graf_mkstate
 	move.l	#$500,d1
 	bsr.w	aes_call                        ; AES graf_mkstate
@@ -592,7 +963,7 @@ get_mouse_button:	; xref: 0900
 	rts
 
 
-load_resource:	; xref: 0124
+load_resource:	; from: main
 	move.l	#rsc_name,addrin
 	moveq	#110,d0                         ; rsrc_load
 	move.l	#$10100,d1
@@ -602,7 +973,7 @@ load_resource:	; xref: 0124
 ;----------------------------------------------------------------------
 ; rsrc_gaddr(R_TREE, d3) -> a0 = tree, Z set on failure
 ;----------------------------------------------------------------------
-get_tree:	; xref: 014e
+get_tree:	; from: main
 	clr.w	intin                           ; intin[0] = R_TREE
 	move.w	d3,intin_1                      ; intin[1] = tree index
 	moveq	#112,d0                         ; rsrc_gaddr
@@ -616,7 +987,7 @@ get_tree:	; xref: 014e
 ;----------------------------------------------------------------------
 ; objc_draw(tree a3, 0, depth 5, desktop clip)
 ;----------------------------------------------------------------------
-draw_tree:	; xref: 0426
+draw_tree:	; from: center_and_draw
 	moveq	#5,d0                           ; start object 0, depth 5
 	bsr.w	set_intin_clip
 	move.l	a3,addrin
@@ -628,29 +999,29 @@ draw_tree:	; xref: 0426
 ;----------------------------------------------------------------------
 ; objc_change on object d3: d1 = new state, d2 = redraw flag
 ;----------------------------------------------------------------------
-deselect_object:	; xref: 0262,027c,0294,02ae,02c8
+deselect_object:	; from: main_loop
 	moveq	#0,d1                           ; state 0 = normal
 	bra.s	change_object_state
 
 
-select_object:	; xref: 0268,0276,028e,02a8,02c2
+select_object:	; from: main_loop
 	moveq	#1,d1                           ; state 1 = SELECTED
 
-change_object_state:	; xref: 029a,040c,0588
+change_object_state:	; from: deselect_object, main_loop, button_track_arrows
 	moveq	#1,d2                           ; redraw
 	bra.s	objc_change_call
 
 
-unselect_button:	; xref: 0374
+unselect_button:	; from: main_loop
 	moveq	#1,d2
 	bra.s	objc_change_shadowed
 
 
-unselect_button_nodraw:	; xref: 02e4,030c,0324,0414
+unselect_button_nodraw:	; from: main_loop, show_about_dialog
 	clr.w	d2
-objc_change_shadowed:	; xref: 0592
+objc_change_shadowed:	; from: unselect_button
 	moveq	#32,d1                          ; state 32 = SHADOWED
-objc_change_call:	; xref: 058e
+objc_change_call:	; from: change_object_state
 	move.w	d3,d0                           ; intin[0] = object, [1] = 0
 	swap	d0
 	clr.w	d0
@@ -663,7 +1034,7 @@ objc_change_call:	; xref: 058e
 	bra.w	aes_call                        ; AES objc_change
 
 
-center_dialog:	; xref: 0422
+center_dialog:	; from: center_and_draw
 	move.l	a3,addrin
 	moveq	#54,d0                          ; form_center
 	move.l	#$10500,d1
@@ -676,7 +1047,7 @@ center_dialog:	; xref: 0422
 ;----------------------------------------------------------------------
 ; form_do(tree a3) -> d3 = exit object without double-click bit
 ;----------------------------------------------------------------------
-do_dialog:	; xref: 024a,02e0,0320
+do_dialog:	; from: main_loop
 	move.l	a3,addrin
 	clr.w	intin
 	moveq	#50,d0                          ; form_do
@@ -690,7 +1061,7 @@ do_dialog:	; xref: 024a,02e0,0320
 ;----------------------------------------------------------------------
 ; objc_offset(tree a3, object d0) -> d0 = x:y (y adjusted by char_h_adj)
 ;----------------------------------------------------------------------
-object_screen_pos:	; xref: 0218
+object_screen_pos:	; from: main
 	move.l	a3,addrin
 	move.w	d0,intin
 	moveq	#44,d0                          ; objc_offset
@@ -704,11 +1075,11 @@ object_screen_pos:	; xref: 0218
 ;----------------------------------------------------------------------
 ; v_gtext: a0 = C string, a1 -> x,y
 ;----------------------------------------------------------------------
-draw_text:	; xref: 03f4,08fc,091e,092e,09be
+draw_text:	; from: show_status_text, show_formatting, show_side, button_track_arrows
 	move.l	(a1),ptsin                      ; ptsin = x,y
 	lea	intin,a1
 	clr.l	d1
-text_to_intin_loop:	; xref: 063a
+text_to_intin_loop:
 	addq.b	#1,d1                           ; intin[n] = char
 	clr.b	(a1)+
 	move.b	(a0)+,(a1)+
@@ -721,7 +1092,7 @@ text_to_intin_loop:	; xref: 063a
 ;----------------------------------------------------------------------
 ; VDI call: d0 = opcode, d1 = contrl[1..4] packed as bytes
 ;----------------------------------------------------------------------
-vdi_call:	; xref: 047a,049a
+vdi_call:	; from: gem_exit, gem_init
 	bsr.s	set_control
 	move.w	vdi_handle,contrl_handle        ; contrl[6] = handle
 	bra.w	vdi_trap
@@ -730,15 +1101,15 @@ vdi_call:	; xref: 047a,049a
 ;----------------------------------------------------------------------
 ; AES call: d0 = opcode, d1 = control[1..4] packed as bytes
 ;----------------------------------------------------------------------
-aes_call:	; xref: 0432,043e,0492,04a2,04bc,04e2,051a,0526...
+aes_call:	; from: gem_exit, alert, object_screen_pos, unselect_button_nodraw, do_dialog, draw_tree, ...
 	bsr.s	set_control
 	bra.w	aes_trap
 
 
-set_control:	; xref: 0646,0656
+set_control:	; from: aes_call, vdi_call
 	lea	control,a0
 	moveq	#4,d2                           ; d1 bytes -> control[1..4]
-set_control_loop:	; xref: 066a
+set_control_loop:
 	move.w	d0,(a0)+
 	move.b	d1,d0
 	lsr.l	#8,d1
@@ -746,7 +1117,7 @@ set_control_loop:	; xref: 066a
 	rts
 
 
-set_intin_clip:	; xref: 0570,059e
+set_intin_clip:	; from: unselect_button_nodraw, draw_tree
 	lea	intin,a0
 	move.l	d0,(a0)+                        ; intin[0..1] = d0
 	move.l	desk_xy,(a0)+                   ; intin[2..5] = clip rectangle
@@ -759,11 +1130,11 @@ set_intin_clip:	; xref: 0570,059e
 ; (source_drive .. interleave_6), patch the drive letters into the alert texts
 ; and show the "Insert disk" alert that matches the pressed button (d3).
 ;----------------------------------------------------------------------
-read_settings:	; xref: 02f2,0332,0348
+read_settings:	; from: main_loop
 	lea	radio_objects,a1
 	lea	source_drive,a2
 	movea.l	a2,a4
-read_radio_loop:	; xref: 06a2
+read_radio_loop:
 	clr.l	d0
 	move.b	(a1)+,d0
 	beq.s	patch_drive_letters
@@ -772,7 +1143,7 @@ read_radio_loop:	; xref: 06a2
 	move.b	d0,(a2)+
 	bra.s	read_radio_loop
 
-patch_drive_letters:	; xref: 0698
+patch_drive_letters:
 	move.b	(a4)+,d0                        ; source drive
 	move.b	d0,d1
 	addi.b	#$41,d0                         ; drive letter
@@ -785,7 +1156,7 @@ patch_drive_letters:	; xref: 0698
 	cmp.b	d1,d0                           ; source == target?
 	beq.s	pick_insert_alert
 	moveq	#1,d2
-pick_insert_alert:	; xref: 06c2
+pick_insert_alert:
 	move.b	d2,same_drive
 	addi.b	#$41,d0
 	move.b	d0,$75(a1)                      ; alert_insert_both
@@ -802,14 +1173,14 @@ pick_insert_alert:	; xref: 06c2
 	tst.b	same_drive
 	beq.s	show_insert_alert
 	lea	$5c(a0),a0                      ; alert_insert_both
-show_insert_alert:	; xref: 06ea,06f4,0700
+show_insert_alert:
 	bra.w	alert
 
 
 ;----------------------------------------------------------------------
 ; Return a0 -> ob_spec of object d0 in tree a3, d0 = ob_spec
 ;----------------------------------------------------------------------
-get_ob_spec:	; xref: 01d0,01e0,020e,0c72
+get_ob_spec:	; from: main, fill_bpb_dialog
 	moveq	#12,d1                          ; offset of ob_spec
 	bsr.s	get_object_field
 	movea.l	d0,a0
@@ -819,10 +1190,10 @@ get_ob_spec:	; xref: 01d0,01e0,020e,0c72
 ;----------------------------------------------------------------------
 ; Return a0 -> ob_flags of object d0 in tree a3, d0 = ob_flags:ob_state
 ;----------------------------------------------------------------------
-get_ob_state:	; xref: 01be,0258,0282,069a
+get_ob_state:	; from: main, main_loop, read_settings
 	moveq	#8,d1                           ; offset of ob_flags
 
-get_object_field:	; xref: 070c
+get_object_field:	; from: get_ob_spec
 	movea.l	a3,a0
 	mulu.w	#$18,d0                         ; object size 24
 	add.l	d1,d0
@@ -834,7 +1205,7 @@ get_object_field:	; xref: 070c
 ;----------------------------------------------------------------------
 ; Getbpb(source drive) -> bpb_ptr
 ;----------------------------------------------------------------------
-get_bpb:	; xref: 0b96
+get_bpb:	; from: read_source_bpb
 	clr.w	d0
 	move.b	source_drive,d0
 	move.w	d0,-(sp)
@@ -852,7 +1223,7 @@ get_bpb:	; xref: 0b96
 ; gap, sync, data address mark ($fb) + 512 data bytes + CRC.  The address of
 ; each ID field inside the image is recorded in sector_id_ptrs.
 ;----------------------------------------------------------------------
-build_format_track:	; xref: 0a34
+build_format_track:	; from: format_disk
 	moveq	#11,d4
 	tst.b	eleven_sectors
 	bne.s	set_interleave
@@ -860,14 +1231,14 @@ build_format_track:	; xref: 0a34
 	tst.b	ten_sectors
 	bne.s	set_interleave
 	moveq	#9,d4
-set_interleave:	; xref: 0744,074e
+set_interleave:
 	move.w	d4,dp_spt(a4)
 	moveq	#6,d5
 	tst.b	interleave_6
 	bne.s	build_track_image
 	moveq	#1,d5
 
-build_track_image:	; xref: 075e,0d16
+build_track_image:	; from: build_format_track, copy_disk_normal
 	move.w	d5,dp_interleave(a4)
 	bsr.w	check_key_disk
 	bsr.w	load_crc_from_key_track
@@ -875,7 +1246,7 @@ build_track_image:	; xref: 075e,0d16
 	movea.l	a0,a1
 	move.l	#$4e4e4e4e,d0                   ; 'NNNN' gap bytes
 	move.w	#$7bf,d1                        ; $7c0 longs = 7936 bytes
-fill_gap_loop:	; xref: 0782
+fill_gap_loop:
 	move.l	d0,(a1)+
 	dbra	d1,fill_gap_loop
 	lea	sector_id_ptrs,a1
@@ -894,11 +1265,11 @@ fill_gap_loop:	; xref: 0782
 	move.b	#$2,(a0)+                       ; size code 2 = 512
 	move.b	#$f7,(a0)+                      ; CRC
 	lea	$28(a0),a0
-build_sector_loop_outer:	; xref: 0792,079c
+build_sector_loop_outer:
 	moveq	#1,d7                           ; d7 = first sector of this pass
-build_sector_loop_side:	; xref: 0806
+build_sector_loop_side:
 	move.b	d7,d6
-build_sector_loop:	; xref: 0800
+build_sector_loop:
 	bsr.w	emit_sync
 	move.b	#$fe,(a0)+                      ; ID address mark
 	move.l	a0,(a1)+                        ; remember ID field address
@@ -916,7 +1287,7 @@ build_sector_loop:	; xref: 0800
 	cmpi.b	#$b,d4                          ; 11 sectors: no gap 3
 	beq.s	next_sector_id
 	lea	$28(a0),a0
-next_sector_id:	; xref: 07f6
+next_sector_id:
 	add.b	d5,d6                           ; next sector = + interleave
 	cmp.b	d4,d6
 	ble.s	build_sector_loop
@@ -930,7 +1301,7 @@ next_sector_id:	; xref: 07f6
 ; Fill track/side/sector numbers into the ID fields of the track image
 ; (sequential, interleaved or via skew_table_il6).
 ;----------------------------------------------------------------------
-fill_sector_ids:	; xref: 0a4c,0e6c
+fill_sector_ids:	; from: format_disk, copy_disk_normal
 	lea	sector_id_ptrs,a0
 	move.w	dp_spt(a4),d0
 	move.w	d0,d2
@@ -941,7 +1312,7 @@ fill_sector_ids:	; xref: 0a4c,0e6c
 	beq.s	calc_skew
 	cmpi.b	#$b,d2                          ; 11 sectors?
 	bne.s	fill_ids_sequential
-calc_skew:	; xref: 0824
+calc_skew:
 	clr.l	d1                              ; skew = track mod spt
 	move.w	dp_track(a4),d1
 	divu.w	d2,d1
@@ -955,13 +1326,13 @@ calc_skew:	; xref: 0824
 	bcs.s	skew_wrap
 	sub.w	d2,d1
 	beq.s	store_skew
-skew_wrap:	; xref: 0846
+skew_wrap:
 	sub.w	d1,d2
 	move.w	d2,d1
-store_skew:	; xref: 0840,084a
+store_skew:
 	addq.w	#1,d1                           ; first sector of track
 	move.w	d1,dp_first_sector(a4)
-fill_ids_interleaved:	; xref: 086c
+fill_ids_interleaved:
 	movea.l	(a0)+,a1                        ; fill ID: track, side, sector
 	move.b	dp_track+1(a4),(a1)+
 	move.b	dp_side+1(a4),(a1)+
@@ -970,11 +1341,11 @@ fill_ids_interleaved:	; xref: 086c
 	cmp.w	dp_spt(a4),d1
 	ble.s	fill_ids_next
 	moveq	#1,d1
-fill_ids_next:	; xref: 0868
+fill_ids_next:
 	dbra	d0,fill_ids_interleaved
 	rts
 
-fill_ids_sequential:	; xref: 081a,082a,087c
+fill_ids_sequential:
 	movea.l	(a0)+,a1                        ; fill ID: track, side
 	move.b	dp_track+1(a4),(a1)+
 	move.b	dp_side+1(a4),(a1)
@@ -982,19 +1353,19 @@ fill_ids_sequential:	; xref: 081a,082a,087c
 	move.w	#$1,dp_first_sector(a4)
 	rts
 
-fill_ids_interleave6:	; xref: 083c
+fill_ids_interleave6:
 	tst.w	d1
 	beq.s	fill_ids_table
 	sub.w	d1,d2
 	move.w	d2,d1
-fill_ids_table:	; xref: 088a
+fill_ids_table:
 	ext.l	d1
 	lea	skew_table_il6,a2
 	adda.l	d1,a2
 	clr.l	d1
 	move.b	(a2),d1
 	move.w	d1,dp_first_sector(a4)
-fill_ids_table_loop:	; xref: 08b6
+fill_ids_table_loop:
 	movea.l	(a0)+,a1
 	move.b	dp_track+1(a4),(a1)+
 	move.b	dp_side+1(a4),(a1)+
@@ -1002,29 +1373,29 @@ fill_ids_table_loop:	; xref: 08b6
 	tst.b	(a2)
 	bne.s	fill_ids_table_next
 	lea	-$b(a2),a2
-fill_ids_table_next:	; xref: 08b0
+fill_ids_table_next:
 	dbra	d0,fill_ids_table_loop
 	rts
 
-skew_table_il6:	; xref: 0892
+skew_table_il6:	; from: fill_sector_ids
 	dc.w	$0107,$0208,$0309,$040a,$050b,$0600
 
 ;----------------------------------------------------------------------
 ; Status display: print " Reading "/" Writing "/"Formating" and the drive letter
 ;----------------------------------------------------------------------
-show_reading:	; xref: 0d58,0da0,10ee,1146
+show_reading:	; from: copy_disk_protected, copy_disk_normal
 	move.l	#txt_reading,d4
 	bra.s	show_status                     ; show " Reading "
 
 
-show_writing:	; xref: 0e22,0ede,0fe2,1210,122e
+show_writing:	; from: copy_disk_protected, copy_disk_normal
 	move.l	#txt_writing,d4
 	bra.s	show_status                     ; show " Writing "
 
 
-show_formatting:	; xref: 0a40,0ae4
+show_formatting:	; from: format_disk
 	move.l	#txt_formating,d4
-show_status:	; xref: 08ce,08d6
+show_status:	; from: show_writing, show_reading
 	bsr.w	show_status_text                ; show "Formating"
 	lea	drive_xy,a1
 	lea	txt_drive_letter,a0
@@ -1036,24 +1407,24 @@ show_status:	; xref: 08ce,08d6
 ;----------------------------------------------------------------------
 ; Abort the current operation if the right mouse button is pressed
 ;----------------------------------------------------------------------
-check_abort:	; xref: 0a58,0aa6,0d7a,0e78,0e9a,0f40,112c,1172...
+check_abort:	; from: format_disk, copy_disk_protected, copy_disk_normal
 	bsr.w	get_mouse_button
 	btst	#$1,d7                          ; right button?
 	beq.s	check_abort_ret
-abort_operation:	; xref: 09a6
+abort_operation:	; from: fdc_error_alert
 	addq.l	#4,sp                           ; drop return address
 	bra.w	finish_operation
 
-check_abort_ret:	; xref: 0908
+check_abort_ret:
 	rts
 
 
-show_side:	; xref: 4c6a
+show_side:	; from: seek_and_show
 	lea	side_xy,a1
 	lea	txt_side_digit,a0
 	bra.w	draw_text
 
-show_track:	; xref: 4c9a
+show_track:	; from: seek_and_show
 	lea	track_xy,a1
 	lea	txt_track_digits,a0
 	bra.w	draw_text
@@ -1064,7 +1435,7 @@ show_track:	; xref: 4c9a
 ; bit 9 = fatal read, bit 7 = source not write protected, 4 = record not
 ; found, 3 = CRC, 2 = lost data, 6 = write protected). Z = Retry, Cancel aborts.
 ;----------------------------------------------------------------------
-fdc_error_alert:	; xref: 0adc,0d54,0d9a,0ed6,0fda,10de,1140,1228
+fdc_error_alert:	; from: format_disk, copy_disk_protected, copy_disk_normal
 	bsr.w	unlock_floppy
 	bsr.s	show_waiting
 	bsr.w	mouse_on
@@ -1093,7 +1464,7 @@ fdc_error_alert:	; xref: 0adc,0d54,0d9a,0ed6,0fda,10de,1140,1228
 	btst	#$3,d7                          ; bit 3: CRC error
 	bne.s	fdc_error_show
 	lea	$110(a0),a0                     ; alert_verify
-fdc_error_show:	; xref: 0944,094e,0958,0962,096c,0976,0980,098a
+fdc_error_show:
 	bsr.w	alert
 	move.w	d0,d7
 	bsr.w	mouse_off
@@ -1105,10 +1476,10 @@ fdc_error_show:	; xref: 0944,094e,0958,0962,096c,0976,0980,098a
 	rts
 
 
-show_waiting:	; xref: 0936,0dee,100e,1046,1078,11da,1264,12aa
+show_waiting:	; from: copy_disk_normal, fdc_error_alert, copy_disk_protected
 	move.l	waiting_text,d4
 
-show_status_text:	; xref: 08de
+show_status_text:	; from: show_formatting
 	movea.l	d4,a0
 	lea	waiting_xy,a1
 	bra.w	draw_text
@@ -1117,23 +1488,23 @@ show_status_text:	; xref: 08de
 ;----------------------------------------------------------------------
 ; Emit d1+1 zero bytes followed by three $f5 (write-track sync) bytes
 ;----------------------------------------------------------------------
-emit_sync:	; xref: 079e,07c0
+emit_sync:	; from: build_track_image
 	moveq	#2,d1                           ; 3 zero bytes
 	cmpi.w	#$b,d4                          ; 11 sectors?
 	beq.s	emit_zeros_then_sync
 
-emit_gap2_sync:	; xref: 07de
+emit_gap2_sync:	; from: build_track_image
 	moveq	#11,d1                          ; 12 zero bytes
-emit_zeros_then_sync:	; xref: 09c8
+emit_zeros_then_sync:	; from: emit_sync
 	bsr.s	emit_fill
 	moveq	#2,d1
 	moveq	#-11,d0                         ; three $f5 sync bytes
 	bra.s	emit_fill_loop
 
 
-emit_fill:	; xref: 07ea,09cc
+emit_fill:	; from: build_track_image, emit_gap2_sync
 	clr.w	d0
-emit_fill_loop:	; xref: 09d2,09d8
+emit_fill_loop:	; from: emit_gap2_sync
 	move.b	d0,(a0)+
 	dbra	d1,emit_fill_loop
 	rts
@@ -1142,7 +1513,7 @@ emit_fill_loop:	; xref: 09d2,09d8
 ;----------------------------------------------------------------------
 ; a5 = PSG, a6 = FDC/DMA registers, a4 = disk_params
 ;----------------------------------------------------------------------
-load_base_regs:	; xref: 0a26,0ba0,0d06,1084,42da
+load_base_regs:	; from: read_source_bpb, format_disk, copy_disk_protected, copy_disk_normal, read_key_track
 	lea	$ff8800,a5                      ; PSG register select
 	lea	$ff8604,a6                      ; DMA sector count / FDC access
 	lea	disk_params,a4
@@ -1152,26 +1523,26 @@ load_base_regs:	; xref: 0a26,0ba0,0d06,1084,42da
 ;----------------------------------------------------------------------
 ; Step to the next side/track; returns d0 = 1 when past the last track
 ;----------------------------------------------------------------------
-advance_track:	; xref: 0ae8,11b0,123a
+advance_track:	; from: format_disk, copy_disk_protected
 	cmpi.b	#$1,dp_sides+1(a4)              ; single sided?
 	beq.s	next_track_number
 	eori.b	#$1,dp_side+1(a4)               ; toggle side
 	bne.s	advance_track_more
-next_track_number:	; xref: 09f8
+next_track_number:
 	move.w	dp_track(a4),d0
 	addq.b	#1,d0
 	move.w	d0,dp_track(a4)
-check_last_track:	; xref: 33bc
+check_last_track:	; from: calc_track_side_sector
 	cmp.w	dp_tracks(a4),d0                ; past the last track?
 	bcs.s	advance_track_more
 	moveq	#1,d0
 	rts
 
-advance_track_more:	; xref: 0a00,0a10
+advance_track_more:
 	clr.l	d0
 	rts
 
-fail_with_arrow:	; xref: 0b9c,0bbc,0bca,0bd8,0be6,0c14,0c32
+fail_with_arrow:	; from: read_source_bpb
 	bsr.w	mouse_arrow
 	moveq	#1,d0
 	rts
@@ -1181,7 +1552,7 @@ fail_with_arrow:	; xref: 0b9c,0bbc,0bca,0bd8,0be6,0c14,0c32
 ; FORMAT button: format the target disk track by track (write track + verify),
 ; then write a boot sector built with Protobt.
 ;----------------------------------------------------------------------
-format_disk:	; xref: 0338
+format_disk:	; from: main_loop
 	bsr.w	mouse_off
 	bsr.s	load_base_regs
 	bsr.w	init_disk_params
@@ -1189,11 +1560,11 @@ format_disk:	; xref: 0338
 	bsr.w	build_format_track
 	bsr.w	init_copy_buffer
 	bsr.w	restore_drive
-format_restart:	; xref: 0ae0
+format_restart:
 	bsr.w	show_formatting
-format_track_begin:	; xref: 0aec
+format_track_begin:
 	clr.w	dp_track_retries(a4)            ; clear retry count
-format_track_retry:	; xref: 0ad8
+format_track_retry:
 	bsr.w	seek_and_show
 	bsr.w	fill_sector_ids
 	bsr.w	fdc_wait_status
@@ -1207,7 +1578,7 @@ format_track_retry:	; xref: 0ad8
 	subq.w	#1,d5
 	move.w	dp_first_sector(a4),d6          ; first sector id
 	move.w	#$1,dp_saved_idx(a4)
-format_verify_loop:	; xref: 0ab4
+format_verify_loop:
 	clr.w	dp_sector_retries(a4)
 	move.w	d6,d1
 	move.w	d6,d4
@@ -1219,7 +1590,7 @@ format_verify_loop:	; xref: 0ab4
 	beq.s	format_verify_sector
 	addq.b	#1,dp_saved_idx+1(a4)
 	move.w	dp_saved_idx(a4),d6
-format_verify_sector:	; xref: 0a8a,0a92,0aca
+format_verify_sector:
 	move.l	#sector_list,d0                 ; read sector into sector_list buffer
 	bsr.w	fdc_read_sector_cmd
 	bsr.w	check_abort
@@ -1229,21 +1600,21 @@ format_verify_sector:	; xref: 0a8a,0a92,0aca
 	dbra	d5,format_verify_loop
 	bra.s	format_next_track
 
-format_verify_retry:	; xref: 0aae
+format_verify_retry:
 	bsr.w	fdc_abort
 	move.w	d4,d1
 	addq.w	#1,dp_sector_retries(a4)
 	cmpi.b	#$5,dp_sector_retries+1(a4)     ; 5 attempts per sector
 	bne.s	format_verify_sector
 	moveq	#1,d7
-format_track_failed:	; xref: 0a60
+format_track_failed:
 	addq.w	#1,dp_track_retries(a4)
 	cmpi.b	#$3,dp_track_retries+1(a4)      ; 3 attempts per track
 	bcs.w	format_track_retry
 	bsr.w	fdc_error_alert
 	beq.w	format_restart                  ; Retry
 	bsr.w	show_formatting
-format_next_track:	; xref: 0a68,0ab8
+format_next_track:
 	bsr.w	advance_track
 	beq.w	format_track_begin
 	clr.w	dp_side(a4)
@@ -1254,7 +1625,7 @@ format_next_track:	; xref: 0a68,0ab8
 	cmpi.b	#$1,dp_sides+1(a4)              ; single sided?
 	beq.s	format_write_boot
 	moveq	#3,d0                           ; disktype 3 = 80 tracks double sided
-format_write_boot:	; xref: 0b08
+format_write_boot:
 	move.w	d0,-(sp)
 	move.l	#$2000000,-(sp)                 ; serial > $1000000: random
 	pea	sector_list
@@ -1285,7 +1656,7 @@ format_write_boot:	; xref: 0b08
 ;----------------------------------------------------------------------
 ; Initialise disk_params from the dialog: drive, tracks (end_track+1), sides
 ;----------------------------------------------------------------------
-init_disk_params:	; xref: 0a28,1088
+init_disk_params:	; from: format_disk, copy_disk_protected
 	move.b	source_drive,dp_drive+1(a4)     ; drive = source
 	clr.w	dp_side(a4)
 	clr.w	d0
@@ -1303,7 +1674,7 @@ init_disk_params:	; xref: 0a28,1088
 ; and FATs into the buffer with Rwabs, read three sector IDs to find the
 ; interleave.  d0 = 0 on success.
 ;----------------------------------------------------------------------
-read_source_bpb:	; xref: 02fa,035e,13be
+read_source_bpb:	; from: main_loop, scan_track_sectors
 	bsr.w	mouse_busy
 	bsr.w	get_bpb
 	tst.l	d0
@@ -1312,7 +1683,7 @@ read_source_bpb:	; xref: 02fa,035e,13be
 	movea.l	d0,a1
 	lea	disk_params,a0
 	moveq	#7,d1
-copy_bpb_loop:	; xref: 0bb0
+copy_bpb_loop:
 	move.w	(a1)+,(a0)+                     ; copy 8 BPB words
 	dbra	d1,copy_bpb_loop
 	movea.l	d0,a2
@@ -1365,7 +1736,7 @@ copy_bpb_loop:	; xref: 0bb0
 	cmp.b	$15(a1),d2                      ; less than sectors per track?
 	bcc.s	store_interleave
 	move.b	d2,d1
-store_interleave:	; xref: 0c4c,0c54,0c5a
+store_interleave:
 	move.w	d1,$16(a1)                      ; interleave
 	clr.l	d0
 	rts
@@ -1374,18 +1745,18 @@ store_interleave:	; xref: 0c4c,0c54,0c5a
 ;----------------------------------------------------------------------
 ; Fill the numbers of the BPB info dialog (tree 3, objects 3..14)
 ;----------------------------------------------------------------------
-fill_bpb_dialog:	; xref: 0316
+fill_bpb_dialog:	; from: main_loop
 	moveq	#3,d4                           ; objects 3..14
 	lea	disk_params,a4
 	moveq	#11,d5
-bpb_line_loop:	; xref: 0caa
+bpb_line_loop:
 	move.l	d4,d0
 	bsr.w	get_ob_spec
 	lea	$1a(a0),a0                      ; end of the 4-digit field
 	clr.l	d0
 	move.w	(a4)+,d0
 	moveq	#3,d1
-bpb_digit_loop:	; xref: 0c92
+bpb_digit_loop:
 	divu.w	#$a,d0                          ; digits from the right
 	swap	d0
 	move.w	d0,d2
@@ -1395,13 +1766,13 @@ bpb_digit_loop:	; xref: 0c92
 	move.b	d2,-(a0)
 	dbra	d1,bpb_digit_loop
 	moveq	#2,d1
-bpb_strip_zero_loop:	; xref: 0ca4
+bpb_strip_zero_loop:
 	cmpi.b	#$30,(a0)                       ; replace leading zeros by spaces
 	bne.s	bpb_next_line
 	bclr	#$4,(a0)
 	tst.b	(a0)+
 	dbra	d1,bpb_strip_zero_loop
-bpb_next_line:	; xref: 0c9c
+bpb_next_line:
 	addq.b	#1,d4
 	dbra	d5,bpb_line_loop
 	rts
@@ -1411,7 +1782,7 @@ bpb_next_line:	; xref: 0c9c
 ; COPY in normal mode: build a sector usage map from the FAT, read all used
 ; sectors into memory, then write (and optionally verify) them to the target.
 ;----------------------------------------------------------------------
-copy_disk_normal:	; xref: 0370
+copy_disk_normal:	; from: main_loop
 	bsr.w	mouse_off
 	lea	disk_params,a0
 	move.w	$e(a0),d2                       ; numcl
@@ -1420,7 +1791,7 @@ copy_disk_normal:	; xref: 0370
 	movea.l	buffer_start,a0
 	lea	sector_list,a1                  ; sector usage map
 	moveq	#2,d0                           ; first cluster 2
-build_sector_map_loop:	; xref: 0d02
+build_sector_map_loop:
 	move.l	d0,d1                           ; 12-bit FAT entry for cluster d0
 	lsr.w	#1,d1
 	move.w	sr,d5                           ; remember odd/even
@@ -1433,14 +1804,14 @@ build_sector_map_loop:	; xref: 0d02
 	btst	#$0,d5
 	beq.s	fat_entry_test
 	lsr.w	#4,d1
-fat_entry_test:	; xref: 0cea
+fat_entry_test:
 	clr.b	d5
 	andi.w	#$fff,d1                        ; cluster used?
 	beq.s	fat_entry_store
 	addq.b	#1,d5
-fat_entry_store:	; xref: 0cf4
+fat_entry_store:
 	move.w	d4,d1
-mark_cluster_loop:	; xref: 0cfc
+mark_cluster_loop:
 	move.b	d5,(a1)+                        ; one map byte per sector of the cluster
 	dbra	d1,mark_cluster_loop
 	addq.w	#1,d0
@@ -1459,7 +1830,7 @@ mark_cluster_loop:	; xref: 0cfc
 	clr.w	dp_resume_idx(a4)
 	clr.w	dp_sector_idx(a4)
 	clr.w	dp_src_warned(a4)
-read_pass:	; xref: 1066
+read_pass:
 	move.b	source_drive,dp_drive+1(a4)
 	bsr.w	init_copy_buffer
 	bsr.w	restore_check_wprot             ; source write protected?
@@ -1468,16 +1839,16 @@ read_pass:	; xref: 1066
 	bne.s	read_pass_show
 	st	dp_src_warned(a4)               ; warn once
 	bsr.w	fdc_error_alert                 ; alert_write_protect
-read_pass_show:	; xref: 0d48,0d4e,0d9e
+read_pass_show:
 	bsr.w	show_reading
-read_sector_loop:	; xref: 0dda
+read_sector_loop:
 	bsr.w	calc_track_side_sector
 	bsr.w	get_sector_map_entry
 	beq.s	read_sector_next                ; unused sector: skip
 	bsr.w	seek_and_show
 	bsr.w	fdc_wait_status
 	clr.w	dp_sector_retries(a4)
-read_sector_retry:	; xref: 0d98
+read_sector_retry:
 	bsr.w	get_sector_buffer
 	bsr.w	fdc_read_sector_cmd
 	bsr.w	check_abort
@@ -1487,22 +1858,22 @@ read_sector_retry:	; xref: 0d98
 	bmi.s	read_sector_count_retry         ; timeout: retry
 	btst	#$4,d7                          ; record not found: alert
 	bne.s	read_sector_error
-read_sector_count_retry:	; xref: 0d86
+read_sector_count_retry:
 	addq.w	#1,dp_sector_retries(a4)
 	cmpi.b	#$5,dp_sector_retries+1(a4)     ; 5 attempts
 	bne.s	read_sector_retry
-read_sector_error:	; xref: 0d8c
+read_sector_error:
 	bsr.w	fdc_error_alert
 	beq.s	read_pass_show                  ; Retry
 	bsr.w	show_reading
-read_sector_done:	; xref: 0d82
+read_sector_done:
 	bsr.w	compress_uniform_sector
-read_sector_next:	; xref: 0d64
+read_sector_next:
 	move.w	dp_sector(a4),d0
 	cmp.w	dp_spt(a4),d0
 	bne.s	read_check_buffer_full
 	move.w	dp_sector_idx(a4),dp_end_idx(a4) ; last sector of track: remember index
-read_check_buffer_full:	; xref: 0db0
+read_check_buffer_full:
 	move.l	buffer_ptr,d0
 	addi.l	#$200,d0
 	cmp.l	buffer_end,d0                   ; buffer full?
@@ -1511,7 +1882,7 @@ read_check_buffer_full:	; xref: 0db0
 	move.w	dp_sector_idx(a4),d0
 	cmp.w	dp_total_sectors(a4),d0         ; all sectors read?
 	bcs.w	read_sector_loop
-read_pass_done:	; xref: 0dca
+read_pass_done:
 	bsr.w	reset_track_and_restore
 	tst.b	same_drive                      ; same drive: no alert
 	bne.s	write_pass
@@ -1523,25 +1894,25 @@ read_pass_done:	; xref: 0dca
 	beq.s	write_pass_start                ; OK
 	rts
 
-write_pass_start:	; xref: 0e00,1020
+write_pass_start:
 	bsr.w	mouse_off
-write_pass:	; xref: 0de8
+write_pass:
 	bsr.w	init_copy_buffer
 	move.w	dp_resume_idx(a4),dp_sector_idx(a4)
 	move.b	target_drive,dp_drive+1(a4)
 	bsr.w	restore_drive
-write_track_begin:	; xref: 0eda,0fde
+write_track_begin:
 	bsr.w	seek_and_show
 	bsr.w	show_writing
 	bsr.w	fdc_wait_status
-write_sector_loop:	; xref: 0ffa
+write_sector_loop:
 	bsr.w	calc_track_side_sector
 	cmpi.b	#$1,dp_sector+1(a4)             ; first sector of the track?
 	bne.s	write_sector
 	move.l	buffer_ptr,buffer_ptr_saved
 	move.w	dp_sector_idx(a4),dp_track_idx(a4)
 	clr.w	dp_track_retries(a4)
-format_target_track:	; xref: 0ed2,0fd4
+format_target_track:
 	tst.b	format_flag                     ; format target track first
 	beq.s	write_sector
 	bsr.w	seek_and_show
@@ -1553,13 +1924,13 @@ format_target_track:	; xref: 0ed2,0fd4
 	bsr.w	fdc_write_track
 	bsr.w	check_abort
 	bsr.w	fdc_wait_write_track
-write_sector:	; xref: 0e34,0e50
+write_sector:
 	bsr.w	get_sector_map_entry
 	beq.s	write_sector_next
 	bsr.w	seek_and_show
 	bsr.w	fdc_wait_status
 	clr.w	dp_sector_retries(a4)
-write_sector_retry:	; xref: 0ebe
+write_sector_retry:
 	bsr.w	prepare_sector_fill
 	bsr.w	fdc_write_sector
 	bsr.w	check_abort
@@ -1571,26 +1942,26 @@ write_sector_retry:	; xref: 0ebe
 	bne.s	write_sector_error
 	btst	#$4,d7                          ; record not found: format again
 	bne.s	write_track_retry
-write_sector_count_retry:	; xref: 0ea6
+write_sector_count_retry:
 	addq.w	#1,dp_sector_retries(a4)
 	cmpi.b	#$5,dp_sector_retries+1(a4)     ; 5 attempts
 	bcs.s	write_sector_retry
-write_track_retry:	; xref: 0eb2
+write_track_retry:
 	tst.b	format_flag
 	beq.s	write_sector_error
 	addq.w	#1,dp_track_retries(a4)
 	cmpi.b	#$3,dp_track_retries+1(a4)      ; 3 attempts
 	bcs.w	format_target_track
-write_sector_error:	; xref: 0eac,0ec6
+write_sector_error:
 	bsr.w	fdc_error_alert
 	beq.w	write_track_begin               ; Retry
 	bsr.w	show_writing
-write_sector_advance:	; xref: 0ea2
+write_sector_advance:
 	movea.l	dp_map_ptr(a4),a0
 	tst.b	(a0)                            ; uniform sector takes no buffer space
 	bmi.s	write_sector_next
 	addi.l	#$200,buffer_ptr
-write_sector_next:	; xref: 0e84,0ee8
+write_sector_next:
 	tst.b	verify_flag                     ; verify?
 	beq.w	write_next_sector
 	move.w	dp_sector(a4),d0                ; last sector of the track?
@@ -1600,14 +1971,14 @@ write_sector_next:	; xref: 0e84,0ee8
 	move.w	dp_track_idx(a4),dp_sector_idx(a4)
 	moveq	#1,d5                           ; d5 = sector 1
 	move.l	buffer_ptr_saved,sector_list_end
-verify_sector_loop:	; xref: 0fb0
+verify_sector_loop:
 	tst.b	format_flag
 	bne.s	verify_sector_start
 	bsr.w	get_sector_map_entry
 	beq.s	verify_sector_next
-verify_sector_start:	; xref: 0f28
+verify_sector_start:
 	clr.w	dp_sector_retries(a4)
-verify_sector_retry:	; xref: 0fa0
+verify_sector_retry:
 	move.w	d5,d1
 	move.l	#verify_buf,d0                  ; read into verify_buf
 	bsr.w	fdc_read_sector_cmd
@@ -1626,14 +1997,14 @@ verify_sector_retry:	; xref: 0fa0
 	tst.b	(a0)                            ; uniform sector?
 	bmi.s	verify_uniform_sector
 	movea.l	sector_list_end,a0
-verify_compare_loop:	; xref: 0f70
+verify_compare_loop:
 	cmpm.l	(a0)+,(a1)+                     ; compare with buffer
 	dbne	d0,verify_compare_loop
 	bne.s	verify_sector_count_retry
 	move.l	a0,sector_list_end
 	bra.s	verify_sector_next
 
-verify_uniform_sector:	; xref: 0f66
+verify_uniform_sector:
 	move.b	$900(a0),d1                     ; uniform byte -> long
 	move.w	d1,d2
 	lsl.w	#8,d1
@@ -1641,17 +2012,17 @@ verify_uniform_sector:	; xref: 0f66
 	move.w	d1,d2
 	swap	d1
 	move.w	d2,d1
-verify_uniform_loop:	; xref: 0f90
+verify_uniform_loop:
 	cmp.l	(a1)+,d1
 	dbne	d0,verify_uniform_loop
 	beq.s	verify_sector_next
-verify_sector_count_retry:	; xref: 0f4a,0f54,0f74
+verify_sector_count_retry:
 	addq.w	#1,dp_sector_retries(a4)
 	cmpi.b	#$3,dp_sector_retries+1(a4)     ; 3 attempts
 	bcs.s	verify_sector_retry
 	bra.s	verify_failed
 
-verify_sector_next:	; xref: 0f2e,0f5a,0f7c,0f94
+verify_sector_next:
 	addi.w	#$1,dp_sector_idx(a4)
 	addq.b	#1,d5
 	cmp.w	dp_spt(a4),d5
@@ -1659,20 +2030,20 @@ verify_sector_next:	; xref: 0f2e,0f5a,0f7c,0f94
 	move.w	dp_saved_idx(a4),dp_sector_idx(a4)
 	bra.s	write_next_sector
 
-verify_failed:	; xref: 0f50,0fa2
+verify_failed:
 	move.w	dp_track_idx(a4),dp_sector_idx(a4)
 	tst.b	format_flag                     ; format on: format the track again
 	beq.s	verify_error_alert
 	addq.w	#1,dp_track_retries(a4)
 	cmpi.b	#$3,dp_track_retries+1(a4)      ; 3 attempts
 	bcs.w	format_target_track
-verify_error_alert:	; xref: 0fc8
+verify_error_alert:
 	moveq	#1,d7                           ; d7 = 1: verify error alert
 	bsr.w	fdc_error_alert
 	beq.w	write_track_begin               ; Retry
 	bsr.w	show_writing
 	move.w	dp_saved_idx(a4),dp_sector_idx(a4)
-write_next_sector:	; xref: 0efa,0f06,0fba
+write_next_sector:
 	addi.w	#$1,dp_sector_idx(a4)
 	move.w	dp_sector_idx(a4),d0
 	cmp.w	dp_end_idx(a4),d0
@@ -1690,7 +2061,7 @@ write_next_sector:	; xref: 0efa,0f06,0fba
 	bsr.w	mouse_off
 	cmpi.b	#$3,d7                          ; Read = continue reading
 	beq.s	finish_mouse_on
-write_pass_more:	; xref: 1008
+write_pass_more:
 	move.w	dp_sector_idx(a4),d0
 	cmp.w	dp_total_sectors(a4),d0         ; all sectors done?
 	bcc.s	finish_mouse_on
@@ -1704,17 +2075,17 @@ write_pass_more:	; xref: 1008
 	beq.s	resume_read_pass                ; OK
 	rts
 
-resume_read_pass:	; xref: 1058
+resume_read_pass:
 	bsr.w	mouse_off
-set_resume_index:	; xref: 1040
+set_resume_index:
 	move.w	dp_sector_idx(a4),dp_resume_idx(a4)
 	bra.w	read_pass
 
-finish_operation:	; xref: 090c,0b66
+finish_operation:	; from: format_disk, check_abort
 	tst.w	dp_track(a4)                    ; track 0: no restore needed
 	beq.s	finish_mouse_on
 	bsr.w	reset_track_and_restore
-finish_mouse_on:	; xref: 102e,1038,106e,1284,1290
+finish_mouse_on:	; from: copy_disk_protected
 	bsr.w	unlock_floppy
 	bsr.w	show_waiting
 	bra.w	mouse_on
@@ -1725,7 +2096,7 @@ finish_mouse_on:	; xref: 102e,1038,106e,1284,1290
 ; timing), analyse it, build a track-write script, then write the scripts to
 ; the target disk.
 ;----------------------------------------------------------------------
-copy_disk_protected:	; xref: 0356
+copy_disk_protected:	; from: main_loop
 	bsr.w	mouse_off
 	bsr.w	load_base_regs
 	bsr.w	init_disk_params                ; drive = source
@@ -1741,7 +2112,7 @@ copy_disk_protected:	; xref: 0356
 	clr.w	dp_unused_90(a4)
 	clr.w	dp_unused_8e(a4)
 	clr.w	dp_src_warned(a4)
-prot_read_pass:	; xref: 12c4
+prot_read_pass:
 	move.b	source_drive,dp_drive+1(a4)
 	bsr.w	init_copy_buffer
 	bsr.w	restore_check_wprot
@@ -1750,12 +2121,12 @@ prot_read_pass:	; xref: 12c4
 	bne.s	prot_read_set_track
 	st	dp_src_warned(a4)
 	bsr.w	fdc_error_alert                 ; alert_write_protect
-prot_read_set_track:	; xref: 10d2,10d8
+prot_read_set_track:
 	move.w	dp_resume_idx(a4),dp_track(a4)
 	move.w	dp_track_idx(a4),dp_side(a4)
-prot_read_show:	; xref: 1144
+prot_read_show:
 	bsr.w	show_reading
-prot_read_track:	; xref: 11c2
+prot_read_track:
 	bsr.w	seek_and_show
 	bsr.w	fdc_wait_status
 	move.w	dp_track(a4),d0
@@ -1764,7 +2135,7 @@ prot_read_track:	; xref: 11c2
 	cmp.b	start_track,d0                  ; start track: measure speed
 	bne.s	prot_read_track_retry
 	bsr.w	measure_drive_speed
-prot_read_track_retry:	; xref: 110e,1164
+prot_read_track_retry:
 	addq.w	#1,read_retries
 	cmpi.b	#$4,read_retries_1              ; 4 attempts
 	beq.s	prot_build_script
@@ -1779,7 +2150,7 @@ prot_read_track_retry:	; xref: 110e,1164
 	bsr.w	fdc_error_alert
 	beq.s	prot_read_show                  ; Retry
 	bsr.w	show_reading
-prot_analyse_track:	; xref: 1134
+prot_analyse_track:
 	bsr.w	init_id_list
 	bsr.w	read_track_find_index
 	beq.s	prot_no_sectors
@@ -1788,14 +2159,14 @@ prot_analyse_track:	; xref: 1134
 	bsr.w	scan_track_sectors
 	tst.w	f_id_ambiguous                  ; ID position ambiguous: read again
 	bne.s	prot_read_track_retry
-prot_build_script:	; xref: 1122
+prot_build_script:
 	tst.w	num_sectors                     ; no sectors found?
 	beq.s	prot_no_sectors
 	bsr.w	calc_sector_gaps
 	bsr.w	check_abort
 	bsr.w	detect_scheme_c
 	clr.w	f_dup_scheme
-prot_classify_loop:	; xref: 119a
+prot_classify_loop:
 	bsr.w	choose_gap_size
 	bsr.w	read_track_sectors
 	bsr.w	patch_cmp_sequence
@@ -1804,22 +2175,22 @@ prot_classify_loop:	; xref: 119a
 	bsr.w	detect_scheme_1b
 	bsr.w	detect_scheme_dup
 	beq.s	prot_classify_loop              ; duplicate sector split: classify again
-prot_emit_script:	; xref: 11a6
+prot_emit_script:
 	bsr.w	emit_track_script
 	bra.s	prot_read_next_track
 
-prot_no_sectors:	; xref: 1152,1158,116c,1190
+prot_no_sectors:
 	bsr.w	detect_a1a1_scheme
 	beq.s	prot_emit_script                ; a1a1 scheme found
 	bsr.w	patch_timing_loops
 	bsr.w	emit_raw_track_script
-prot_read_next_track:	; xref: 11a0
+prot_read_next_track:
 	bsr.w	advance_track
 	bne.s	prot_read_done                  ; last track?
 	move.l	buffer_ptr,d0
 	cmp.l	buffer_limit,d0                 ; buffer nearly full?
 	bcs.w	prot_read_track
-prot_read_done:	; xref: 11b4
+prot_read_done:
 	bsr.w	patch_fffb_check
 	bsr.w	reset_track_and_restore
 	tst.b	same_drive                      ; same drive: no alert
@@ -1832,17 +2203,17 @@ prot_read_done:	; xref: 11b4
 	beq.s	prot_write_start                ; OK
 	rts
 
-prot_write_start:	; xref: 11ec,1276
+prot_write_start:
 	bsr.w	mouse_off
-prot_write_pass:	; xref: 11d4
+prot_write_pass:
 	bsr.w	init_copy_buffer
 	move.b	target_drive,dp_drive+1(a4)
 	bsr.w	restore_drive
 	move.w	dp_resume_idx(a4),dp_track(a4)
 	move.w	dp_track_idx(a4),dp_side(a4)
-prot_write_show:	; xref: 122c
+prot_write_show:
 	bsr.w	show_writing
-prot_write_track:	; xref: 124c
+prot_write_track:
 	bsr.w	seek_and_show
 	move.w	dp_track(a4),dp_cur_track(a4)
 	bsr.w	fdc_wait_status
@@ -1852,14 +2223,14 @@ prot_write_track:	; xref: 124c
 	beq.s	prot_write_show                 ; Retry
 	bsr.w	show_writing
 	bsr.w	advance_script                  ; Continue: skip this track
-prot_write_next:	; xref: 1226
+prot_write_next:
 	bsr.w	check_abort
 	bsr.w	advance_track
 	bne.s	prot_write_done                 ; last track?
 	move.l	buffer_ptr,d0
 	cmp.l	buffer_limit,d0                 ; all scripts written?
 	bcs.s	prot_write_track
-prot_write_done:	; xref: 123e
+prot_write_done:
 	move.w	dp_track(a4),dp_end_idx(a4)
 	bsr.w	reset_track_and_restore
 	tst.b	multiple_flag                   ; multiple copies?
@@ -1874,7 +2245,7 @@ prot_write_done:	; xref: 123e
 	bsr.w	mouse_off
 	cmpi.b	#$3,d7                          ; Read
 	beq.w	finish_mouse_on
-prot_more_tracks:	; xref: 125e
+prot_more_tracks:
 	move.w	dp_end_idx(a4),d0
 	cmp.w	dp_tracks(a4),d0                ; all tracks done?
 	bcc.w	finish_mouse_on
@@ -1890,24 +2261,24 @@ prot_more_tracks:	; xref: 125e
 	beq.s	prot_resume_read                ; OK
 	rts
 
-prot_resume_read:	; xref: 12bc
+prot_resume_read:
 	bsr.w	mouse_off
-prot_read_again:	; xref: 12a4
+prot_read_again:
 	bra.w	prot_read_pass
 
 
 ;----------------------------------------------------------------------
 ; Measure the drive speed from the DMA count between index pulses -> drive_speed
 ;----------------------------------------------------------------------
-measure_drive_speed:	; xref: 1110
+measure_drive_speed:	; from: copy_disk_protected
 	move.b	#$6f,drive_speed                ; default speed factor
 	moveq	#2,d2                           ; 3 attempts
-speed_measure_loop:	; xref: 1328
+speed_measure_loop:
 	bsr.w	fdc_read_track
 	bsr.w	wait_dma_change
 	beq.s	speed_measure_next
 	move.w	#$3000,d0
-speed_wait_index:	; xref: 12e8
+speed_wait_index:
 	btst	#$5,$fffa01                     ; wait for index pulse
 	dbeq	d0,speed_wait_index
 	beq.s	speed_measure_next
@@ -1922,7 +2293,7 @@ speed_wait_index:	; xref: 12e8
 	cmp.b	d1,d0
 	bcs.s	speed_range_check
 	addq.b	#1,d1
-speed_range_check:	; xref: 130a
+speed_range_check:
 	cmpi.b	#$60,d1                         ; plausible range $60..$7f
 	bcs.s	speed_measure_next
 	cmpi.b	#$80,d1
@@ -1930,18 +2301,18 @@ speed_range_check:	; xref: 130a
 	move.b	d1,drive_speed
 	bra.w	fdc_abort
 
-speed_measure_next:	; xref: 12da,12ec,12f8,1312,1318
+speed_measure_next:
 	bsr.w	fdc_abort
 	dbra	d2,speed_measure_loop
 	rts
 
 
 ; Four bytes copied here from the copyright string (expected "EMS ")
-key_ems:	; xref: 1342,14c8
+key_ems:	; from: scan_track_sectors
 	dc.b	$00
-key_ems_1:	; xref: 14a2
+key_ems_1:	; from: scan_track_sectors
 	dc.b	$00
-key_ems_2:	; xref: 13b6
+key_ems_2:	; from: scan_track_sectors
 	dc.b	$00,$00
 
 ;----------------------------------------------------------------------
@@ -1953,7 +2324,7 @@ key_ems_2:	; xref: 13b6
 ;   +8  gap start  +$a offset of ID  +$c offset of data  +$e data length
 ;   +$10 ID mark byte  +$11 data mark byte
 ;----------------------------------------------------------------------
-scan_track_sectors:	; xref: 115a
+scan_track_sectors:	; from: copy_disk_protected
 	movem.l	a3-a6,-(sp)
 	clr.w	f_id_ambiguous
 	lea	copyright+$c-$681c,a0           ; a0 = copyright - $6754
@@ -1967,27 +2338,27 @@ scan_track_sectors:	; xref: 115a
 	clr.w	gap_end
 	clr.w	first_id_pos
 	clr.w	f_ids_rotated
-scan_next_id:	; xref: 14dc
+scan_next_id:
 	bsr.w	find_next_id
 	bmi.w	scan_finish                     ; no more IDs
 	beq.s	scan_id_from_list               ; ID from the Read Address list
 	move.w	d0,$a(a3)                       ; ID not in the list: copy bytes from the track
 	movea.l	a3,a2
 	addq.l	#2,a2
-copy_id_bytes_loop:	; xref: 1394
+copy_id_bytes_loop:
 	move.b	(a0)+,(a2)+                     ; copy d1+1 ID bytes
 	dbra	d1,copy_id_bytes_loop
 	move.w	#$ffff,(a3)                     ; flags = $ffff
 	subq.l	#4,a5
 	bra.s	scan_find_data
 
-scan_id_from_list:	; xref: 1388
+scan_id_from_list:
 	move.w	d0,$a(a3)                       ; offset of ID in track
 	move.w	d0,first_id_pos
 	move.l	(a4)+,$2(a3)                    ; ID bytes and CRC from the list
 	move.w	(a4)+,$6(a3)
 	clr.w	(a3)
-scan_find_data:	; xref: 139e
+scan_find_data:
 	movea.l	a0,a1
 	cmpi.b	#$53,key_ems_2                  ; tamper check: "S"
 	bne.w	read_source_bpb                 ; wrong: jump into read_source_bpb
@@ -1997,7 +2368,7 @@ scan_find_data:	; xref: 139e
 	beq.s	scan_data_missing
 	btst	#$4,-$12(a3)                    ; previous entry had no data field?
 	bne.s	scan_no_data_field
-scan_data_missing:	; xref: 13d0
+scan_data_missing:
 	cmpi.b	#$fc,last_mark                  ; last mark was an ID?
 	bcs.s	scan_fake_data
 	move.l	dma_pos,d0
@@ -2005,7 +2376,7 @@ scan_data_missing:	; xref: 13d0
 	sub.w	$a(a3),d0
 	cmpi.w	#$32,d0                         ; ID within $32 bytes of the end?
 	bcc.s	scan_no_data_field
-scan_fake_data:	; xref: 13e2
+scan_fake_data:
 	moveq	#0,d0                           ; fake data field for a missing data mark
 	move.w	$a(a3),d0
 	addi.w	#$2c,d0
@@ -2022,13 +2393,13 @@ scan_fake_data:	; xref: 13e2
 	st	f_data_over_index
 	bra.w	scan_finish
 
-scan_no_data_field:	; xref: 13d8,13f8
+scan_no_data_field:
 	clr.l	$c(a3)
 	bset	#$4,(a3)
 	lea	$12(a3),a3
 	bra.w	scan_finish
 
-scan_data_found:	; xref: 13c6
+scan_data_found:
 	addq.l	#2,a0                           ; skip the sync bytes
 	subq.w	#2,d0
 	move.w	d0,$c(a3)
@@ -2044,11 +2415,11 @@ scan_data_found:	; xref: 13c6
 	bne.s	scan_mark_no_data
 	bra.s	scan_next_entry
 
-scan_mark_no_data:	; xref: 1462,1470,1486
+scan_mark_no_data:
 	bset	#$4,(a3)
 	bra.s	scan_gap_end
 
-scan_check_data_mark:	; xref: 1454
+scan_check_data_mark:
 	move.w	$c(a3),d0                       ; data mark more than $36 bytes after the ID?
 	sub.w	$a(a3),d0
 	cmpi.w	#$36,d0
@@ -2058,28 +2429,28 @@ scan_check_data_mark:	; xref: 1454
 	cmpi.b	#$fb,d1                         ; normal data mark?
 	beq.s	scan_data_length
 	bset	#$5,(a3)                        ; bit 5: deleted/other data mark
-scan_data_length:	; xref: 1492
+scan_data_length:
 	clr.l	d0
 	move.b	$5(a3),d0
 	bsr.w	sector_length                   ; data length from size code
 	cmpi.b	#$4d,key_ems_1                  ; tamper check: "M"
 	bne.w	read_track_sectors              ; wrong: jump into read_track_sectors
 	move.w	d0,$e(a3)
-scan_gap_end:	; xref: 1478
+scan_gap_end:
 	move.w	$e(a3),d0                       ; end of data = data + length + 6
 	beq.s	scan_store_gap_end
 	add.w	$c(a3),d0
 	addq.w	#6,d0
-scan_store_gap_end:	; xref: 14b6
+scan_store_gap_end:
 	move.w	d0,gap_end
 	lea	$12(a3),a3
-scan_next_entry:	; xref: 1472
+scan_next_entry:
 	cmpi.b	#$45,key_ems                    ; tamper check: "E"
 	bne.w	calc_sector_gaps                ; wrong: jump into calc_sector_gaps
 	addq.l	#4,a5                           ; end of ID list?
 	cmpi.l	#$ffffffff,(a5)
 	bne.w	scan_next_id
-scan_finish:	; xref: 1384,1434,1444
+scan_finish:
 	clr.w	(a3)                            ; terminating entry
 	clr.l	$2(a3)
 	move.l	a3,sector_list_end
@@ -2104,7 +2475,7 @@ scan_finish:	; xref: 1384,1434,1444
 	bne.s	scan_done
 	cmpi.w	#$1810,sector_list_1c
 	bcs.s	scan_done
-scan_check_fefe_track:	; xref: 1530
+scan_check_fefe_track:
 	cmpi.l	#$fefefefe,sector_list_2        ; track of $fe bytes?
 	bne.s	scan_no_sectors
 	move.w	#$10,sector_list_a              ; ID offset 16
@@ -2115,9 +2486,9 @@ scan_check_fefe_track:	; xref: 1530
 	clr.l	(a0)+
 	bra.s	scan_done
 
-scan_no_sectors:	; xref: 154e
+scan_no_sectors:
 	clr.w	num_sectors
-scan_done:	; xref: 1524,152c,1538,1542,1566
+scan_done:
 	movem.l	(sp)+,a3-a6
 	rts
 
@@ -2125,11 +2496,11 @@ scan_done:	; xref: 1524,152c,1538,1542,1566
 ;----------------------------------------------------------------------
 ; Compute the gap after each data field and flag over-long tracks
 ;----------------------------------------------------------------------
-calc_sector_gaps:	; xref: 116e,14d0
+calc_sector_gaps:	; from: copy_disk_protected, scan_track_sectors
 	lea	sector_list,a0
 	lea	$12(a0),a1
 	clr.w	$8(a0)
-calc_gap_loop:	; xref: 15c0
+calc_gap_loop:
 	move.w	$c(a0),d0                       ; end of this data field
 	addq.w	#4,d0
 	move.w	d0,d2
@@ -2140,15 +2511,15 @@ calc_gap_loop:	; xref: 15c0
 	subq.w	#2,d1
 	bcc.s	calc_gap_store
 	clr.w	d1
-calc_gap_extend:	; xref: 1594
+calc_gap_extend:
 	add.w	d1,$e(a0)
 	ori.b	#$a,(a0)                        ; bits 1 and 3
-calc_gap_store:	; xref: 1598
+calc_gap_store:
 	add.w	$e(a0),d2
 	btst	#$1,(a0)
 	bne.s	calc_gap_next
 	addq.w	#2,d2
-calc_gap_next:	; xref: 15ac
+calc_gap_next:
 	move.w	d2,$8(a1)                       ; gap start of the next sector
 	moveq	#18,d0                          ; entry size
 	adda.l	d0,a0
@@ -2158,7 +2529,7 @@ calc_gap_next:	; xref: 15ac
 	beq.s	calc_last_gap
 	suba.l	d0,a0
 	suba.l	d0,a1
-calc_last_gap:	; xref: 15c2
+calc_last_gap:
 	clr.w	f_overlong_data
 	clr.w	f_track_overflow
 	clr.w	f_extra_id
@@ -2188,23 +2559,23 @@ calc_last_gap:	; xref: 15c2
 	bcs.s	calc_last_gap_limit
 	add.w	$a(a2),d2
 	subi.w	#$40,d2
-calc_last_gap_limit:	; xref: 162e
+calc_last_gap_limit:
 	move.w	$c(a1),d1
 	subi.w	#$1880,d1                       ; end beyond $1880?
 	bcs.s	calc_last_gap_flags
 	sub.w	d1,d2
 	bcc.s	calc_last_gap_flags
 	moveq	#16,d2
-calc_last_gap_flags:	; xref: 1640,1644
+calc_last_gap_flags:
 	cmpi.w	#$80,$a(a2)                     ; first ID after $80?
 	bcs.s	calc_last_gap_min
 	st	f_track_overflow
-calc_last_gap_min:	; xref: 164e
+calc_last_gap_min:
 	bclr	#$0,d2                          ; even, at least 16
 	cmpi.w	#$10,d2
 	bcc.s	calc_last_gap_long
 	moveq	#16,d2
-calc_last_gap_long:	; xref: 165e
+calc_last_gap_long:
 	cmpi.w	#$44,num_sectors                ; 68+ sectors?
 	bcs.s	calc_last_gap_store
 	cmpi.w	#$24,d2
@@ -2213,26 +2584,26 @@ calc_last_gap_long:	; xref: 165e
 	lea	track_buf,a1
 	lea	$c(a1,d0.w),a1
 	moveq	#-16,d0                         ; bytes $f0..$ff in a row?
-calc_last_gap_scan:	; xref: 1688
+calc_last_gap_scan:
 	cmp.b	(a1)+,d0
 	bne.s	calc_last_gap_store
 	addq.b	#1,d0
 	bne.s	calc_last_gap_scan
 	moveq	#36,d2
-calc_last_gap_store:	; xref: 166a,1670,1684
+calc_last_gap_store:
 	move.w	d2,$e(a0)
 	ori.b	#$a,(a0)
-calc_gap_ret:	; xref: 15f4,169e,17c6
+calc_gap_ret:	; from: orphan_rts
 	rts
 
-calc_gap_ten_sectors:	; xref: 161c
+calc_gap_ten_sectors:
 	cmpi.w	#$a,num_sectors                 ; 10 sectors: look for signature A
 	bne.s	calc_gap_ret
 
 ;----------------------------------------------------------------------
 ; Look for the signature patterns in sig_table_a / sig_table_b
 ;----------------------------------------------------------------------
-detect_signature_a:	; xref: 40a2
+detect_signature_a:	; from: read_track_check_sig
 	lea	track_buf_2,a0                  ; track_buf + 2
 	move.b	(a0)+,d6
 	bsr.w	count_byte_run                  ; run of the first byte
@@ -2244,19 +2615,19 @@ detect_signature_a:	; xref: 40a2
 	lea	sig_table_a,a2                  ; 16 entries of 6 bytes
 	move.b	(a0)+,d6
 	moveq	#15,d1
-sig_a_search_loop:	; xref: 16cc
+sig_a_search_loop:
 	move.b	(a2)+,d0                        ; first byte matches?
 	cmp.b	d6,d0
 	beq.s	sig_a_compare
 	addq.l	#5,a2
 	dbra	d1,sig_a_search_loop
-sig_not_found:	; xref: 16b0,16b6,16dc,16f2,16f8,1710,1718,171e...
+sig_not_found:	; from: detect_signature_b
 	moveq	#-1,d0
 	rts
 
-sig_a_compare:	; xref: 16c8
+sig_a_compare:
 	moveq	#4,d0                           ; compare the other 5 bytes
-sig_a_compare_loop:	; xref: 16d8
+sig_a_compare_loop:
 	cmpm.b	(a0)+,(a2)+
 	dbne	d0,sig_a_compare_loop
 	bne.s	sig_not_found
@@ -2265,7 +2636,7 @@ sig_a_compare_loop:	; xref: 16d8
 	rts
 
 
-detect_signature_b:	; xref: 40a8
+detect_signature_b:	; from: read_track_check_sig
 	move.b	(a0)+,d6
 	bsr.w	count_byte_run                  ; run of the first byte
 	cmpi.w	#$6,d0                          ; run 2..5
@@ -2276,14 +2647,14 @@ detect_signature_b:	; xref: 40a8
 	lea	sig_table_b,a2                  ; 16 entries of 5 bytes
 	move.b	(a0)+,d6
 	moveq	#15,d1
-sig_b_search_loop:	; xref: 170c
+sig_b_search_loop:
 	cmp.b	(a2)+,d6
 	beq.s	sig_b_check_run
 	addq.l	#4,a2
 	dbra	d1,sig_b_search_loop
 	bra.s	sig_not_found
 
-sig_b_check_run:	; xref: 1708
+sig_b_check_run:
 	bsr.s	count_byte_run
 	cmpi.w	#$c0,d0                         ; run $40..$bf
 	bge.s	sig_not_found
@@ -2313,11 +2684,11 @@ sig_b_check_run:	; xref: 1708
 	beq.s	sig_b_extra_byte
 	cmpi.b	#$39,d6                         ; '9'
 	bne.s	sig_b_compare
-sig_b_extra_byte:	; xref: 1744,174a,1750,1756
+sig_b_extra_byte:
 	addq.w	#1,d0
-sig_b_compare:	; xref: 175c
+sig_b_compare:
 	move.b	(a2)+,d6
-sig_b_compare_loop:	; xref: 1764
+sig_b_compare_loop:
 	cmp.b	(a0)+,d6
 	dbne	d0,sig_b_compare_loop
 	bne.w	sig_not_found
@@ -2326,7 +2697,7 @@ sig_b_compare_loop:	; xref: 1764
 	beq.s	sig_b_check_sync
 	cmpi.b	#$a1,(a0)+
 	bne.w	sig_not_found
-sig_b_check_sync:	; xref: 1772
+sig_b_check_sync:
 	cmpi.b	#$a1,(a0)
 	bne.w	sig_not_found
 	clr.l	d0
@@ -2336,29 +2707,29 @@ sig_b_check_sync:	; xref: 1772
 ;----------------------------------------------------------------------
 ; Count the run of bytes equal to d6 at a0 -> d0
 ;----------------------------------------------------------------------
-count_byte_run:	; xref: 16a8,16ea,1712,172e
+count_byte_run:	; from: detect_signature_b, detect_signature_a
 	clr.l	d0
-count_run_loop:	; xref: 1794
+count_run_loop:
 	cmp.b	(a0)+,d6
 	beq.s	count_run_inc
 	subq.l	#1,a0
 	rts
 
-count_run_inc:	; xref: 178c
+count_run_inc:
 	addq.w	#1,d0
 	bra.s	count_run_loop
 
 orphan_rts:
 	rts                                     ; unreachable
 
-calc_gap_check_overflow:	; xref: 17b2
+calc_gap_check_overflow:
 	cmpi.w	#$1890,d2                       ; end beyond $1890?
 	bcs.s	calc_gap_ret2
 	st	f_track_overflow
-calc_gap_ret2:	; xref: 179c,17b8
+calc_gap_ret2:
 	rts
 
-calc_gap_extra_id:	; xref: 1602
+calc_gap_extra_id:	; from: calc_sector_gaps
 	lea	track_buf,a0
 	adda.l	d2,a0
 	bsr.w	find_next_mark                  ; another mark inside the gap?
@@ -2377,7 +2748,7 @@ calc_gap_extra_id:	; xref: 1602
 	cmpi.b	#$fb,d1                         ; data mark $fb?
 	beq.s	calc_gap_extra_store
 	moveq	#32,d0                          ; flags: bit 5
-calc_gap_extra_store:	; xref: 17de
+calc_gap_extra_store:
 	move.b	d0,(a1)
 	move.w	#$100,$e(a1)                    ; length 256
 	clr.l	$2(a1)
@@ -2387,20 +2758,20 @@ calc_gap_extra_store:	; xref: 17de
 ;----------------------------------------------------------------------
 ; Choose the inter-sector gap length for the track to write -> gap_size
 ;----------------------------------------------------------------------
-choose_gap_size:	; xref: 1180
+choose_gap_size:	; from: copy_disk_protected
 	moveq	#40,d1                          ; gap 40
 	cmpi.w	#$b,num_sectors                 ; 11 sectors?
 	bne.s	gap_size_check
 	moveq	#1,d0
 	lea	sector_list,a0
-gap_size_scan_loop:	; xref: 1822
+gap_size_scan_loop:
 	cmpi.w	#$200,$e(a0)                    ; 512-byte sector?
 	beq.s	gap_size_next
 	cmpi.w	#$1f0,$e(a0)                    ; shorter than $1f0?
 	bcs.s	gap_size_check
 	subq.b	#1,d0                           ; allow one
 	bne.s	gap_size_check
-gap_size_next:	; xref: 180a
+gap_size_next:
 	lea	$12(a0),a0
 	cmpa.l	last_sector,a0
 	bne.s	gap_size_scan_loop
@@ -2411,7 +2782,7 @@ gap_size_next:	; xref: 180a
 	cmpi.w	#$200,$e(a0)                    ; last sector shorter than 512?
 	bcc.s	gap_size_check
 	move.w	#$200,$e(a0)                    ; make it 512
-gap_size_check:	; xref: 17fa,1812,1816,182c,1836
+gap_size_check:
 	cmpi.b	#$24,d1                         ; gap < 36?
 	bcs.s	gap_size_store
 	tst.w	f_data_over_index               ; data runs over the index?
@@ -2420,49 +2791,49 @@ gap_size_check:	; xref: 17fa,1812,1816,182c,1836
 	btst	#$4,d0
 	bne.s	gap_size_store
 	moveq	#36,d1                          ; gap 36
-gap_size_store:	; xref: 1842,184a,1856
+gap_size_store:
 	move.w	d1,gap_size
-gap_size_ret:	; xref: 1872
+gap_size_ret:	; from: read_track_sectors
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Read the data of every sector in sector_list into the copy buffer
 ;----------------------------------------------------------------------
-read_track_sectors:	; xref: 1184,14aa
+read_track_sectors:	; from: copy_disk_protected, scan_track_sectors
 	tst.w	f_fix_id_bit4                   ; ID bit 4 fixed?
 	bne.s	read_all_sectors
 	bsr.s	read_all_sectors                ; read all sectors
 	tst.w	f_fix_id_bit4
 	beq.s	gap_size_ret
 	lea	sector_list,a0
-clear_special_flag_loop:	; xref: 1888
+clear_special_flag_loop:
 	bclr	#$7,(a0)                        ; clear "special" flag
 	lea	$12(a0),a0
 	cmpa.l	sector_list_end,a0
 	bne.s	clear_special_flag_loop
 
-read_all_sectors:	; xref: 1868,186a
+read_all_sectors:	; from: read_track_sectors
 	clr.w	f_fuzzy_any
 	clr.w	f_fuzzy_sector
 	lea	sector_buf,a0                   ; a0 = sector buffer
 	tst.w	f_extra_id                      ; extra ID found?
 	beq.s	read_all_mark_special
 	bsr.w	copy_track_tail
-read_all_mark_special:	; xref: 18a2
+read_all_mark_special:
 	bsr.w	mark_special_sectors            ; any special sectors?
 	beq.s	read_all_setup
 	bsr.w	read_special_sectors
-read_all_setup:	; xref: 18ac
+read_all_setup:
 	lea	sector_list,a1
 	cmpi.w	#$6,num_sectors                 ; fewer than 6 sectors?
 	bcs.s	read_all_start
 	lea	$5a(a1),a1                      ; start with the 6th entry
 	move.l	a0,d6
 	movea.l	buffer_ptr,a0                   ; read into the copy buffer
-read_all_start:	; xref: 18c0
+read_all_start:
 	move.l	a1,d5
-read_all_loop:	; xref: 1944,1954
+read_all_loop:
 	btst	#$4,(a1)                        ; no data field?
 	bne.s	read_all_next
 	btst	#$7,(a1)                        ; special?
@@ -2478,11 +2849,11 @@ read_all_loop:	; xref: 1944,1954
 	beq.s	read_all_fuzzy_check
 	cmpi.w	#$4e,$e(a1)                     ; at least $4e bytes?
 	bcs.s	read_all_next
-read_all_fuzzy_check:	; xref: 18f2,18f8
+read_all_fuzzy_check:
 	bsr.w	detect_fuzzy_sector
 	bra.s	read_all_next
 
-read_all_duplicate:	; xref: 18e0
+read_all_duplicate:
 	tst.w	f_dup_scheme                    ; duplicate scheme?
 	bne.s	read_all_next
 	bsr.w	read_sector_timed               ; timed read
@@ -2497,9 +2868,9 @@ read_all_duplicate:	; xref: 18e0
 	addq.l	#1,a0
 	bra.s	read_all_next
 
-read_all_mark_again:	; xref: 1918
+read_all_mark_again:
 	bsr.w	mark_special_sectors
-read_all_next:	; xref: 18d4,18da,18ea,1900,1906,190e,191e,192c...
+read_all_next:
 	lea	$12(a1),a1
 	cmpa.l	d5,a1                           ; back at the start entry?
 	beq.s	read_all_copy_buffer
@@ -2512,18 +2883,18 @@ read_all_next:	; xref: 18d4,18da,18ea,1900,1906,190e,191e,192c...
 	movea.l	d6,a0
 	bra.w	read_all_loop
 
-read_all_copy_buffer:	; xref: 193c
+read_all_copy_buffer:
 	movea.l	buffer_ptr,a2                   ; copy the data read into the copy buffer
-read_all_copy_loop:	; xref: 1962
+read_all_copy_loop:
 	move.l	(a2)+,(a0)+
 	cmpa.l	d4,a2
 	bcs.s	read_all_copy_loop
-read_all_done:	; xref: 194e
+read_all_done:
 	bsr.w	fix_duplicate_counts
 	rts
 
 
-copy_track_tail:	; xref: 18a4
+copy_track_tail:	; from: read_all_sectors
 	movea.l	sector_list_end,a1              ; last entry = end of track
 	clr.l	d0
 	move.w	$a(a1),d0
@@ -2531,13 +2902,13 @@ copy_track_tail:	; xref: 18a4
 	lea	track_buf,a1
 	adda.l	d0,a1
 	move.w	#$ff,d0                         ; 256 bytes
-copy_tail_loop:	; xref: 1986
+copy_tail_loop:
 	move.b	(a1)+,(a0)+
 	dbra	d0,copy_tail_loop
 	rts
 
 
-detect_scheme_1b:	; xref: 1192
+detect_scheme_1b:	; from: copy_disk_protected
 	clr.w	f_scheme_1b
 	cmpi.w	#$80,num_sectors                ; at least 128 sectors?
 	bcs.s	scheme_1b_ret
@@ -2545,7 +2916,7 @@ detect_scheme_1b:	; xref: 1192
 	movea.l	last_sector,a1
 	lea	-$12(a1),a1
 	moveq	#1,d0
-scheme_1b_loop:	; xref: 19c2
+scheme_1b_loop:
 	cmpi.b	#$1b,(a0)                       ; flags $1b?
 	bne.s	scheme_1b_ret
 	cmp.b	$1(a0),d0                       ; ordinal sequential?
@@ -2555,7 +2926,7 @@ scheme_1b_loop:	; xref: 19c2
 	cmpa.l	a1,a0
 	bne.s	scheme_1b_loop
 	st	f_scheme_1b
-scheme_1b_ret:	; xref: 199a,19b2,19b8
+scheme_1b_ret:
 	rts
 
 
@@ -2563,7 +2934,7 @@ scheme_1b_ret:	; xref: 199a,19b2,19b8
 ; Special handling for track 79 with a known protection signature: verify the
 ; checksum of the track and rebuild it from scratch in track_buf.
 ;----------------------------------------------------------------------
-rebuild_track79:	; xref: 118c
+rebuild_track79:	; from: copy_disk_protected
 	cmpi.b	#$4f,cur_track_b                ; track 79?
 	bne.w	track79_ret
 	cmpi.w	#$3,num_sectors                 ; 3 sectors?
@@ -2573,7 +2944,7 @@ rebuild_track79:	; xref: 118c
 	lea	sector_list,a0
 	moveq	#1,d0
 	moveq	#8,d1
-track79_check_loop:	; xref: 1a32
+track79_check_loop:
 	move.w	(a0),d2                         ; flags without bit 15
 	bclr	#$f,d2
 	tst.w	d2
@@ -2588,7 +2959,7 @@ track79_check_loop:	; xref: 1a32
 	cmpi.w	#$7,d0                          ; after sector 6 expect $f5
 	bne.s	track79_check_next
 	move.b	#$f5,d0
-track79_check_next:	; xref: 1a28
+track79_check_next:
 	lea	$12(a0),a0
 	dbra	d1,track79_check_loop
 	lea	sector_buf,a0
@@ -2601,25 +2972,25 @@ track79_check_next:	; xref: 1a28
 	move.l	#$e5e5e5e5,d0                   ; $e5e5e5e5 within $300 longs
 	move.w	#$2ff,d1
 	bsr.w	find_long_loop
-track79_find_sig:	; xref: 19e0
+track79_find_sig:
 	lea	track_buf,a0                    ; search sig_track79 in the track
-track79_sig_scan:	; xref: 1a88
+track79_sig_scan:
 	addq.l	#1,a0
 	cmpa.l	#track_buf_1000,a0              ; end of buffer
 	beq.w	ret_one
 	lea	sig_track79,a1
 	moveq	#31,d7                          ; 32 bytes
 	movea.l	a0,a2
-track79_sig_compare:	; xref: 1a8a
+track79_sig_compare:
 	move.b	(a1)+,d0
 	cmp.b	(a2)+,d0
 	bne.s	track79_sig_scan
 	dbra	d7,track79_sig_compare
 	move.w	#$2e0,d0                        ; $2e1 longs
 	moveq	#0,d1
-track79_checksum_loop:	; xref: 1aa4
+track79_checksum_loop:
 	moveq	#2,d2                           ; d4 = next long
-track79_checksum_inner:	; xref: 1a9a
+track79_checksum_inner:
 	move.b	(a0)+,d4
 	asl.l	#8,d4
 	dbra	d2,track79_checksum_inner
@@ -2632,7 +3003,7 @@ track79_checksum_inner:	; xref: 1a9a
 	lea	track_buf,a0
 	movea.l	a0,a1
 	move.w	#$63f,d0                        ; clear $1900 bytes
-track79_clear_loop:	; xref: 1ac0
+track79_clear_loop:
 	clr.l	(a0)+
 	dbra	d0,track79_clear_loop
 	lea	$100(a1),a0                     ; ID at +$100: track 79, side 0, sector 4, size 2
@@ -2645,7 +3016,7 @@ track79_clear_loop:	; xref: 1ac0
 	move.w	#$bcd9,(a0)+
 	move.w	#$4e4e,d0                       ; gap $4e
 	moveq	#10,d1
-track79_gap_loop:	; xref: 1af4
+track79_gap_loop:
 	move.w	d0,(a0)+
 	dbra	d1,track79_gap_loop
 	clr.l	(a0)+                           ; data
@@ -2658,39 +3029,39 @@ track79_gap_loop:	; xref: 1af4
 	move.l	#$602f7,(a0)+                   ; side 0, sector 6, size 2, CRC
 	moveq	#78,d0                          ; 21 x $4e
 	moveq	#20,d1
-track79_gap2_loop:	; xref: 1b24
+track79_gap2_loop:
 	move.b	d0,(a0)+
 	dbra	d1,track79_gap2_loop
 	move.b	#$f5,(a0)+
 	move.b	#$1,(a0)+
 	move.l	#$ffc0fa00,$5fc(a1)             ; at +$5fc
 	clr.l	d0                              ; d0 = 0: ok
-track79_ret:	; xref: 19d4,19ec,1a02,1a0c,1a14,1a1e,1aae
+track79_ret:
 	rts
 
 
-find_long_pattern:	; xref: 1a42,1a4c,1a56
+find_long_pattern:	; from: rebuild_track79
 	moveq	#127,d1                         ; search 128 longs
 
-find_long_loop:	; xref: 1a64,1b40
+find_long_loop:	; from: rebuild_track79
 	cmp.l	(a0)+,d0
 	dbne	d1,find_long_loop
 	bne.s	find_long_fail
 	rts
 
-find_long_fail:	; xref: 1b44
+find_long_fail:
 	addq.l	#4,sp                           ; drop return address
-ret_one:	; xref: 1a76
+ret_one:	; from: rebuild_track79
 	moveq	#1,d0
 	rts
 
 
 ; Expected start of the track 79 protection: sync, ID 79/0/5/2, CRC, gap
-sig_track79:	; xref: 1a7a
+sig_track79:	; from: rebuild_track79
 	dc.b	$14,$a1,$a1,$fe,$4f,$00,$05,$02,$bc,$d9
 	dc.b	'NNNNNNNNNNNNNNNNNNNNNN'
 
-detect_scheme_c:	; xref: 1176
+detect_scheme_c:	; from: copy_disk_protected
 	clr.w	f_scheme_c
 	cmpi.b	#$4f,cur_track_b                ; track 79?
 	bne.s	scheme_c_ret
@@ -2702,7 +3073,7 @@ detect_scheme_c:	; xref: 1176
 	lea	$12(a0),a0
 	cmpi.b	#$6,$4(a0)                      ; second sector 6?
 	bne.s	scheme_c_ret
-scheme_c_scan_loop:	; xref: 1bb4
+scheme_c_scan_loop:
 	lea	$12(a0),a0
 	cmpa.l	last_sector,a0
 	beq.s	scheme_c_ret
@@ -2718,19 +3089,19 @@ scheme_c_scan_loop:	; xref: 1bb4
 	bsr.w	sector_length                   ; data length from size code
 	move.w	d0,$e(a0)
 	st	f_scheme_c
-scheme_c_tail_loop:	; xref: 1be6
+scheme_c_tail_loop:
 	lea	$12(a0),a0
 	cmpa.l	last_sector,a0
 	bne.s	scheme_c_tail_loop
 	move.w	#$b0,$e(a0)                     ; last entry: length $b0
-scheme_c_ret:	; xref: 1b7c,1b86,1b94,1ba0,1bac,1bbe,1bc6
+scheme_c_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Emit a track-write script for the "scheme C" protection
 ;----------------------------------------------------------------------
-emit_script_scheme_c:	; xref: 1ec8
+emit_script_scheme_c:	; from: emit_track_script
 	lea	sector_list,a3
 	move.w	#$6400,(a2)+                    ; opcode $64: RLE data
 	move.l	#$84e0800,(a2)+                 ; 8 x $4e, 8 x $00
@@ -2746,7 +3117,7 @@ emit_script_scheme_c:	; xref: 1ec8
 	move.l	#$23bc2,(a2)+                   ; literal 2 bytes $3b $c2
 	move.w	#$5ce6,(a2)+                    ; 92 x $e6
 	move.l	#$1f74e,(a2)+                   ; literal $f7, 78 x ... (end)
-scheme_c_sector_loop:	; xref: 1c88
+scheme_c_sector_loop:
 	lea	$12(a3),a3
 	move.l	#$24e0400,(a2)+                 ; 2 x $4e, 4 x $00
 	btst	#$7,(a3)                        ; special sector?
@@ -2758,9 +3129,9 @@ scheme_c_sector_loop:	; xref: 1c88
 	move.w	#$6400,(a2)+                    ; opcode $64
 	bra.s	scheme_c_data
 
-scheme_c_normal_id:	; xref: 1c4a
+scheme_c_normal_id:
 	bsr.w	emit_id_with_crc
-scheme_c_data:	; xref: 1c60
+scheme_c_data:
 	move.l	#$164e0c00,(a2)+                ; 22 x $4e, 12 x $00
 	bsr.w	emit_mark_fb
 	move.l	#$80e680e6,(a2)+                ; 128 x $e6, 128 x $e6
@@ -2772,19 +3143,19 @@ scheme_c_data:	; xref: 1c60
 	tst.w	special_count                   ; special sectors?
 	beq.s	scheme_c_verify_part
 	bsr.w	emit_special_sector_script
-scheme_c_verify_part:	; xref: 1c92
+scheme_c_verify_part:
 	lea	sector_list,a3
 	movea.l	a4,a6
 	bsr.w	script_add_sector
 	lea	$12(a3),a3
 	bsr.w	script_add_sector
 	movea.l	a6,a4
-scheme_c_verify_loop:	; xref: 1cc2
+scheme_c_verify_loop:
 	lea	$12(a3),a3
 	btst	#$7,(a3)
 	bne.s	scheme_c_verify_next
 	bsr.w	script_add_sector
-scheme_c_verify_next:	; xref: 1cb6
+scheme_c_verify_next:
 	cmpa.l	last_sector,a3
 	bne.s	scheme_c_verify_loop
 	rts
@@ -2793,11 +3164,11 @@ scheme_c_verify_next:	; xref: 1cb6
 ;----------------------------------------------------------------------
 ; Emit a track-write script for a track with one duplicated sector
 ;----------------------------------------------------------------------
-emit_script_scheme_dup:	; xref: 1ed8
+emit_script_scheme_dup:	; from: emit_track_script
 	lea	sector_list,a3
 	moveq	#0,d0
 	move.w	#$6400,(a2)+                    ; opcode $64: RLE data
-scheme_dup_loop:	; xref: 1d3e
+scheme_dup_loop:
 	move.l	#$224e0c00,(a2)+                ; 34 x $4e, 12 x $00
 	bsr.w	emit_id_fe
 	move.l	#$164e0c00,(a2)+                ; 22 x $4e, 12 x $00
@@ -2806,7 +3177,7 @@ scheme_dup_loop:	; xref: 1d3e
 	cmpa.l	last_sector,a3
 	beq.s	scheme_dup_data_end
 	move.l	#$80e680e6,(a2)+
-scheme_dup_data_end:	; xref: 1cf2
+scheme_dup_data_end:
 	move.l	#$1f700,(a2)+                   ; literal $f7, end
 	addq.w	#1,d0
 	cmpi.b	#$5,d0                          ; after 5 sectors: insert the last sector
@@ -2820,13 +3191,13 @@ scheme_dup_data_end:	; xref: 1cf2
 	move.l	#$80e680e6,(a2)+
 	move.l	#$1f700,(a2)+
 	movem.l	(sp)+,a3
-scheme_dup_next:	; xref: 1d06
+scheme_dup_next:
 	lea	$12(a3),a3
 	cmpa.l	sector_list_end,a3
 	bne.s	scheme_dup_loop
 	clr.w	(a2)+                           ; end of RLE data
 	lea	sector_list,a3
-scheme_dup_verify_loop:	; xref: 1d56
+scheme_dup_verify_loop:
 	bsr.w	script_add_sector
 	lea	$12(a3),a3
 	cmpa.l	last_sector,a3
@@ -2843,7 +3214,7 @@ scheme_dup_verify_loop:	; xref: 1d56
 ;----------------------------------------------------------------------
 ; Script helpers: literal ID/data headers (count word followed by bytes)
 ;----------------------------------------------------------------------
-emit_id_fe:	; xref: 1cd8,1d18
+emit_id_fe:	; from: emit_script_scheme_dup
 	move.w	#$9,(a2)+                       ; 9 literal bytes: sync, $fe, ID, CRC
 	move.l	#$f5f5f5fe,(a2)+
 	move.l	$2(a3),(a2)+
@@ -2851,7 +3222,7 @@ emit_id_fe:	; xref: 1cd8,1d18
 	rts
 
 
-emit_id_ff:	; xref: 1c18
+emit_id_ff:	; from: emit_script_scheme_c
 	move.w	#$9,(a2)+                       ; 9 literal bytes: sync, $ff, ID, CRC
 	move.l	#$f5f5f5ff,(a2)+
 	move.l	$2(a3),(a2)+
@@ -2859,7 +3230,7 @@ emit_id_ff:	; xref: 1c18
 	rts
 
 
-emit_id_with_crc:	; xref: 1c00,1c62
+emit_id_with_crc:	; from: emit_script_scheme_c
 	move.w	#$a,(a2)+                       ; 10 literal bytes: sync, $fe, ID, stored CRC
 	move.l	#$f5f5f5fe,(a2)+
 	move.l	$2(a3),(a2)+
@@ -2867,13 +3238,13 @@ emit_id_with_crc:	; xref: 1c00,1c62
 	rts
 
 
-emit_mark_f8:	; xref: 1c22
+emit_mark_f8:	; from: emit_script_scheme_c
 	move.w	#$4,(a2)+                       ; 4 literal bytes: sync, $f8 (deleted data mark)
 	move.l	#$f5f5f5f8,(a2)+
 	rts
 
 
-emit_mark_fb:	; xref: 1c0a,1c6c,1ce2,1d20
+emit_mark_fb:	; from: emit_script_scheme_c, emit_script_scheme_dup
 	move.w	#$4,(a2)+                       ; 4 literal bytes: sync, $fb (data mark)
 	move.l	#$f5f5f5fb,(a2)+
 	rts
@@ -2882,7 +3253,7 @@ emit_mark_fb:	; xref: 1c0a,1c6c,1ce2,1d20
 ;----------------------------------------------------------------------
 ; Detect a track with exactly one duplicated sector ID
 ;----------------------------------------------------------------------
-detect_scheme_dup:	; xref: 1196
+detect_scheme_dup:	; from: copy_disk_protected
 	move.w	f_fuzzy_any,d0                  ; any fuzzy sectors?
 	or.w	f_fuzzy_sector,d0
 	beq.w	scheme_dup_ret_fail
@@ -2896,7 +3267,7 @@ detect_scheme_dup:	; xref: 1196
 	bcc.w	scheme_dup_ret_fail
 	lea	sector_list,a0
 	clr.w	d1
-scheme_dup_scan_loop:	; xref: 1e38
+scheme_dup_scan_loop:
 	cmpi.w	#$200,$e(a0)                    ; 512-byte sectors only
 	bne.s	scheme_dup_ret_fail
 	move.b	(a0),d2                         ; flags without bit 7
@@ -2907,7 +3278,7 @@ scheme_dup_scan_loop:	; xref: 1e38
 	bne.s	scheme_dup_ret_fail
 	addq.w	#1,d1                           ; count them
 	move.l	a0,d4
-scheme_dup_scan_next:	; xref: 1e22
+scheme_dup_scan_next:
 	lea	$12(a0),a0
 	cmpa.l	sector_list_end,a0
 	bne.s	scheme_dup_scan_loop
@@ -2920,7 +3291,7 @@ scheme_dup_scan_next:	; xref: 1e22
 	st	f_dup_scheme_alt
 	bra.s	scheme_dup_ret_fail
 
-scheme_dup_split:	; xref: 1e44
+scheme_dup_split:
 	st	f_dup_scheme
 	move.l	a0,d1
 	lea	$12(a0),a1                      ; make room for one more entry
@@ -2935,14 +3306,14 @@ scheme_dup_split:	; xref: 1e44
 	moveq	#0,d0
 	rts
 
-scheme_dup_ret_fail:	; xref: 1dd8,1dfa,1e06,1e18,1e28,1e3c,1e4c,1e54
+scheme_dup_ret_fail:
 	moveq	#1,d0
 	rts
 
 
-copy_entry:	; xref: 1e6e,1e76
+copy_entry:	; from: detect_scheme_dup
 	moveq	#17,d0
-copy_entry_loop:	; xref: 1e8a
+copy_entry_loop:
 	move.b	(a0)+,(a1)+
 	dbra	d0,copy_entry_loop
 	rts
@@ -2956,7 +3327,7 @@ copy_entry_loop:	; xref: 1e8a
 ; opcode_table) followed by its parameters.  Part 2 (at +$2000 while building)
 ; is the verify script.
 ;----------------------------------------------------------------------
-emit_track_script:	; xref: 119c
+emit_track_script:	; from: copy_disk_protected
 	movem.l	a3-a6,-(sp)
 	movea.l	buffer_ptr,a2                   ; a2 = script part 1
 	lea	$2000(a2),a4                    ; a4 = part 2 (verify)
@@ -2969,38 +3340,38 @@ emit_track_script:	; xref: 119c
 	bsr.w	emit_script_a1a1                ; a1a1 scheme script
 	bra.w	emit_finish_script
 
-emit_check_scheme_c:	; xref: 1eae,1eb6
+emit_check_scheme_c:
 	tst.w	f_scheme_c                      ; scheme C?
 	beq.s	emit_check_scheme_dup
 	bsr.w	emit_script_scheme_c
 	bra.w	emit_script_end
 
-emit_check_scheme_dup:	; xref: 1ec6
+emit_check_scheme_dup:
 	tst.w	f_dup_scheme_alt                ; single duplicate sector?
 	beq.s	emit_check_extra_id
 	bsr.w	emit_script_scheme_dup
 	bra.w	emit_script_end
 
-emit_check_extra_id:	; xref: 1ed6
+emit_check_extra_id:
 	tst.w	f_extra_id                      ; extra ID found?
 	beq.s	emit_check_special
 	movea.l	sector_list_end,a3
 	bsr.w	script_add_sector
-emit_check_special:	; xref: 1ee6
+emit_check_special:
 	tst.w	special_count                   ; special sectors?
 	beq.s	emit_leadin
 	bsr.w	emit_special_sector_script
-emit_leadin:	; xref: 1ef8
+emit_leadin:
 	bsr.w	detect_uniform_gap
 	bsr.w	emit_leadin_gap
 	tst.w	leadin_special_pos              ; lead-in handled?
 	bne.s	emit_check_0b09
 	bsr.w	emit_pregap_copy
-emit_check_0b09:	; xref: 1f0c
+emit_check_0b09:
 	tst.w	f_scheme_0b09                   ; $0b09 scheme?
 	beq.s	emit_sector_loop
 	move.w	#$7000,(a4)+                    ; opcode $70: sync read track
-emit_sector_loop:	; xref: 1f18,221a
+emit_sector_loop:
 	cmpi.b	#$ff,(a3)                       ; ID not from the list?
 	beq.s	emit_sector_id
 	btst	#$7,(a3)                        ; special sector?
@@ -3010,7 +3381,7 @@ emit_sector_loop:	; xref: 1f18,221a
 	move.l	#$ff00ff00,(a2)+
 	bra.s	emit_sector_data
 
-emit_sector_normal:	; xref: 1f28
+emit_sector_normal:
 	btst	#$4,(a3)                        ; no data field?
 	bne.s	emit_sector_id
 	btst	#$0,(a3)                        ; duplicate ID?
@@ -3024,9 +3395,9 @@ emit_sector_normal:	; xref: 1f28
 	bsr.w	patch_branches                  ; patch branches, emit long track
 	bra.w	emit_script_end
 
-emit_sector_verify:	; xref: 1f4c,1f50,1f58
+emit_sector_verify:
 	bsr.w	script_add_sector               ; verify part: add sector
-emit_sector_id:	; xref: 1f22,1f3e,1f44
+emit_sector_id:
 	bsr.w	emit_sector_header              ; ID item
 	cmpi.b	#$ff,(a3)                       ; ID not from the list?
 	beq.s	emit_sector_no_data
@@ -3035,13 +3406,13 @@ emit_sector_id:	; xref: 1f22,1f3e,1f44
 	cmpi.b	#$2,$1(a3)                      ; ordinal < 2?
 	bcc.s	emit_sector_no_data
 	bsr.w	emit_data_check_opcode
-emit_sector_no_data:	; xref: 1f6e,1f74,1f7c
+emit_sector_no_data:
 	btst	#$4,(a3)                        ; no data field?
 	beq.s	emit_sector_data
 	move.w	#$1c00,(a2)+                    ; opcode $1c: fix mark bytes
 	move.w	$6(a3),(a2)+                    ; CRC, flags
 	move.w	(a3),(a2)+
-emit_sector_data:	; xref: 1f38,1f86
+emit_sector_data:
 	tst.w	$c(a3)                          ; no data offset?
 	beq.w	emit_sector_gap
 	cmpa.l	last_sector,a3                  ; last sector?
@@ -3050,7 +3421,7 @@ emit_sector_data:	; xref: 1f38,1f86
 	beq.s	emit_data_header
 	btst	#$4,(a3)                        ; no data field?
 	bne.w	emit_sector_gap
-emit_data_header:	; xref: 1fa0,1fa8
+emit_data_header:
 	bsr.w	emit_gap_after_id               ; gap 2
 	move.b	#$18,(a2)+                      ; opcode $18: data field
 	move.b	$11(a3),d0
@@ -3058,7 +3429,7 @@ emit_data_header:	; xref: 1fa0,1fa8
 	btst	#$1,(a3)                        ; data mark present?
 	beq.s	emit_data_flags
 	bset	#$6,d0                          ; bit 6: no trailing zeros
-emit_data_flags:	; xref: 1fc6
+emit_data_flags:
 	move.b	d0,(a2)+
 	move.w	$e(a3),(a2)+                    ; length
 	cmpi.b	#$ff,(a3)                       ; ID not from the list: raw data
@@ -3068,10 +3439,10 @@ emit_data_flags:	; xref: 1fc6
 	btst	#$0,(a3)                        ; duplicate ID?
 	beq.s	emit_data_kind
 	bsr.w	emit_scheme_1b_data             ; scheme 1b marker
-emit_data_done:	; xref: 2006,2016,2024,2034,203c,2068
+emit_data_done:
 	bra.w	emit_sector_end
 
-emit_data_kind:	; xref: 1fe6
+emit_data_kind:
 	btst	#$4,(a3)                        ; no data field: raw
 	bne.w	emit_data_raw
 	btst	#$2,(a3)                        ; fuzzy?
@@ -3079,7 +3450,7 @@ emit_data_kind:	; xref: 1fe6
 	cmpi.b	#$2,$1(a3)                      ; ordinal < 2: data from buffer
 	bcs.s	emit_data_from_buffer
 	bcc.s	emit_data_done
-emit_data_last_check:	; xref: 1ffc
+emit_data_last_check:
 	cmpa.l	last_sector,a3                  ; last sector?
 	bne.s	emit_data_special_check
 	tst.w	f_track_overflow                ; track overflow: no data
@@ -3088,12 +3459,12 @@ emit_data_last_check:	; xref: 1ffc
 	bne.s	emit_data_special_check
 	tst.w	f_overlong_data                 ; over-long data: no data
 	bne.s	emit_data_done
-emit_data_special_check:	; xref: 200e,201c
+emit_data_special_check:
 	tst.w	special_count                   ; special sectors?
 	beq.s	emit_data_sync_check
 	btst	#$7,$12(a3)                     ; next sector special?
 	bne.s	emit_data_done
-emit_data_sync_check:	; xref: 202c
+emit_data_sync_check:
 	tst.w	f_extra_id                      ; extra ID: no data
 	bne.s	emit_data_done
 	tst.w	f_sync_in_data                  ; sync bytes in data?
@@ -3105,14 +3476,14 @@ emit_data_sync_check:	; xref: 202c
 	move.w	#$6c00,(a4)+                    ; opcode $6c: partial write track
 	bra.s	emit_data_short_done
 
-emit_data_short:	; xref: 204c,2054
+emit_data_short:
 	bsr.w	check_f0f7_sector               ; $f0f1f2f3 sector?
 	bne.s	emit_data_short_done
 	move.w	#$24,-$2(a2)                    ; length $24
-emit_data_short_done:	; xref: 205a,2060
+emit_data_short_done:
 	bra.s	emit_data_done
 
-emit_data_from_buffer:	; xref: 2004,2044
+emit_data_from_buffer:
 	movea.l	script2_ptr,a4                  ; a4 = verify script, a5 = data
 	movea.l	dma_pos,a5
 	bset	#$7,-$3(a2)                     ; bit 7: data given
@@ -3123,7 +3494,7 @@ emit_data_from_buffer:	; xref: 2004,2044
 	beq.s	emit_data_length
 	bclr	#$4,-$3(a2)                     ; no CRC
 	addq.w	#2,-$2(a2)                      ; length + 2
-emit_data_length:	; xref: 2080,208c
+emit_data_length:
 	clr.l	d0
 	move.w	$e(a3),d0
 	tst.b	f_data_not_uniform              ; uniform data?
@@ -3136,15 +3507,15 @@ emit_data_length:	; xref: 2080,208c
 	addq.l	#1,a5
 	bra.w	emit_sector_end
 
-emit_data_copy_loop:	; xref: 20c4
+emit_data_copy_loop:
 	move.b	(a5)+,(a2)+                     ; copy the data bytes
-emit_data_copy:	; xref: 20a4
+emit_data_copy:
 	dbra	d0,emit_data_copy_loop
 	btst	#$0,$f(a3)                      ; odd length?
 	beq.s	emit_data_tail
 	move.b	#$10,(a2)+                      ; pad byte
 	addq.l	#1,a5
-emit_data_tail:	; xref: 20ce
+emit_data_tail:
 	btst	#$1,(a3)                        ; data mark present?
 	bne.w	emit_sector_end
 	btst	#$3,(a3)                        ; read error?
@@ -3153,7 +3524,7 @@ emit_data_tail:	; xref: 20ce
 	move.b	#$e5,(a2)+
 	bra.s	emit_sector_end
 
-emit_data_raw:	; xref: 1fd6,1ff4
+emit_data_raw:
 	bset	#$7,-$3(a2)                     ; bit 7: data given
 	lea	track_buf,a1
 	moveq	#4,d0                           ; data offset + 4
@@ -3173,40 +3544,40 @@ emit_data_raw:	; xref: 1fd6,1ff4
 	clr.b	-$4(a2)                         ; patch length and mark
 	clr.b	(a2)+
 	move.b	-$4(a1),(a2)+
-emit_raw_select:	; xref: 210a,2116,211c,2124
+emit_raw_select:
 	btst	#$4,(a3)                        ; no data field: copy from the track
 	bne.s	emit_raw_copy
 	movea.l	script2_ptr,a4                  ; else from the data buffer
 	movea.l	dma_pos,a5
 	bra.s	emit_buf_copy
 
-emit_raw_copy_loop:	; xref: 2146
+emit_raw_copy_loop:
 	move.b	(a1)+,(a2)+                     ; copy from the track buffer
-emit_raw_copy:	; xref: 2134
+emit_raw_copy:
 	dbra	d0,emit_raw_copy_loop
 	bra.s	emit_raw_odd
 
-emit_buf_copy_loop:	; xref: 214e
+emit_buf_copy_loop:
 	move.b	(a5)+,(a2)+                     ; copy from the data buffer
-emit_buf_copy:	; xref: 2142
+emit_buf_copy:
 	dbra	d0,emit_buf_copy_loop
-emit_raw_odd:	; xref: 214a
+emit_raw_odd:
 	btst	#$0,$f(a3)                      ; odd length?
 	beq.s	emit_sector_end
 	move.b	#$10,(a2)+                      ; pad byte
-emit_sector_end:	; xref: 1fde,1fec,20b8,20be,20da,20e2,20ec,2158
+emit_sector_end:
 	btst	#$1,(a3)                        ; data mark present?
 	beq.w	emit_inter_gap
 	lea	$12(a3),a3
 	bra.w	emit_sector_next
 
-emit_sector_gap:	; xref: 1f96,1fae
+emit_sector_gap:
 	cmpa.l	last_sector,a3                  ; last sector?
 	bne.s	emit_gap_from_track
 	lea	$12(a3),a3
 	bra.w	emit_sector_next
 
-emit_gap_from_track:	; xref: 2174
+emit_gap_from_track:
 	clr.l	d1
 	move.w	$a(a3),d1                       ; this ID offset
 	lea	$12(a3),a3
@@ -3227,7 +3598,7 @@ emit_gap_from_track:	; xref: 2174
 	movea.l	d1,a0
 	move.w	d0,d1
 	clr.l	d4
-emit_gap_copy_loop:	; xref: 21de
+emit_gap_copy_loop:
 	move.b	(a0)+,d2
 	cmpi.b	#$c2,d2                         ; three $c2 -> $f6 (write-track C2 sync)
 	bne.s	emit_gap_reset_c2
@@ -3238,9 +3609,9 @@ emit_gap_copy_loop:	; xref: 21de
 	moveq	#-10,d2
 	move.b	d2,-$2(a2)
 	move.b	d2,-$1(a2)
-emit_gap_reset_c2:	; xref: 21c2
+emit_gap_reset_c2:
 	clr.l	d4
-emit_gap_store:	; xref: 21ce
+emit_gap_store:
 	move.b	d2,(a2)+
 	dbra	d0,emit_gap_copy_loop
 	cmpi.b	#$f5,(a0)                       ; sync follows?
@@ -3249,49 +3620,49 @@ emit_gap_store:	; xref: 21ce
 	move.b	#$f7,(a2)+
 	subq.w	#1,(a1)
 	subq.w	#1,d1
-emit_gap_pad:	; xref: 21e6
+emit_gap_pad:
 	btst	#$0,d1                          ; odd length?
 	bne.s	emit_sector_next
 	move.b	#$10,(a2)+                      ; pad byte
 	bra.s	emit_sector_next
 
-emit_gap_22:	; xref: 219e,21a6
+emit_gap_22:
 	move.w	#$2800,(a2)+                    ; opcode $28: gap
 	move.l	#$15b10bff,(a2)+                ; run list: 21 x $b1, 11 x $ff, end
 	clr.w	(a2)+
 	bra.s	emit_sector_next
 
-emit_inter_gap:	; xref: 2162
+emit_inter_gap:
 	lea	$12(a3),a3
 	bsr.w	emit_inter_sector_gap
-emit_sector_next:	; xref: 216a,217a,2192,2196,21f6,21fc,220a
+emit_sector_next:
 	cmpa.l	sector_list_end,a3              ; all sectors done?
 	bne.w	emit_sector_loop
 	tst.w	f_extra_id                      ; extra ID?
 	beq.s	emit_leadin_pos
 	move.w	#$4800,(a2)+                    ; opcode $48: ID zero
-emit_leadin_pos:	; xref: 2224
+emit_leadin_pos:
 	move.w	leadin_special_pos,d0           ; lead-in special position?
 	beq.s	emit_pregap_pos
 	move.w	#$5000,(a2)+                    ; opcode $50: ID $ff sector 1
 	move.w	d0,(a2)+
-emit_pregap_pos:	; xref: 2230
+emit_pregap_pos:
 	move.w	pregap_pos,d0                   ; pregap position?
 	beq.s	emit_check_dup_ids
 	move.w	#$5000,(a2)+                    ; opcode $50
 	move.w	d0,(a2)+
-emit_check_dup_ids:	; xref: 223e
+emit_check_dup_ids:
 	tst.w	f_dup_ids                       ; duplicate IDs?
 	beq.s	emit_script_end
 	bsr.w	emit_dup_sector_timing
-emit_script_end:	; xref: 1ecc,1edc,1f5e,224c
+emit_script_end:
 	move.w	#$2c00,(a2)+                    ; opcode $2c: end of part 1
 	tst.b	verify_flag                     ; verify?
 	beq.s	emit_finish_script
 	movea.l	a4,a5
 	move.w	#$4cff,(a4)+                    ; opcode $4c: verify sectors, count
 	lea	sector_list,a0
-emit_verify_list_loop:	; xref: 229e
+emit_verify_list_loop:
 	move.w	(a0),d0
 	bclr	#$f,d0                          ; flags without bit 15
 	tst.w	d0                              ; flags 0 only
@@ -3303,17 +3674,17 @@ emit_verify_list_loop:	; xref: 229e
 	beq.s	emit_verify_entry
 	bclr	#$4,d0
 	bclr	#$4,d1
-emit_verify_entry:	; xref: 2286
+emit_verify_entry:
 	move.b	d0,(a4)+
 	move.b	d1,(a4)+
-emit_verify_next:	; xref: 2272
+emit_verify_next:
 	lea	$12(a0),a0
 	cmpa.l	sector_list_end,a0
 	bne.s	emit_verify_list_loop
 	tst.b	$1(a5)                          ; count >= 128?
 	bpl.s	emit_finish_script
 	movea.l	a5,a4                           ; drop the verify list
-emit_finish_script:	; xref: 1ebc,225c,22a4
+emit_finish_script:
 	move.w	#$3400,(a4)+                    ; opcode $34: end of verify part
 	move.w	cur_track,d1                    ; track register = cur_track
 	bsr.w	fdc_set_track_reg
@@ -3328,7 +3699,7 @@ emit_finish_script:	; xref: 1ebc,225c,22a4
 	neg.w	d0
 	lsr.w	#1,d0
 	subq.w	#1,d0
-append_verify_loop:	; xref: 22d6
+append_verify_loop:
 	move.w	(a1)+,(a2)+                     ; append part 2 to part 1
 	dbra	d0,append_verify_loop
 	bsr.w	patch_track3
@@ -3344,7 +3715,7 @@ append_verify_loop:	; xref: 22d6
 ;----------------------------------------------------------------------
 ; Check for a short sector whose data starts with $f0f1f2f3 $f4f5f6f7
 ;----------------------------------------------------------------------
-check_f0f7_sector:	; xref: 205c,29d2
+check_f0f7_sector:	; from: emit_track_script, emit_gap_after_id
 	btst	#$4,(a3)                        ; no data field?
 	bne.s	check_f0f7_fail
 	cmpi.w	#$26,$e(a3)                     ; length $20..$25
@@ -3358,20 +3729,20 @@ check_f0f7_sector:	; xref: 205c,29d2
 	bne.s	check_f0f7_fail
 	rts
 
-check_f0f7_fail:	; xref: 22fe,2306,230e,231e,2328
+check_f0f7_fail:
 	moveq	#1,d0
 	rts
 
-sig_a1a1_pattern:	; xref: 23a2
+sig_a1a1_pattern:	; from: detect_a1a1_scheme
 	dc.b	$a1,$a1,$00,$fd,$f8,$fe,$fe,$f8,$fa,$f9,$c2,$f8,$75,$37,$f6,$00
-sig_a1a1_replace:	; xref: 2388
+sig_a1a1_replace:	; from: detect_a1a1_scheme
 	dc.b	$a1,$a1,$af,$f7,$f7,$f4,$1f,$a0,$01,$88,$5f,$34,$20,$13,$bf,$a7
 	dc.b	$43,$64,$31,$96,$4d,$29,$3c,$34,$1f,$00
 
 ;----------------------------------------------------------------------
 ; Look for the $a1a1 $00fd... signature in the track
 ;----------------------------------------------------------------------
-detect_a1a1_scheme:	; xref: 11a2
+detect_a1a1_scheme:	; from: copy_disk_protected
 	clr.w	sig_a1a1_pos
 	tst.w	f_patched_boot_a                ; boot scheme A patched?
 	beq.s	a1a1_scan
@@ -3384,37 +3755,37 @@ detect_a1a1_scheme:	; xref: 11a2
 	move.l	a0,d2
 	lea	sig_a1a1_replace,a1
 	moveq	#25,d0                          ; 26 bytes
-a1a1_copy_loop:	; xref: 2392
+a1a1_copy_loop:
 	move.b	(a1)+,(a0)+
 	dbra	d0,a1a1_copy_loop
 	bra.s	a1a1_found
 
-a1a1_scan:	; xref: 2366
+a1a1_scan:
 	lea	track_buf,a0
 	moveq	#127,d0                         ; search 128 positions
-a1a1_scan_loop:	; xref: 23b6
+a1a1_scan_loop:
 	move.l	a0,d2
 	lea	sig_a1a1_pattern,a1
 	moveq	#14,d1                          ; 15 bytes
-a1a1_compare_loop:	; xref: 23ac
+a1a1_compare_loop:
 	cmpm.b	(a0)+,(a1)+
 	dbne	d1,a1a1_compare_loop
 	beq.s	a1a1_found
 	movea.l	d2,a0
 	addq.l	#1,a0
 	dbra	d0,a1a1_scan_loop
-a1a1_not_found:	; xref: 2370,237a
+a1a1_not_found:
 	moveq	#1,d0
 	rts
 
-a1a1_found:	; xref: 2396,23b0
+a1a1_found:
 	subi.l	#track_buf_m2,d2                ; offset + 2
 	move.w	d2,sig_a1a1_pos
 	clr.l	d2
 	rts
 
 
-emit_script_a1a1:	; xref: 1eb8
+emit_script_a1a1:	; from: emit_track_script
 	move.l	#$50000042,(a2)+                ; opcode $50 $00 $00 $42
 	lea	track_buf,a0
 	move.w	sig_a1a1_pos,d0
@@ -3428,14 +3799,14 @@ emit_script_a1a1:	; xref: 1eb8
 	move.l	d1,(a2)+
 	subq.w	#4,d0
 	addq.l	#1,a0
-a1a1_data_loop:	; xref: 2400
+a1a1_data_loop:
 	move.b	(a0)+,(a2)+
 	dbra	d0,a1a1_data_loop
 	move.w	#$2c00,(a2)+                    ; opcode $2c: end
 	move.w	#$5400,(a4)+                    ; opcode $54: shifted sector write
 	move.w	#$37f,d0                        ; $380 bytes
 	move.w	d0,(a4)+
-a1a1_verify_loop:	; xref: 2414
+a1a1_verify_loop:
 	move.b	(a1)+,(a4)+
 	dbra	d0,a1a1_verify_loop
 	rts
@@ -3444,7 +3815,7 @@ a1a1_verify_loop:	; xref: 2414
 ;----------------------------------------------------------------------
 ; Emit a raw-copy script: the whole track image is stored unchanged
 ;----------------------------------------------------------------------
-emit_raw_track_script:	; xref: 11ac
+emit_raw_track_script:	; from: copy_disk_protected
 	movea.l	buffer_ptr,a2
 	move.w	#$630,d0                        ; $630 longs
 	move.w	d0,(a2)
@@ -3467,12 +3838,12 @@ emit_raw_track_script:	; xref: 11ac
 	rts
 
 
-emit_data_check_opcode:	; xref: 1f7e
+emit_data_check_opcode:	; from: emit_track_script
 	move.b	#$58,(a2)+                      ; "X"
 	movea.l	dma_pos,a0
 	move.b	(a0)+,d1                        ; first data byte
 	moveq	#8,d0                           ; 9 bytes equal?
-check_opcode_loop:	; xref: 2472
+check_opcode_loop:
 	move.b	(a0)+,d2
 	cmp.b	d1,d2
 	dbne	d0,check_opcode_loop
@@ -3482,10 +3853,10 @@ check_opcode_loop:	; xref: 2472
 	move.b	#$5b,(a2)+                      ; '['
 	bra.s	emit_data_check_done
 
-check_opcode_digits:	; xref: 2476
+check_opcode_digits:
 	movea.l	dma_pos,a0
 	moveq	#5,d0                           ; 6 bytes in $30..$3f?
-check_digits_loop:	; xref: 249a
+check_digits_loop:
 	move.b	(a0)+,d2
 	andi.b	#$f0,d2
 	cmpi.b	#$30,d2                         ; '0'
@@ -3496,14 +3867,14 @@ check_digits_loop:	; xref: 249a
 	move.b	#$74,-$1(a2)                    ; "t" $07 "X"
 	move.b	#$7,(a2)+
 	move.b	#$58,(a2)+                      ; 'X'
-emit_data_check_done:	; xref: 2486,249e,24a4
+emit_data_check_done:
 	bra.s	emit_sector_id_bytes
 
 
 ;----------------------------------------------------------------------
 ; Replace $c2, $a1 and $14 bytes in the data by $f5 (write-track sync) when allowed
 ;----------------------------------------------------------------------
-fix_sync_bytes:	; xref: 2444,24de,2be4
+fix_sync_bytes:	; from: emit_leadin_or_gap, emit_raw_track_script
 	tst.w	f_no_sync_fix                   ; sync fixing disabled?
 	bne.s	fix_sync_ret
 	move.b	(a0)+,d1
@@ -3515,18 +3886,18 @@ fix_sync_bytes:	; xref: 2444,24de,2be4
 	bne.s	fix_sync_next
 	cmpi.b	#$15,(a0)
 	beq.s	fix_sync_next
-fix_sync_store:	; xref: 24c4,24ca
+fix_sync_store:
 	move.b	#$f5,-$1(a0)                    ; -> $f5
-fix_sync_next:	; xref: 24d0,24d6
+fix_sync_next:
 	dbra	d0,fix_sync_bytes
-fix_sync_ret:	; xref: 24bc
+fix_sync_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Emit the ID part of a sector item ($68 = current track/side, $20 = full ID)
 ;----------------------------------------------------------------------
-emit_sector_header:	; xref: 1f66,27f6
+emit_sector_header:	; from: patch_branches, emit_track_script
 	cmpi.b	#$fe,$10(a3)                    ; ID mark $fe?
 	bne.s	emit_sector_header_full
 	move.w	cur_track,d0                    ; track:side
@@ -3540,15 +3911,15 @@ emit_sector_header:	; xref: 1f66,27f6
 	move.b	$4(a3),(a2)+                    ; sector
 	rts
 
-emit_sector_header_full:	; xref: 24ea,24fe,2506
+emit_sector_header_full:
 	move.b	#$20,(a2)+                      ; opcode $20: ID field
-emit_sector_id_bytes:	; xref: 24b4
+emit_sector_id_bytes:	; from: emit_data_check_opcode
 	move.b	$10(a3),(a2)+                   ; mark byte
 	move.l	$2(a3),d0                       ; ID bytes
 	tst.w	f_fix_id_bit4
 	beq.s	emit_sector_header_done
 	andi.l	#$efefefef,d0                   ; clear bit 4 of each ID byte
-emit_sector_header_done:	; xref: 2524
+emit_sector_header_done:
 	move.l	d0,(a2)+
 	rts
 
@@ -3561,23 +3932,23 @@ emit_sector_header_done:	; xref: 2524
 ;   pat_cmp_sequence: moveq #5,d5 / move.l (a3)+,d1 / cmp.l $54(a4),d1 / bne.s ...
 ;   pat_t6s10: move.b (a2),(a0) / sub.l d0,$10c8 / move.w #$1f40,d0 / dbra
 ;   pat_t2s2: clr.w $ff8240 / jmp $10000
-pat_move_a1:	; xref: 27a6
+pat_move_a1:	; from: patch_branches
 	dc.w	$0000,$0025,$1c3c,$00a1,$303c,$0002,$6100,$0188
-pat_cmpi_fb:	; xref: 2796
+pat_cmpi_fb:	; from: patch_branches
 	dc.w	$0c18,$00fb,$661a,$4246,$1c18,$33c6
-pat_bset:	; xref: 27cc
+pat_bset:	; from: patch_branches
 	dc.w	$01e9,$52ef,$6b18,$00a1,$676f,$0c18,$00c6,$6600
-pat_cmpi_a1:	; xref: 27bc
+pat_cmpi_a1:	; from: patch_branches
 	dc.w	$0c18,$67a1,$6600,$0176,$4207,$45f9
 
-compare_3_longs:	; xref: 279c,27c2
+compare_3_longs:	; from: patch_branches
 	moveq	#2,d2                           ; 3 longs
 	bra.s	compare_longs_loop
 
 
-compare_4_longs:	; xref: 27ac,27d2
+compare_4_longs:	; from: patch_branches
 	moveq	#3,d2                           ; 4 longs
-compare_longs_loop:	; xref: 256a,2570
+compare_longs_loop:	; from: compare_3_longs
 	cmpm.l	(a1)+,(a2)+
 	dbne	d2,compare_longs_loop
 	rts
@@ -3586,7 +3957,7 @@ compare_longs_loop:	; xref: 256a,2570
 ;----------------------------------------------------------------------
 ; On track 3 search the copied data for timing loops and patch them
 ;----------------------------------------------------------------------
-patch_track3:	; xref: 22da
+patch_track3:	; from: emit_track_script
 	cmpi.w	#$3,cur_track                   ; track 3?
 	bne.s	patch_track3_ret
 	movea.l	a2,a1
@@ -3594,39 +3965,39 @@ patch_track3:	; xref: 22da
 	movea.l	buffer_ptr,a0                   ; from buffer start to script end
 	bsr.w	patch_timing_scan
 	movem.l	(sp)+,a0
-patch_track3_ret:	; xref: 257e
+patch_track3_ret:
 	rts
 
-pat_cmp_loop:	; xref: 25d8
+pat_cmp_loop:	; from: patch_fffb_check
 	dc.w	$b01e,$66ea,$d0dd,$51cd,$fff4,$7001,$4240,$601a
 	dc.w	$4bfa,$001c,$4dfa,$0028
 
 ;----------------------------------------------------------------------
 ; Patch a protection check that uses move.b -5(a0),d0 (opcode $1028fffb)
 ;----------------------------------------------------------------------
-patch_fffb_check:	; xref: 11c6
+patch_fffb_check:	; from: copy_disk_protected
 	tst.w	f_patch_fffb
 	beq.s	patch_fffb_ret
 	movea.l	buffer_start,a0
 	move.l	buffer_ptr,d2
 	move.l	#$1028fffb,d1                   ; move.b -5(a0),d0
 	subq.l	#2,a0
-patch_fffb_scan:	; xref: 25d4,25ea,25fa
+patch_fffb_scan:
 	addq.l	#2,a0                           ; scan the copied data
 	move.l	(a0),d0
 	cmp.l	d0,d1
 	beq.s	patch_fffb_match
 	cmpa.l	d2,a0
 	bcs.s	patch_fffb_scan
-patch_fffb_ret:	; xref: 25b4
+patch_fffb_ret:
 	rts
 
-patch_fffb_match:	; xref: 25d0
+patch_fffb_match:
 	lea	pat_cmp_loop,a2                 ; pat_cmp_loop
 	movea.l	a0,a1
 	addq.l	#4,a1
 	moveq	#4,d0
-patch_fffb_compare:	; xref: 25e6
+patch_fffb_compare:
 	cmpm.w	(a1)+,(a2)+                     ; compare 5 words
 	dbne	d0,patch_fffb_compare
 	bne.s	patch_fffb_scan
@@ -3634,9 +4005,9 @@ patch_fffb_compare:	; xref: 25e6
 	cmpm.l	(a1)+,(a2)+
 	beq.s	patch_fffb_check_z
 	cmpi.b	#$20,-$1(a1)                    ; or ends with $20
-patch_fffb_retry:	; xref: 2600,260e,261a
+patch_fffb_retry:
 	bne.s	patch_fffb_scan
-patch_fffb_check_z:	; xref: 25f2
+patch_fffb_check_z:
 	cmpi.b	#$7a,(a1)                       ; "z"?
 	bne.s	patch_fffb_retry
 	addq.l	#2,a1
@@ -3644,7 +4015,7 @@ patch_fffb_check_z:	; xref: 25f2
 	beq.s	patch_fffb_check_0
 	cmpi.b	#$24,-$1(a1)                    ; or ends with "$"
 	bne.s	patch_fffb_retry
-patch_fffb_check_0:	; xref: 2606
+patch_fffb_check_0:
 	cmpm.l	(a1)+,(a2)+
 	beq.s	patch_fffb_nop
 	cmpi.b	#$30,-$1(a1)                    ; or ends with "0"
@@ -3653,9 +4024,9 @@ patch_fffb_check_0:	; xref: 2606
 	move.b	#$d,-$f(a0)
 	bra.s	patch_fffb_done
 
-patch_fffb_nop:	; xref: 2612
+patch_fffb_nop:
 	move.w	#$4e71,$6(a0)                   ; nop at +6
-patch_fffb_done:	; xref: 2628
+patch_fffb_done:
 	clr.w	f_patch_fffb
 	rts
 
@@ -3664,13 +4035,13 @@ patch_fffb_done:	; xref: 2628
 ; Patch timing loops that read _hz_200 ($4ba): move.l $4ba.w,d3 / move.w d3,(a0)+
 ; / dbra / rts are replaced by move.w #$3535,d0 or d3 and nop
 ;----------------------------------------------------------------------
-patch_timing_loops:	; xref: 11a8
+patch_timing_loops:	; from: copy_disk_protected
 	tst.w	f_unformatted                   ; unformatted track seen?
 	beq.s	patch_timing_ret
 	movea.l	buffer_start,a0
 	movea.l	buffer_ptr,a1
 
-patch_timing_scan:	; xref: 258c
+patch_timing_scan:	; from: patch_track3
 	subq.l	#2,a0
 	move.l	#$263804ba,d0                   ; move.l $4ba.w,d3
 	move.l	#$30c351ca,d1                   ; move.w d3,(a0)+ / dbra
@@ -3679,7 +4050,7 @@ patch_timing_scan:	; xref: 258c
 	move.w	#$4ba,d6                        ; $4ba
 	move.l	#$20390000,d4                   ; move.l $4ba,d0
 	move.l	#$30c051ca,d5                   ; move.w d0,(a0)+ / dbra
-patch_timing_loop:	; xref: 2686
+patch_timing_loop:
 	addq.l	#2,a0                           ; scan word by word
 	cmp.l	(a0),d0                         ; move.l $4ba.w,d3?
 	beq.s	patch_timing_match
@@ -3687,18 +4058,18 @@ patch_timing_loop:	; xref: 2686
 	beq.s	patch_timing_alt
 	cmp.l	(a0),d4                         ; move.l $4ba,d0?
 	beq.s	patch_timing_alt
-patch_timing_next:	; xref: 268e,2694,26a4,26ac,26c6,26d2,26da,26e0...
+patch_timing_next:
 	cmpa.l	a1,a0
 	bcs.s	patch_timing_loop
-patch_timing_ret:	; xref: 263e
+patch_timing_ret:	; from: patch_timing_loops
 	rts
 
-patch_timing_match:	; xref: 267a
+patch_timing_match:
 	cmp.l	$4(a0),d1                       ; followed by move.w d3,(a0)+ / dbra?
 	bne.s	patch_timing_next
 	cmp.l	$8(a0),d2                       ; and dbra tail / rts?
 	bne.s	patch_timing_next
-patch_timing_context:	; xref: 26f4
+patch_timing_context:
 	cmpi.w	#$2079,-$6(a0)                  ; movea.l abs.l,a0 before?
 	beq.s	patch_timing_343c
 	cmpi.w	#$206e,-$4(a0)                  ; movea.l (a6),a0 before?
@@ -3706,43 +4077,43 @@ patch_timing_context:	; xref: 26f4
 	cmpi.w	#$243c,-$a(a0)                  ; move.l #,d2 before?
 	bne.s	patch_timing_next
 	beq.s	patch_timing_d3
-patch_timing_343c:	; xref: 269c
+patch_timing_343c:
 	cmpi.w	#$343c,-$a(a0)                  ; move.w #,d2 before?
 	bne.s	patch_timing_243c
 	move.l	#$303c3535,(a0)                 ; replace by move.w #$3535,d0
 	bra.s	patch_timing_nop
 
-patch_timing_243c:	; xref: 26b6
+patch_timing_243c:
 	cmpi.w	#$243c,-$c(a0)                  ; move.l #,d2 at -$c?
 	bne.s	patch_timing_next
-patch_timing_d3:	; xref: 26ae
+patch_timing_d3:
 	move.l	#$363c3535,(a0)                 ; replace by move.w #$3535,d3
 	cmp.w	$4(a0),d6                       ; followed by $4ba?
 	bne.s	patch_timing_next
-patch_timing_nop:	; xref: 26be
+patch_timing_nop:
 	move.w	#$4e71,$4(a0)                   ; nop
 	bra.s	patch_timing_next
 
-patch_timing_alt:	; xref: 267e,2682
+patch_timing_alt:
 	cmp.w	$4(a0),d6                       ; absolute $4ba?
 	bne.s	patch_timing_next
 	cmp.l	$6(a0),d1                       ; move.w d3,(a0)+ / dbra?
 	beq.s	patch_timing_alt2
 	cmp.l	$6(a0),d5                       ; move.w d0,(a0)+ / dbra?
 	bne.s	patch_timing_next
-patch_timing_alt2:	; xref: 26e6
+patch_timing_alt2:
 	cmp.l	$a(a0),d2                       ; dbra tail / rts?
 	bne.s	patch_timing_next
 	bra.s	patch_timing_context
 
-pat_cmp_sequence:	; xref: 274e
+pat_cmp_sequence:	; from: patch_cmp_sequence
 	dc.w	$7a05,$221b,$b2ac,$0054,$6610,$b2ac,$00a8,$660a
 	dc.w	$b29c,$6606,$51cd,$ffec
 
 ;----------------------------------------------------------------------
 ; Patch the pat_cmp_sequence check on track 64+ with two nops
 ;----------------------------------------------------------------------
-patch_cmp_sequence:	; xref: 1188
+patch_cmp_sequence:	; from: copy_disk_protected
 	cmpi.b	#$4f,cur_track_b                ; track 79?
 	bne.s	patch_seq_ret
 	cmpi.w	#$40,num_sectors                ; at least 64 sectors?
@@ -3753,14 +4124,14 @@ patch_cmp_sequence:	; xref: 1188
 	bne.s	patch_seq_ret
 	movea.l	buffer_start,a0
 	subq.l	#2,a0
-patch_seq_scan:	; xref: 275c,276a
+patch_seq_scan:
 	addq.l	#2,a0
 	cmpa.l	buffer_ptr,a0
 	bcc.s	patch_seq_ret
 	moveq	#5,d0                           ; 6 longs
 	lea	pat_cmp_sequence,a1
 	movea.l	a0,a2
-patch_seq_compare:	; xref: 2758
+patch_seq_compare:
 	cmpm.l	(a2)+,(a1)+
 	dbne	d0,patch_seq_compare
 	bne.s	patch_seq_scan
@@ -3768,30 +4139,30 @@ patch_seq_compare:	; xref: 2758
 	move.w	#$4e71,$e(a0)
 	bra.s	patch_seq_scan
 
-patch_seq_ret:	; xref: 2716,2720,272c,2738,274a
+patch_seq_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Patch bne.s $20 / bne.s $7e branches that follow the pat_* code patterns
 ;----------------------------------------------------------------------
-patch_branches:	; xref: 1f5a
+patch_branches:	; from: emit_track_script
 	movem.l	a2,-(sp)
 	movea.l	buffer_start,a0
 	move.w	#$6620,d0                       ; bne.s +$20
 	move.w	#$667e,d1                       ; bne.s +$7e
-patch_br_scan:	; xref: 278e
+patch_br_scan:
 	cmp.w	(a0),d0
 	beq.s	patch_br_6620
-patch_br_scan2:	; xref: 27b0,27b8
+patch_br_scan2:
 	cmp.w	(a0)+,d1
 	beq.s	patch_br_667e
-patch_br_next:	; xref: 27d6,27de
+patch_br_next:
 	cmpa.l	buffer_ptr,a0
 	bcs.s	patch_br_scan
 	bra.s	patch_br_emit
 
-patch_br_6620:	; xref: 2782
+patch_br_6620:
 	movea.l	a0,a1
 	addq.l	#2,a1
 	lea	pat_cmpi_fb,a2                  ; pat_cmpi_fb after it?
@@ -3801,11 +4172,11 @@ patch_br_6620:	; xref: 2782
 	lea	pat_move_a1,a2                  ; pat_move_a1 $10 before it?
 	bsr.w	compare_4_longs
 	bne.s	patch_br_scan2
-patch_br_6620_apply:	; xref: 27a0
+patch_br_6620_apply:
 	move.b	#$f2,$1(a0)                     ; bne.s +$20 -> bne.s -$e
 	bra.s	patch_br_scan2
 
-patch_br_667e:	; xref: 2786
+patch_br_667e:
 	movea.l	a0,a1
 	lea	pat_cmpi_a1,a2                  ; pat_cmpi_a1 at it?
 	bsr.w	compare_3_longs
@@ -3814,11 +4185,11 @@ patch_br_667e:	; xref: 2786
 	lea	pat_bset,a2                     ; pat_bset $12 before it?
 	bsr.w	compare_4_longs
 	bne.s	patch_br_next
-patch_br_667e_apply:	; xref: 27c6
+patch_br_667e_apply:
 	move.w	#$98fa,-$2(a0)                  ; word before bne.s $7e -> $98fa
 	bra.s	patch_br_next
 
-patch_br_emit:	; xref: 2790
+patch_br_emit:
 	movem.l	(sp)+,a2
 	move.w	#$5c00,(a2)+                    ; opcode $5c: long track prep
 	clr.l	d0
@@ -3840,7 +4211,7 @@ patch_br_emit:	; xref: 2790
 ;----------------------------------------------------------------------
 ; Copy the lead-in gap before the first sector when it contains sync bytes
 ;----------------------------------------------------------------------
-emit_pregap_copy:	; xref: 1f0e
+emit_pregap_copy:	; from: emit_track_script
 	cmpi.w	#$9,num_sectors                 ; fewer than 9 sectors?
 	bcs.w	pregap_ret
 	lea	sector_list,a3
@@ -3867,7 +4238,7 @@ emit_pregap_copy:	; xref: 1f0e
 	adda.l	d0,a0
 	movea.l	a0,a1
 	lea	$a(a0),a0                       ; start 10 bytes after the ID
-pregap_scan_loop:	; xref: 2882
+pregap_scan_loop:
 	move.b	(a0)+,d2
 	cmpi.b	#$f5,d2                         ; sync byte $f5..$f7?
 	bcs.s	pregap_scan_next
@@ -3875,28 +4246,28 @@ pregap_scan_loop:	; xref: 2882
 	bcc.s	pregap_scan_next
 	bra.s	pregap_store
 
-pregap_scan_next:	; xref: 2878,287e
+pregap_scan_next:
 	dbra	d1,pregap_scan_loop
 	bra.s	pregap_ret
 
-pregap_store:	; xref: 2880
+pregap_store:
 	move.w	#$5400,(a4)+                    ; opcode $54 (verify part): raw bytes
 	move.w	d4,(a4)+
 	addq.l	#3,a1                           ; skip 3 bytes
-pregap_copy_loop:	; xref: 2892
+pregap_copy_loop:
 	move.b	(a1)+,(a4)+
 	dbra	d4,pregap_copy_loop
 	move.w	$a(a3),d0                       ; first ID offset
 	bclr	#$0,d0
 	move.w	d0,pregap_pos
-pregap_ret:	; xref: 281c,282a,2838,283e,284e,2854,2886
+pregap_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Flag a track whose gap after the first ID is 24 identical bytes
 ;----------------------------------------------------------------------
-detect_uniform_gap:	; xref: 1efe
+detect_uniform_gap:	; from: emit_track_script
 	clr.w	f_uniform_gap
 	tst.w	f_fix_id_bit4                   ; ID bit 4 fixed?
 	bne.s	uniform_gap_ret
@@ -3908,19 +4279,19 @@ detect_uniform_gap:	; xref: 1efe
 	lea	$a(a0,d0.w),a0                  ; bytes after the ID
 	moveq	#23,d0                          ; 24 equal bytes?
 	move.b	(a0)+,d1
-uniform_gap_loop:	; xref: 28d2
+uniform_gap_loop:
 	cmp.b	(a0)+,d1
 	dbne	d0,uniform_gap_loop
 	bne.s	uniform_gap_ret
 	st	f_uniform_gap
-uniform_gap_ret:	; xref: 28b2,28bc,28d6
+uniform_gap_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Emit the lead-in gap item (special position in leadin_special_pos)
 ;----------------------------------------------------------------------
-emit_leadin_gap:	; xref: 1f02
+emit_leadin_gap:	; from: emit_track_script
 	lea	track_buf,a0
 	movea.l	a0,a1
 	lea	sector_list,a3
@@ -3942,17 +4313,17 @@ emit_leadin_gap:	; xref: 1f02
 	movea.l	d0,a0
 	adda.l	#track_buf_4,a0                 ; track_buf + 4 + position
 	moveq	#62,d2                          ; 63 bytes
-leadin_scan_loop:	; xref: 2934
+leadin_scan_loop:
 	move.b	(a0)+,d1
 	cmpi.b	#$f5,d1                         ; sync byte $f5..$f7?
 	bcs.s	leadin_scan_next
 	cmpi.b	#$f8,d1
 	bcs.s	leadin_found
-leadin_scan_next:	; xref: 292c
+leadin_scan_next:
 	dbra	d2,leadin_scan_loop
 	bra.s	leadin_none
 
-leadin_found:	; xref: 2932
+leadin_found:
 	cmpi.w	#$42,d0                         ; position < $42?
 	bcc.s	leadin_copy
 	movea.l	d7,a0
@@ -3961,7 +4332,7 @@ leadin_found:	; xref: 2932
 	addq.w	#8,d1
 	addq.w	#8,d1
 	move.w	d1,leadin_special_pos
-leadin_copy:	; xref: 293e
+leadin_copy:
 	movea.l	d0,a0
 	adda.l	#track_buf_3,a0                 ; track_buf + 3 + position
 	move.w	$a(a3),d1
@@ -3970,18 +4341,18 @@ leadin_copy:	; xref: 293e
 	subq.w	#3,d1
 	move.w	#$5400,(a4)+                    ; opcode $54: raw bytes
 	move.w	d1,(a4)+
-leadin_copy_loop:	; xref: 296e
+leadin_copy_loop:
 	move.b	(a0)+,(a4)+
 	dbra	d1,leadin_copy_loop
 	bra.s	leadin_ret
 
-leadin_none:	; xref: 2902,2908,2914,291a,2938
+leadin_none:
 	clr.w	leadin_special_pos
-leadin_ret:	; xref: 28fc,2972
+leadin_ret:
 	rts
 
 
-emit_scheme_1b_data:	; xref: 1fe8
+emit_scheme_1b_data:	; from: emit_track_script
 	tst.w	f_scheme_1b                     ; scheme 1b?
 	beq.s	scheme_1b_data_ret
 	cmpi.b	#$1b,(a3)                       ; flags $1b?
@@ -3993,15 +4364,15 @@ emit_scheme_1b_data:	; xref: 1fe8
 	move.w	#$e295,(a2)+                    ; $e295 and 8 zero bytes
 	clr.l	(a2)+
 	clr.l	(a2)+
-scheme_1b_data_ret:	; xref: 2982,2988,2990
+scheme_1b_data_ret:
 	rts
 
-starter_gap:	; xref: 29d8
+starter_gap:	; from: emit_gap_after_id
 	dc.b	'NNNNNNNNNNNNN STARTER '
 dat_29bc:
 	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
 
-emit_gap_after_id:	; xref: 1fb2
+emit_gap_after_id:	; from: emit_track_script
 	tst.w	f_fix_id_bit4                   ; ID bit 4 fixed?
 	bne.w	gap_after_id_special
 	bsr.w	check_f0f7_sector               ; $f0f1f2f3 sector?
@@ -4009,7 +4380,7 @@ emit_gap_after_id:	; xref: 1fb2
 	lea	starter_gap,a1                  ; STARTER gap text
 	bra.s	gap_after_id_emit
 
-gap_after_id_scan:	; xref: 29d6
+gap_after_id_scan:
 	move.w	$a(a3),d0                       ; gap after the ID in the track
 	lea	track_buf,a0
 	lea	$a(a0,d0.w),a0
@@ -4018,12 +4389,12 @@ gap_after_id_scan:	; xref: 29d6
 	beq.s	gap_after_id_count
 	cmpa.l	#sector_list,a3                 ; first sector?
 	beq.s	gap_after_id_emit
-gap_after_id_count:	; xref: 29f6
+gap_after_id_count:
 	addq.l	#1,a0                           ; count the byte changes in 26 bytes
 	clr.w	d2
 	moveq	#24,d0
 	move.b	(a0)+,d1
-gap_after_id_loop:	; xref: 2a0a,2a16
+gap_after_id_loop:
 	cmp.b	(a0)+,d1
 	dbne	d0,gap_after_id_loop
 	beq.s	gap_after_id_check
@@ -4031,12 +4402,12 @@ gap_after_id_loop:	; xref: 2a0a,2a16
 	move.b	-$1(a0),d1
 	bra.s	gap_after_id_loop
 
-gap_after_id_check:	; xref: 2a0e
+gap_after_id_check:
 	tst.w	d2                              ; no changes?
 	beq.s	gap_after_id_emit
 	cmpi.w	#$5,d2                          ; fewer than 5?
 	bcs.s	gap_after_id_special
-gap_after_id_emit:	; xref: 29de,29fe,2a1a
+gap_after_id_emit:
 	move.w	#$800,(a2)+                     ; opcode $08: gap literal
 	btst	#$4,(a3)                        ; no data field?
 	beq.s	gap_after_id_34
@@ -4051,11 +4422,11 @@ gap_after_id_emit:	; xref: 29de,29fe,2a1a
 	move.w	d0,(a2)+
 	bra.s	gap_after_id_copy
 
-gap_after_id_34:	; xref: 2a2a
+gap_after_id_34:
 	moveq	#33,d0                          ; 34 bytes
 	move.w	d0,d1
 	move.w	d0,(a2)+
-gap_after_id_copy:	; xref: 2a46,2a50
+gap_after_id_copy:
 	move.b	(a1)+,(a2)+                     ; copy from the track
 	dbra	d0,gap_after_id_copy
 	btst	#$0,d1                          ; odd length?
@@ -4063,23 +4434,23 @@ gap_after_id_copy:	; xref: 2a46,2a50
 	move.b	#$10,(a2)+                      ; pad byte
 	bra.s	gap_after_id_ret
 
-gap_after_id_special:	; xref: 29ce,2a20
+gap_after_id_special:
 	bsr.w	emit_id_data_gap                ; generated gap
-gap_after_id_ret:	; xref: 2a58,2a5e
+gap_after_id_ret:
 	rts
 
-gap_after_id_zeros:	; xref: 2a32
+gap_after_id_zeros:
 	moveq	#11,d0                          ; 12 zero bytes
 	move.w	d0,(a2)+
-gap_zeros_loop:	; xref: 2a6c
+gap_zeros_loop:
 	clr.b	(a2)+
 	dbra	d0,gap_zeros_loop
 	rts
 
 
-emit_dup_sector_timing:	; xref: 224e
+emit_dup_sector_timing:	; from: emit_track_script
 	lea	sector_list,a3
-dup_timing_loop:	; xref: 2b1a
+dup_timing_loop:
 	cmpi.b	#$1,$1(a3)                      ; first of duplicates?
 	bne.w	dup_timing_next
 	clr.l	d1
@@ -4105,15 +4476,15 @@ dup_timing_loop:	; xref: 2b1a
 	addq.b	#2,$1(a5)                       ; count = 2
 	bra.s	dup_timing_store
 
-dup_timing_measure:	; xref: 2ab6
+dup_timing_measure:
 	move.w	#$d4,(a6)                       ; FDC Force Interrupt on index pulse
 	moveq	#-1,d0                          ; wait for the index pulse
-dup_wait_index:	; xref: 2adc
+dup_wait_index:
 	btst	#$5,$fffa01                     ; MFP GPIP, FDC/HDC interrupt (low = done)
 	dbeq	d0,dup_wait_index
 	move.w	#$80,(a6)                       ; FDC Read Sector
 	move.w	#$ad00,d0                       ; timeout
-dup_count_loop:	; xref: 2af0,2afe
+dup_count_loop:
 	btst	#$5,$fffa01                     ; wait until the sector was read
 	dbeq	d0,dup_count_loop
 	bne.s	dup_timing_store
@@ -4121,13 +4492,13 @@ dup_count_loop:	; xref: 2af0,2afe
 	addq.b	#1,$1(a5)                       ; count++
 	bra.s	dup_count_loop
 
-dup_timing_store:	; xref: 2acc,2af4
+dup_timing_store:
 	move.w	#$d0,(a6)                       ; FDC Force Interrupt
 	bsr.w	dma_get_address                 ; length of the data read
 	movea.l	d0,a4
 	sub.l	a5,d0
 	move.w	d0,$4(a5)                       ; store the length
-dup_timing_next:	; xref: 2a7e
+dup_timing_next:
 	lea	$12(a3),a3
 	cmpa.l	sector_list_end,a3
 	bne.w	dup_timing_loop
@@ -4137,21 +4508,21 @@ dup_timing_next:	; xref: 2a7e
 ;----------------------------------------------------------------------
 ; Sector length from the size code in d0 -> d0 (128/256/512/1024)
 ;----------------------------------------------------------------------
-sector_length:	; xref: 1422,149e,15ea,1bce
+sector_length:	; from: detect_scheme_c, calc_sector_gaps, scan_track_sectors
 	move.l	a0,-(sp)
 	lea	sector_sizes,a0
 	andi.w	#$3,d0                          ; size code 0..3
 	lsl.w	#1,d0
 	move.w	$0(a0,d0.w),d0
 	movea.l	(sp)+,a0
-sector_length_ret:	; xref: 2c38
+sector_length_ret:	; from: emit_inter_sector_gap
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Emit the gap before the first ID field
 ;----------------------------------------------------------------------
-emit_leadin_or_gap:	; xref: 28f0
+emit_leadin_or_gap:	; from: emit_leadin_gap
 	clr.w	leadin_special_pos
 	clr.w	pregap_pos
 	clr.w	f_scheme_0b09
@@ -4168,7 +4539,7 @@ emit_leadin_or_gap:	; xref: 28f0
 	tst.w	f_ids_rotated                   ; IDs rotated?
 	beq.s	leadin_check_size
 	moveq	#4,d0                           ; gap 4
-leadin_check_size:	; xref: 2b76
+leadin_check_size:
 	bclr	#$0,d0
 	cmpi.b	#$ff,(a3)                       ; ID not from the list?
 	beq.s	leadin_size_class
@@ -4176,7 +4547,7 @@ leadin_check_size:	; xref: 2b76
 	beq.s	leadin_size_class
 	cmpi.w	#$48,d0                         ; at least $48?
 	bcs.s	leadin_default
-leadin_size_class:	; xref: 2b82,2b88
+leadin_size_class:
 	cmpi.w	#$f,d0                          ; less than 15?
 	bcs.s	leadin_emit_gap
 	cmpi.w	#$40,d0                         ; less than $40: copy raw
@@ -4190,7 +4561,7 @@ leadin_size_class:	; xref: 2b82,2b88
 	move.w	$a(a3),d2
 	subq.w	#3,d2
 	move.b	-(a0),d4
-leadin_run_loop:	; xref: 2bb8,2bc4
+leadin_run_loop:
 	cmp.b	-(a0),d4
 	dbne	d2,leadin_run_loop
 	beq.s	leadin_run_check
@@ -4198,14 +4569,14 @@ leadin_run_loop:	; xref: 2bb8,2bc4
 	move.b	(a0),d4
 	tst.w	d2
 	bpl.s	leadin_run_loop
-leadin_run_check:	; xref: 2bbc
+leadin_run_check:
 	cmpi.b	#$4,d1                          ; fewer than 4?
 	bcc.s	leadin_copy_raw
-leadin_default:	; xref: 2b4e,2b8e
+leadin_default:
 	moveq	#72,d0                          ; gap 72
 	bra.s	leadin_emit_gap
 
-leadin_copy_raw:	; xref: 2b9a,2ba0,2bca
+leadin_copy_raw:
 	subq.w	#1,d0
 	move.w	#$800,(a2)+                     ; opcode $08: gap literal, d0 bytes
 	move.w	d0,(a2)+
@@ -4214,7 +4585,7 @@ leadin_copy_raw:	; xref: 2b9a,2ba0,2bca
 	movem.l	(sp)+,d0/a0
 	bra.w	fix_sync_bytes
 
-leadin_emit_gap:	; xref: 2b5c,2b68,2b94,2bce
+leadin_emit_gap:
 	move.w	#$2800,(a2)+                    ; opcode $28: gap
 	moveq	#60,d1                          ; max 60
 	bra.w	gap_emit_count
@@ -4223,7 +4594,7 @@ leadin_emit_gap:	; xref: 2b5c,2b68,2b94,2bce
 ;----------------------------------------------------------------------
 ; Emit the gap between an ID field and its data field
 ;----------------------------------------------------------------------
-emit_id_data_gap:	; xref: 2a60
+emit_id_data_gap:	; from: emit_gap_after_id
 	move.w	#$2800,(a2)+                    ; opcode $28: gap
 	clr.l	d1
 	move.w	$a(a3),d1                       ; ID offset + 10
@@ -4240,9 +4611,9 @@ emit_id_data_gap:	; xref: 2a60
 	subq.w	#1,d0
 	bra.s	id_data_gap_emit
 
-id_data_gap_normal:	; xref: 2c0c
+id_data_gap_normal:
 	move.w	$c(a3),d0
-id_data_gap_emit:	; xref: 2c1e
+id_data_gap_emit:
 	sub.w	$a(a3),d0                       ; gap = data - ID - 10
 	subi.w	#$a,d0
 	moveq	#22,d1                          ; max 22
@@ -4252,7 +4623,7 @@ id_data_gap_emit:	; xref: 2c1e
 ;----------------------------------------------------------------------
 ; Emit the gap between a data field and the next ID field
 ;----------------------------------------------------------------------
-emit_inter_sector_gap:	; xref: 2210
+emit_inter_sector_gap:	; from: emit_track_script
 	move.w	$a(a3),d0                       ; ID offset - gap start
 	sub.w	$8(a3),d0
 	beq.w	sector_length_ret               ; no gap
@@ -4265,19 +4636,19 @@ emit_inter_sector_gap:	; xref: 2210
 	beq.s	inter_gap_dup_check
 	cmpi.b	#$3,$13(a3)                     ; ordinal < 3?
 	bcs.s	inter_gap_32
-inter_gap_dup_check:	; xref: 2c4e,2c56
+inter_gap_dup_check:
 	btst	#$0,(a3)                        ; duplicate ID?
 	beq.s	inter_gap_size
 	btst	#$0,-$12(a3)                    ; previous also duplicate?
 	beq.s	inter_gap_size
 	cmpi.w	#$20,d0                         ; gap < $20?
 	bcc.s	inter_gap_size
-inter_gap_32:	; xref: 2c5e
+inter_gap_32:
 	moveq	#32,d0                          ; gap 32
 	move.w	d0,d1
 	bra.s	gap_emit_count
 
-inter_gap_size:	; xref: 2c46,2c64,2c6c,2c72
+inter_gap_size:
 	move.w	gap_size,d1                     ; gap_size
 	cmpi.w	#$5,d1                          ; 5 or more: use as is
 	bcc.s	gap_emit_count
@@ -4293,19 +4664,19 @@ inter_gap_size:	; xref: 2c46,2c64,2c6c,2c72
 	add.w	d1,d0
 	bra.s	gap_emit_long
 
-gap_emit_count:	; xref: 2bee,2c2e,2c78,2c84,2c8e,2c9c
+gap_emit_count:	; from: emit_id_data_gap, emit_leadin_or_gap
 	cmpi.w	#$e,d0                          ; count < 14: long form
 	bcs.s	gap_emit_long
 	subi.w	#$c,d0                          ; count - 12
 	cmp.w	d1,d0                           ; limit to d1
 	bcs.s	gap_emit_short
 	move.w	d1,d0
-gap_emit_short:	; xref: 2cb0
+gap_emit_short:
 	subq.w	#1,d0
 	move.b	d0,-$1(a2)                      ; store count - 1
 	rts
 
-gap_emit_long:	; xref: 2ca2,2ca8
+gap_emit_long:
 	subq.b	#1,d0                           ; count - 1, $ff, 0: run list
 	move.b	d0,(a2)+
 	move.b	#$ff,(a2)+
@@ -4315,7 +4686,7 @@ gap_emit_long:	; xref: 2ca2,2ca8
 
 ; Message written into the key track when it is rebuilt, stored backwards in
 ; longwords: "Hi Cracker! Try your best!!"
-cracker_msg:	; xref: 2d54
+cracker_msg:	; from: copy_raw_sector
 	dc.b	'st!!r be you Tryker!Crac'
 dat_2ce0:
 	dc.b	$a1,$48,$69,$20,$02,$03,$04,$a0
@@ -4325,7 +4696,7 @@ dat_2ce0:
 ; large sector the Eurosystems key track is rebuilt, "Kaiser" and $0b09 signatures
 ; get their own layouts, otherwise the bytes are copied with sync marks fixed.
 ;----------------------------------------------------------------------
-copy_raw_sector:	; xref: 243a,2bdc,2d4c
+copy_raw_sector:	; from: emit_leadin_or_gap, emit_raw_track_script
 	st	f_no_sync_fix                   ; no sync fixing by default
 	cmpi.b	#$50,cur_track_b                ; track 80?
 	bne.w	copy_raw_scan
@@ -4337,7 +4708,7 @@ copy_raw_sector:	; xref: 243a,2bdc,2d4c
 	beq.s	key_track_rebuild
 	cmpi.l	#$a1c2a1c2,track_buf_60
 	bne.w	copy_raw_scan
-key_track_rebuild:	; xref: 2d14
+key_track_rebuild:
 	cmpi.l	#$a1a1a1a1,track_buf_2b0        ; sync at +$2b0?
 	bne.s	copy_raw_scan
 	movea.l	a2,a0
@@ -4350,13 +4721,13 @@ key_track_rebuild:	; xref: 2d14
 	bsr.w	fill_bytes_loop
 	move.w	#$f001,(a0)+                    ; $f0 $01
 	lea	copy_raw_sector,a1              ; copy cracker_msg backwards
-key_track_msg_loop:	; xref: 2d5a
+key_track_msg_loop:
 	move.l	-(a1),(a0)+
 	cmpa.l	#cracker_msg,a1
 	bne.s	key_track_msg_loop
 	move.l	#$f6f5f6f5,d1                   ; 150 x $f6f5f6f5
 	move.w	#$95,d0
-key_track_fill_loop:	; xref: 2d68
+key_track_fill_loop:
 	move.l	d1,(a0)+
 	dbra	d0,key_track_fill_loop
 	move.w	#$b0b1,(a0)+                    ; $b0 $b1
@@ -4372,20 +4743,20 @@ key_track_fill_loop:	; xref: 2d68
 	movea.l	a0,a2
 	rts
 
-sig_kaiser:	; xref: 2dae
+sig_kaiser:	; from: copy_raw_sector
 	dc.b	'Kaiser',0
 dat_2d95:
 	dc.b	$a1
-kaiser_tail:	; xref: 2e4a
+kaiser_tail:	; from: copy_raw_sector
 	dc.b	$20,$53,$20,$f5,$ff,$7d,$fb,$fa,$a5,$b0,$b4,$b9,$b2,$b9,$7a,$fb
 	dc.b	$fd,$ff
-copy_raw_scan:	; xref: 2cf6,2cfe,2d06,2d20,2d2e
+copy_raw_scan:
 	movem.l	d0/a1-a2,-(sp)
-kaiser_scan_loop:	; xref: 2dc0
+kaiser_scan_loop:
 	movea.l	a1,a2
 	lea	sig_kaiser,a0                   ; search "Kaiser"
 	moveq	#5,d1
-kaiser_compare_loop:	; xref: 2db8
+kaiser_compare_loop:
 	cmpm.b	(a2)+,(a0)+
 	dbne	d1,kaiser_compare_loop
 	beq.s	kaiser_found
@@ -4394,11 +4765,11 @@ kaiser_compare_loop:	; xref: 2db8
 	moveq	#1,d1                           ; not found
 	bra.s	kaiser_result
 
-kaiser_found:	; xref: 2dbc
+kaiser_found:
 	movem.l	(sp)+,d0/a1-a2
 	movem.l	d0/a1-a2,-(sp)
 	moveq	#-1,d1
-kaiser_count_a1:	; xref: 2dd8
+kaiser_count_a1:
 	addq.l	#1,d1                           ; count $a1 bytes
 	cmpi.b	#$a1,(a1)+
 	dbeq	d0,kaiser_count_a1
@@ -4407,18 +4778,18 @@ kaiser_count_a1:	; xref: 2dd8
 	cmpi.w	#$5,d1                          ; at least 5
 	bcc.s	kaiser_clamp
 	moveq	#5,d1
-kaiser_clamp:	; xref: 2de4
+kaiser_clamp:
 	cmpi.w	#$2f,d1                         ; at most 47
 	bcs.s	kaiser_skip_4e
 	moveq	#47,d1
-kaiser_skip_4e:	; xref: 2dec
+kaiser_skip_4e:
 	subq.w	#1,d1
-kaiser_skip_loop:	; xref: 2df6
+kaiser_skip_loop:
 	cmpi.b	#$4e,(a1)+                      ; skip $4e bytes
 	dbeq	d0,kaiser_skip_loop
 	bne.s	kaiser_result
 	moveq	#0,d2
-kaiser_count_4e:	; xref: 2e04
+kaiser_count_4e:
 	addq.w	#1,d2                           ; count $4e bytes
 	cmpi.b	#$4e,(a1)+                      ; 'N'
 	dbne	d0,kaiser_count_4e
@@ -4426,9 +4797,9 @@ kaiser_count_4e:	; xref: 2e04
 	moveq	#0,d0
 	bra.s	kaiser_result
 
-kaiser_fail:	; xref: 2e08
+kaiser_fail:
 	moveq	#1,d0
-kaiser_result:	; xref: 2dc6,2ddc,2dfa,2e0c
+kaiser_result:
 	movem.l	(sp)+,d0/a1-a2
 	bne.s	copy_raw_0b09
 	moveq	#40,d0                          ; length = 40 + a1 count + 4e count
@@ -4438,50 +4809,50 @@ kaiser_result:	; xref: 2dc6,2ddc,2dfa,2e0c
 	beq.s	kaiser_emit
 	subq.w	#1,d0
 	subq.w	#1,d1
-kaiser_emit:	; xref: 2e20
+kaiser_emit:
 	subq.w	#1,d0
 	subq.w	#1,d1
 	move.w	d0,-$2(a2)                      ; store length
-kaiser_gap_loop:	; xref: 2e32
+kaiser_gap_loop:
 	move.b	#$4e,(a2)+                      ; gap of $4e
 	dbra	d1,kaiser_gap_loop
 	moveq	#9,d0
-kaiser_sync_loop:	; xref: 2e3c
+kaiser_sync_loop:
 	move.b	#$f5,(a2)+                      ; 10 x $f5
 	dbra	d0,kaiser_sync_loop
 	subq.w	#1,d2
-kaiser_gap2_loop:	; xref: 2e46
+kaiser_gap2_loop:
 	move.b	#$4e,(a2)+                      ; gap of $4e
 	dbra	d2,kaiser_gap2_loop
 	lea	kaiser_tail,a0                  ; kaiser_tail (18 bytes)
 	moveq	#17,d0
-kaiser_tail_loop:	; xref: 2e54
+kaiser_tail_loop:
 	move.b	(a0)+,(a2)+
 	dbra	d0,kaiser_tail_loop
 	moveq	#11,d0                          ; 12 x 0
-kaiser_zero_loop:	; xref: 2e5c
+kaiser_zero_loop:
 	clr.b	(a2)+
 	dbra	d0,kaiser_zero_loop
 	rts
 
-sig_0b09:	; xref: 2ea4
+sig_0b09:	; from: copy_raw_sector
 	dc.b	$0b,$09,$07,$41,$e9,$8c,$f7,$00
-tail_0b09:	; xref: 2ee2
+tail_0b09:	; from: copy_raw_sector
 	dc.b	$f5,$05,$84,$83,$a0,$f4,$c6,$7b,$84,$8e,$8e,$23,$02,$4c,$86,$fa
 	dc.b	$00,$f9,$84,$aa,$81,$41,$0c,$77,$22,$34,$b3,$b4,$97,$20,$b9,$3a
 	dc.b	$3b,$b7,$b9,$35,$a7,$00
-copy_raw_0b09:	; xref: 2e14
+copy_raw_0b09:
 	cmpi.w	#$68,d0                         ; length $68..$8b?
 	bcs.s	copy_raw_plain
 	cmpi.w	#$8c,d0
 	bcc.s	copy_raw_plain
 	movem.l	d0/a1-a2,-(sp)
 	moveq	#0,d2
-scan_0b09_loop:	; xref: 2eb8
+scan_0b09_loop:
 	movea.l	a1,a2
 	lea	sig_0b09,a0                     ; search sig_0b09
 	moveq	#6,d1
-compare_0b09_loop:	; xref: 2eae
+compare_0b09_loop:
 	cmpm.b	(a2)+,(a0)+
 	dbne	d1,compare_0b09_loop
 	beq.s	result_0b09
@@ -4489,7 +4860,7 @@ compare_0b09_loop:	; xref: 2eae
 	addq.w	#1,d2
 	dbra	d0,scan_0b09_loop
 	moveq	#1,d1
-result_0b09:	; xref: 2eb2
+result_0b09:
 	movem.l	(sp)+,d0/a1-a2
 	bne.s	copy_raw_plain
 	st	f_scheme_0b09                   ; scheme $0b09
@@ -4500,30 +4871,30 @@ result_0b09:	; xref: 2eb2
 	beq.s	emit_0b09_tail
 	move.w	d2,d0
 	subq.w	#1,d0
-zero_0b09_loop:	; xref: 2edc
+zero_0b09_loop:
 	clr.b	(a2)+
 	dbra	d0,zero_0b09_loop
-emit_0b09_tail:	; xref: 2ed4
+emit_0b09_tail:
 	moveq	#36,d0                          ; tail_0b09 (37 bytes)
 	lea	tail_0b09,a1
-tail_0b09_loop:	; xref: 2eea
+tail_0b09_loop:
 	move.b	(a1)+,(a2)+
 	dbra	d0,tail_0b09_loop
 	moveq	#58,d0                          ; 59 x '''
-quote_0b09_loop:	; xref: 2ef4
+quote_0b09_loop:
 	move.b	#$27,(a2)+                      ; '''
 	dbra	d0,quote_0b09_loop
 	moveq	#11,d0                          ; 12 x 0
-zero2_0b09_loop:	; xref: 2efc
+zero2_0b09_loop:
 	clr.b	(a2)+
 	dbra	d0,zero2_0b09_loop
 	btst	#$0,d2                          ; odd offset?
 	beq.s	ret_0b09
 	move.b	#$10,(a2)+                      ; pad byte
-ret_0b09:	; xref: 2f04
+ret_0b09:
 	rts
 
-copy_raw_plain:	; xref: 2e94,2e9a,2ec2
+copy_raw_plain:
 	clr.w	f_no_sync_fix                   ; sync fixing on
 	move.b	(a1)+,(a2)+                     ; copy 3 header bytes
 	move.b	(a1)+,(a2)+
@@ -4532,7 +4903,7 @@ copy_raw_plain:	; xref: 2e94,2e9a,2ec2
 	cmpi.w	#$30,d0                         ; short sector: plain copy
 	bcs.s	raw_copy_loop
 	movem.l	d0/a1,-(sp)
-raw_find_c2_loop:	; xref: 2f3a
+raw_find_c2_loop:
 	move.b	(a1)+,d1
 	cmpi.b	#$c2,d1                         ; three $c2 in a row?
 	bne.s	raw_find_c2_next
@@ -4542,10 +4913,10 @@ raw_find_c2_loop:	; xref: 2f3a
 	bne.s	raw_find_c2_next
 	bra.s	raw_copy_c2
 
-raw_find_c2_next:	; xref: 2f2a,2f30,2f36
+raw_find_c2_next:
 	dbra	d0,raw_find_c2_loop
 	movem.l	(sp)+,d0/a1
-raw_copy_loop:	; xref: 2f1e,2fa0
+raw_copy_loop:
 	move.b	(a1)+,d1
 	tst.w	f_no_sync_fix                   ; sync fixing off?
 	bne.s	raw_store_byte
@@ -4564,7 +4935,7 @@ raw_copy_loop:	; xref: 2f1e,2fa0
 	move.w	d2,leadin_special_pos           ; lead-in special position
 	bra.s	raw_store_byte
 
-raw_check_a1_run:	; xref: 2f50
+raw_check_a1_run:
 	cmpi.b	#$a1,-$3(a1)                    ; two $a1 before?
 	bne.s	raw_store_byte
 	cmpi.b	#$a1,-$2(a1)
@@ -4572,17 +4943,17 @@ raw_check_a1_run:	; xref: 2f50
 	st	f_no_sync_fix                   ; stop fixing
 	bra.s	raw_store_byte
 
-raw_clear_leadin:	; xref: 2f6a
+raw_clear_leadin:
 	clr.w	leadin_special_pos
-raw_store_byte:	; xref: 2f4a,2f58,2f7e,2f86,2f8e,2f96
+raw_store_byte:
 	move.b	d1,(a2)+
 	dbra	d0,raw_copy_loop
 	rts
 
-raw_copy_c2:	; xref: 2f38
+raw_copy_c2:
 	movem.l	(sp)+,d0/a1
 	st	f_no_sync_fix
-raw_c2_loop:	; xref: 2fd2
+raw_c2_loop:
 	move.b	(a1)+,d1
 	cmpi.b	#$c2,d1                         ; $c2?
 	bne.s	raw_c2_store
@@ -4592,14 +4963,14 @@ raw_c2_loop:	; xref: 2fd2
 	cmp.b	(a1),d1                         ; third $c2?
 	beq.s	raw_c2_f6
 	move.b	#$f6,-$2(a2)
-raw_c2_f6:	; xref: 2fc6
+raw_c2_f6:
 	moveq	#-10,d1                         ; $f6
-raw_c2_store:	; xref: 2fb6,2fbc
+raw_c2_store:
 	move.b	d1,(a2)+
 	dbra	d0,raw_c2_loop
 	rts
 
-next_id_end_of_track:	; xref: 3008
+next_id_end_of_track:	; from: find_next_id
 	cmpi.b	#$fc,last_mark                  ; last mark was an ID?
 	bcc.s	next_id_none
 	move.l	(a4),d0                         ; first ID field?
@@ -4611,7 +4982,7 @@ next_id_end_of_track:	; xref: 3008
 	clr.l	d4
 	rts
 
-next_id_none:	; xref: 2fe0,2fea
+next_id_none:
 	moveq	#-1,d1                          ; terminate the time list
 	move.l	d1,(a5)
 	rts
@@ -4620,7 +4991,7 @@ next_id_none:	; xref: 2fe0,2fea
 ;----------------------------------------------------------------------
 ; Find the next ID field in the track buffer using the timing list -> d0 = offset
 ;----------------------------------------------------------------------
-find_next_id:	; xref: 1380,300e,3046,3072,307e,30d0
+find_next_id:	; from: scan_track_sectors
 	bsr.w	find_next_mark
 	beq.s	next_id_end_of_track            ; no further mark
 	cmpi.b	#$fc,d1                         ; ID mark ($fc..$ff)?
@@ -4632,7 +5003,7 @@ find_next_id:	; xref: 1380,300e,3046,3072,307e,30d0
 	move.w	d1,d2
 	bpl.s	next_id_time_check
 	neg.w	d1
-next_id_time_check:	; xref: 3020
+next_id_time_check:
 	cmpi.w	#$30,d1                         ; within $30 bytes?
 	bcs.s	next_id_match
 	tst.w	first_id_pos                    ; first ID known?
@@ -4641,13 +5012,13 @@ next_id_time_check:	; xref: 3020
 	bcs.s	next_id_rotate
 	cmpi.w	#$80,d1                         ; within $80?
 	bcs.s	next_id_match
-next_id_rotate:	; xref: 303a
+next_id_rotate:
 	bsr.w	rotate_id_list                  ; rotate the ID list
 	bne.s	find_next_id                    ; rotated: try again
 	moveq	#0,d2
 	bra.s	next_id_match
 
-next_id_relative:	; xref: 3030
+next_id_relative:
 	move.w	d0,d4                           ; distance to the first ID
 	sub.w	first_id_pos,d4
 	cmpi.w	#$400,d4                        ; less than $400: gap check
@@ -4658,7 +5029,7 @@ next_id_relative:	; xref: 3030
 	bcs.s	next_id_in_gap
 	cmpi.w	#$80,d1                         ; within $80?
 	bcs.s	next_id_match
-next_id_in_gap:	; xref: 3058,3064
+next_id_in_gap:
 	tst.w	gap_end                         ; gap end known?
 	beq.s	find_next_id
 	move.w	d0,d4                           ; position - 4
@@ -4670,14 +5041,14 @@ next_id_in_gap:	; xref: 3058,3064
 	moveq	#5,d1
 	rts
 
-next_id_match:	; xref: 3028,3040,304a,305e,306a
+next_id_match:
 	bsr.s	compare_id_bytes                ; ID bytes match the list?
 	beq.s	next_id_accept
 	tst.w	d2                              ; time difference negative?
 	bmi.s	next_id_ambiguous
 	movea.l	a0,a1                           ; look ahead for a better match
 	move.w	d0,d4
-next_id_lookahead:	; xref: 309e
+next_id_lookahead:
 	bsr.w	find_next_mark                  ; next mark
 	beq.s	next_id_keep
 	cmpi.b	#$fc,d1                         ; ID mark?
@@ -4687,7 +5058,7 @@ next_id_lookahead:	; xref: 309e
 	sub.w	d0,d1
 	bpl.s	next_id_lookahead_time
 	neg.w	d1
-next_id_lookahead_time:	; xref: 30aa
+next_id_lookahead_time:
 	cmpi.w	#$30,d1                         ; within $30?
 	bcs.s	next_id_use_lookahead
 	tst.w	first_id_pos                    ; first ID known?
@@ -4697,23 +5068,23 @@ next_id_lookahead_time:	; xref: 30aa
 	bcs.s	next_id_keep
 	cmpi.w	#$60,d1                         ; within $60?
 	bcc.s	next_id_keep
-next_id_use_lookahead:	; xref: 30b2
+next_id_use_lookahead:
 	movea.l	a1,a0                           ; use the look-ahead mark
 	bra.w	find_next_id
 
-next_id_keep:	; xref: 3098,30ba,30c6,30cc
+next_id_keep:
 	movea.l	a1,a0                           ; keep the first mark
 	move.w	d4,d0
-next_id_ambiguous:	; xref: 308e
+next_id_ambiguous:
 	st	f_id_ambiguous                  ; position ambiguous
-next_id_accept:	; xref: 308a
+next_id_accept:
 	add.w	d2,time_offset                  ; adjust the time offset
 	addq.l	#8,a0                           ; skip the ID bytes
 	clr.l	d1                              ; d1 = 0: from the list
 	rts
 
 
-compare_id_bytes:	; xref: 3088,3160
+compare_id_bytes:	; from: find_next_id, rotate_id_list
 	movea.l	a0,a1                           ; a1 -> ID bytes in the track
 	movea.l	a4,a2                           ; a2 -> ID bytes in the list
 	subq.w	#2,d0
@@ -4723,7 +5094,7 @@ compare_id_bytes:	; xref: 3088,3160
 	cmp.l	dma_pos,d3                      ; beyond the DMA position?
 	bcc.s	id_compare_fail
 	moveq	#0,d3
-id_wildcard_loop:	; xref: 3124
+id_wildcard_loop:
 	move.b	$0(a4,d3.w),d4                  ; wildcard positions
 	cmpi.b	#$29,d4                         ; ")"
 	beq.s	id_compare_next
@@ -4738,25 +5109,25 @@ id_wildcard_loop:	; xref: 3124
 	bne.s	id_wildcard_loop
 	bra.s	id_compare_next
 
-id_compare_loop:	; xref: 312a
+id_compare_loop:
 	cmpm.b	(a1)+,(a2)+                     ; compare d3+1 bytes
-id_compare_next:	; xref: 3108,3112,311c,3126
+id_compare_next:
 	dbne	d3,id_compare_loop
 	rts
 
-id_compare_fail:	; xref: 30fc
+id_compare_fail:
 	clr.l	d3
 	rts
 
 
-rotate_id_list:	; xref: 3042
+rotate_id_list:	; from: find_next_id
 	cmpa.l	#sector_buf,a5                  ; first entry?
 	bne.s	rotate_fail
 	cmpi.w	#$8,d0                          ; position < 8?
 	bcc.s	rotate_fail
 	cmpi.l	#$ffffffff,$4(a5)               ; only one ID?
 	beq.s	rotate_fail
-rotate_find_end:	; xref: 3156
+rotate_find_end:
 	addq.l	#4,a5                           ; find the end of the list
 	addq.l	#6,a4
 	cmpi.l	#$ffffffff,(a5)
@@ -4772,7 +5143,7 @@ rotate_find_end:	; xref: 3156
 	move.l	(a5),-(sp)                      ; save the last entries
 	move.l	(a4),-(sp)
 	move.w	$4(a4),-(sp)
-rotate_shift_loop:	; xref: 318a
+rotate_shift_loop:
 	move.l	-(a5),$4(a5)                    ; shift the lists up by one
 	move.l	-(a4),$6(a4)
 	move.w	-(a4),$6(a4)
@@ -4785,10 +5156,10 @@ rotate_shift_loop:	; xref: 318a
 	clr.l	d4                              ; d4 = 0: ok
 	rts
 
-rotate_reset:	; xref: 3166,316e
+rotate_reset:
 	lea	sector_buf,a5
 	lea	id_fields,a4
-rotate_fail:	; xref: 313a,3140,314a
+rotate_fail:
 	moveq	#1,d4                           ; d4 = 1: failed
 	rts
 
@@ -4797,16 +5168,16 @@ rotate_fail:	; xref: 313a,3140,314a
 ; Flag sectors that contain sync bytes ($f5-$f7) in their ID and number
 ; duplicated IDs
 ;----------------------------------------------------------------------
-mark_special_sectors:	; xref: 18a8,1932
+mark_special_sectors:	; from: read_all_sectors
 	movem.l	d0-d7/a0-a1,-(sp)
 	clr.w	d5                              ; special count
 	lea	sector_list,a0
 	move.l	a0,d1
-special_entry_loop:	; xref: 31ee
+special_entry_loop:
 	movea.l	a0,a1
 	addq.l	#2,a1
 	moveq	#3,d0                           ; 4 ID bytes
-special_byte_loop:	; xref: 31e0
+special_byte_loop:
 	cmpi.b	#$f8,(a1)+                      ; ID bytes $f5..$f7?
 	bcc.s	special_byte_next
 	cmpi.b	#$f5,-$1(a1)
@@ -4817,16 +5188,16 @@ special_byte_loop:	; xref: 31e0
 	addq.w	#4,d5                           ; count * 4
 	bra.s	special_entry_next
 
-special_byte_next:	; xref: 31c6,31ce,31d6
+special_byte_next:
 	dbra	d0,special_byte_loop
-special_entry_next:	; xref: 31de
+special_entry_next:
 	lea	$12(a0),a0
 	cmpa.l	sector_list_end,a0
 	bne.s	special_entry_loop
 	move.l	a0,d4
 	movea.l	d1,a0
 	clr.w	f_dup_ids
-dup_id_outer:	; xref: 324c
+dup_id_outer:
 	move.b	(a0),d0                         ; flags
 	andi.b	#$11,d0                         ; duplicate or no data?
 	bne.s	dup_id_outer_next
@@ -4834,7 +5205,7 @@ dup_id_outer:	; xref: 324c
 	lea	$12(a0),a1
 	move.b	$2(a0),d1                       ; track, sector
 	move.b	$4(a0),d2
-dup_id_inner:	; xref: 3244
+dup_id_inner:
 	cmp.l	a1,d4                           ; end of list?
 	beq.s	dup_id_outer_next
 	btst	#$4,(a1)                        ; no data field?
@@ -4849,11 +5220,11 @@ dup_id_inner:	; xref: 3244
 	move.b	d0,$1(a1)                       ; ordinal of the duplicate
 	bset	#$0,(a0)                        ; bit 0: duplicate
 	bset	#$0,(a1)
-dup_id_inner_next:	; xref: 3218,321e,3224
+dup_id_inner_next:
 	lea	$12(a1),a1
 	bra.s	dup_id_inner
 
-dup_id_outer_next:	; xref: 3200,3212
+dup_id_outer_next:
 	lea	$12(a0),a0
 	cmp.l	a0,d4
 	bne.s	dup_id_outer
@@ -4862,9 +5233,9 @@ dup_id_outer_next:	; xref: 3200,3212
 	rts
 
 
-fix_duplicate_counts:	; xref: 1964
+fix_duplicate_counts:	; from: read_all_sectors
 	lea	sector_list,a0
-fix_dup_loop:	; xref: 32c4
+fix_dup_loop:
 	cmpi.w	#$ffff,(a0)                     ; ID not from the list?
 	beq.s	fix_dup_next
 	btst	#$0,(a0)                        ; duplicate?
@@ -4877,7 +5248,7 @@ fix_dup_loop:	; xref: 32c4
 	move.b	$2(a0),d1                       ; track, sector
 	move.b	$4(a0),d2
 	lea	$12(a0),a1
-fix_dup_inner:	; xref: 32b4
+fix_dup_inner:
 	cmpa.l	sector_list_end,a1
 	beq.s	fix_dup_clear
 	cmp.b	$2(a1),d1                       ; same track?
@@ -4889,13 +5260,13 @@ fix_dup_inner:	; xref: 32b4
 	cmpi.b	#$2,$1(a1)                      ; ordinal >= 2?
 	bcs.s	fix_dup_inner_next
 	subq.b	#1,$1(a1)                       ; ordinal--
-fix_dup_inner_next:	; xref: 3296,329c,32a2,32aa
+fix_dup_inner_next:
 	lea	$12(a1),a1
 	bra.s	fix_dup_inner
 
-fix_dup_clear:	; xref: 327c,3290
+fix_dup_clear:
 	clr.b	$1(a0)                          ; ordinal 0
-fix_dup_next:	; xref: 3264,326a,3270
+fix_dup_next:
 	lea	$12(a0),a0
 	cmpa.l	sector_list_end,a0
 	bne.s	fix_dup_loop
@@ -4905,7 +5276,7 @@ fix_dup_next:	; xref: 3264,326a,3270
 ;----------------------------------------------------------------------
 ; Reset the copy buffer pointer and the displayed side/track
 ;----------------------------------------------------------------------
-init_copy_buffer:	; xref: 0a38,0d40,0e08,10ca,11f4
+init_copy_buffer:	; from: format_disk, copy_disk_protected, copy_disk_normal
 	move.l	buffer_start,buffer_ptr         ; buffer_ptr = buffer_start
 	moveq	#-1,d0
 	move.w	d0,$22(a4)                      ; shown side = -1
@@ -4914,7 +5285,7 @@ init_copy_buffer:	; xref: 0a38,0d40,0e08,10ca,11f4
 ;----------------------------------------------------------------------
 ; flock = 1, vblsem = 0 (keep the OS away from the floppy)
 ;----------------------------------------------------------------------
-lock_floppy:	; xref: 099a,0c20,42d6
+lock_floppy:	; from: read_source_bpb, fdc_error_alert, read_key_track
 	move.b	#$1,$43f.w                      ; flock = 1
 	clr.w	$452.w                          ; vblsem = 0
 	rts
@@ -4923,14 +5294,14 @@ lock_floppy:	; xref: 099a,0c20,42d6
 ;----------------------------------------------------------------------
 ; flock = 0, vblsem = 1
 ;----------------------------------------------------------------------
-unlock_floppy:	; xref: 0932,0c28,0dea,100a,1042,1074,11d6,1260...
+unlock_floppy:	; from: read_source_bpb, copy_disk_normal, fdc_error_alert, copy_disk_protected, read_key_track
 	clr.w	$43e.w                          ; flock = 0
 	move.b	#$1,$453.w                      ; vblsem = 1
 	clr.w	drives_deselected
 	rts
 
 
-prepare_sector_fill:	; xref: 0e92
+prepare_sector_fill:	; from: copy_disk_normal
 	movea.l	$32(a4),a0
 	tst.b	(a0)                            ; uniform sector?
 	bpl.s	get_sector_buffer
@@ -4944,14 +5315,14 @@ prepare_sector_fill:	; xref: 0e92
 	move.w	d0,d1
 	move.l	a1,d0
 	moveq	#127,d2                         ; DMA address = verify_buf
-fill_sector_loop:	; xref: 331e
+fill_sector_loop:
 	move.l	d1,(a1)+
 	dbra	d2,fill_sector_loop
 	move.w	$26(a4),d1                      ; d1 = sector
 	rts
 
 
-get_sector_buffer:	; xref: 0d72,3300
+get_sector_buffer:	; from: copy_disk_normal, prepare_sector_fill
 	move.w	dp_sector(a4),d1                ; d1 = sector
 	move.l	buffer_ptr,d0                   ; d0 = buffer address
 	rts
@@ -4960,7 +5331,7 @@ get_sector_buffer:	; xref: 0d72,3300
 ;----------------------------------------------------------------------
 ; a0 -> sector map entry of the current sector; d0 = 1 when past the map
 ;----------------------------------------------------------------------
-get_sector_map_entry:	; xref: 0d60,0e80,0f2a,0f56
+get_sector_map_entry:	; from: copy_disk_normal
 	clr.l	d0
 	move.w	dp_sector_idx(a4),d0
 	sub.w	dp_datrec(a4),d0                ; index - first data sector
@@ -4969,7 +5340,7 @@ get_sector_map_entry:	; xref: 0d60,0e80,0f2a,0f56
 	moveq	#1,d0
 	rts
 
-map_entry_found:	; xref: 333e
+map_entry_found:
 	lea	sector_list,a0                  ; map entry
 	adda.l	d0,a0
 	move.l	a0,dp_map_ptr(a4)
@@ -4981,7 +5352,7 @@ map_entry_found:	; xref: 333e
 ; If the sector just read consists of one byte value, store that byte at
 ; map+$900 and flag the map entry (bit 7) so it takes no buffer space
 ;----------------------------------------------------------------------
-compress_uniform_sector:	; xref: 0da4
+compress_uniform_sector:	; from: copy_disk_normal
 	movea.l	dp_map_ptr(a4),a0
 	move.l	a0,d0
 	beq.s	next_buffer_sector              ; no map entry?
@@ -4995,7 +5366,7 @@ compress_uniform_sector:	; xref: 0da4
 	cmp.b	d0,d1
 	bne.s	next_buffer_sector
 	moveq	#126,d1                         ; 127 more longs
-uniform_check_loop:	; xref: 337a
+uniform_check_loop:
 	cmp.l	(a1)+,d0
 	dbne	d1,uniform_check_loop
 	bne.s	next_buffer_sector
@@ -5003,7 +5374,7 @@ uniform_check_loop:	; xref: 337a
 	move.b	d0,$900(a0)                     ; fill byte at map + $900
 	rts
 
-next_buffer_sector:	; xref: 335e,336e,3374,337e
+next_buffer_sector:
 	addi.l	#$200,buffer_ptr                ; advance buffer by 512
 	rts
 
@@ -5011,7 +5382,7 @@ next_buffer_sector:	; xref: 335e,336e,3374,337e
 ;----------------------------------------------------------------------
 ; Convert dp_sector_idx into sector/side/track
 ;----------------------------------------------------------------------
-calc_track_side_sector:	; xref: 0d5c,0e2a
+calc_track_side_sector:	; from: copy_disk_normal
 	clr.l	d0
 	move.w	dp_sector_idx(a4),d0
 	divu.w	dp_spt(a4),d0                   ; index / spt
@@ -5032,10 +5403,10 @@ calc_track_side_sector:	; xref: 0d5c,0e2a
 ; Write a track from its script: run the handler to build the image, Write
 ; Track, optionally create fuzzy bits, run the verify part; up to 3 attempts
 ;----------------------------------------------------------------------
-write_track_from_script:	; xref: 1222
+write_track_from_script:	; from: copy_disk_protected
 	movem.l	a4-a5,-(sp)
 	clr.w	read_retries                    ; attempt counter
-script_write_retry:	; xref: 3416
+script_write_retry:
 	move.w	read_retries,d0
 	addq.w	#1,d0
 	move.w	d0,read_retries
@@ -5055,12 +5426,12 @@ script_write_retry:	; xref: 3416
 	beq.s	script_run_verify
 	bsr.s	write_fuzzy_bits
 	bne.s	script_write_failed             ; failed
-script_run_verify:	; xref: 340e
+script_run_verify:
 	jsr	(a4)                            ; run the verify part
 	bne.s	script_write_retry              ; verify failed: retry
 	movem.l	(sp)+,a4-a5
 
-advance_script:	; xref: 1232
+advance_script:	; from: copy_disk_protected
 	move.w	dp_track(a4),d1                 ; track register = track
 	bsr.w	fdc_set_track_reg
 	movea.l	buffer_ptr,a0
@@ -5071,14 +5442,14 @@ advance_script:	; xref: 1232
 	moveq	#0,d0                           ; d0 = 0: ok
 	rts
 
-script_write_failed:	; xref: 33dc,3412
+script_write_failed:	; from: write_track_from_script
 	clr.l	d7                              ; d7 = $100: DMA error
 	move.w	#$100,d7
-script_write_ret:	; xref: 3406
+script_write_ret:	; from: write_track_from_script
 	movem.l	(sp)+,a4-a5
 	rts
 
-fuzzy_write_fail:	; xref: 345a
+fuzzy_write_fail:	; from: write_fuzzy_bits
 	moveq	#-1,d0
 	rts
 
@@ -5087,9 +5458,9 @@ fuzzy_write_fail:	; xref: 345a
 ; Create fuzzy (weak) bits: wait until the DMA address reaches fuzzy_pos,
 ; then rapidly toggle the drive select line while the FDC writes
 ;----------------------------------------------------------------------
-write_fuzzy_bits:	; xref: 3410
+write_fuzzy_bits:	; from: write_track_from_script
 	move.b	#$6,fuzzy_retries               ; 6 attempts
-fuzzy_retry_loop:	; xref: 346a,34e0,34e8
+fuzzy_retry_loop:
 	subq.b	#1,fuzzy_retries
 	beq.s	fuzzy_write_fail
 	bsr.w	fdc_write_track                 ; Write Track again
@@ -5098,7 +5469,7 @@ fuzzy_retry_loop:	; xref: 346a,34e0,34e8
 	bsr.w	fdc_abort
 	bra.s	fuzzy_retry_loop
 
-fuzzy_wait_position:	; xref: 3464
+fuzzy_wait_position:
 	move.w	sr,-(sp)
 	ori.w	#$700,sr
 	bsr.w	read_psg_port_a                 ; d5 = port A with drives deselected
@@ -5111,11 +5482,11 @@ fuzzy_wait_position:	; xref: 3464
 	lea	$ff8802,a0                      ; PSG data register
 	move.l	d5,d4                           ; d4 = port A with the drive selected
 	swap	d4
-fuzzy_wait_mid:	; xref: 3494
+fuzzy_wait_mid:
 	cmp.b	$7(a6),d1                       ; wait for the DMA mid byte
 	dbeq	d2,fuzzy_wait_mid
 	bne.s	fuzzy_verify
-fuzzy_wait_low:	; xref: 349e
+fuzzy_wait_low:
 	cmp.b	$9(a6),d0                       ; wait for the DMA low byte
 	dbeq	d2,fuzzy_wait_low
 	bne.s	fuzzy_verify
@@ -5124,13 +5495,13 @@ fuzzy_wait_low:	; xref: 349e
 	nop
 	nop
 	nop
-fuzzy_toggle_loop:	; xref: 34b6
+fuzzy_toggle_loop:
 	move.b	d5,(a0)                         ; deselect
 	nop
 	nop
 	move.b	d4,(a0)                         ; select
 	dbra	d6,fuzzy_toggle_loop            ; toggle drive select 128 times
-fuzzy_verify:	; xref: 3498,34a2
+fuzzy_verify:
 	move.w	(sp)+,sr
 	bsr.w	fdc_abort                       ; stop the write
 	tst.b	verify_flag                     ; verify?
@@ -5142,7 +5513,7 @@ fuzzy_verify:	; xref: 3498,34a2
 	btst	#$4,d7                          ; record not found: retry
 	bne.w	fuzzy_retry_loop
 	moveq	#3,d2                           ; read it twice more
-fuzzy_verify_loop:	; xref: 3504,3518
+fuzzy_verify_loop:
 	subq.w	#1,d2
 	beq.w	fuzzy_retry_loop
 	move.l	fuzzy_sector,d1
@@ -5154,11 +5525,11 @@ fuzzy_verify_loop:	; xref: 3504,3518
 	lea	read_buf2,a0                    ; compare the first 16 bytes
 	lea	$400(a0),a1
 	moveq	#15,d0
-fuzzy_compare_loop:	; xref: 3514
+fuzzy_compare_loop:
 	cmpm.b	(a0)+,(a1)+
 	dbne	d0,fuzzy_compare_loop
 	beq.s	fuzzy_verify_loop               ; equal: not fuzzy, read again
-fuzzy_write_ok:	; xref: 34c6
+fuzzy_write_ok:
 	clr.l	d0                              ; d0 = 0: ok
 	rts
 
@@ -5166,27 +5537,27 @@ fuzzy_write_ok:	; xref: 34c6
 ;----------------------------------------------------------------------
 ; Fill track_buf (6400 bytes) with a long pattern
 ;----------------------------------------------------------------------
-fill_track_f5e295:	; xref: 43bc
+fill_track_f5e295:	; from: rtfi_timeout
 	move.l	#$f5e29500,d0                   ; $f5 $e2 $95 $00
 	bra.s	fill_track_buf
 
 
-fill_track_dc:	; xref: 439a
+fill_track_dc:	; from: rtfi_timeout
 	move.l	#$dcdcdcdc,d0                   ; $dc fill
 	bra.s	fill_track_buf
 
 
-fill_track_35:	; xref: 43a0
+fill_track_35:	; from: rtfi_timeout
 	move.l	#$35353535,d0                   ; $35 fill
 	bra.s	fill_track_buf
 
 
-fill_track_4e:	; xref: 237c,33de
+fill_track_4e:	; from: write_track_from_script, detect_a1a1_scheme
 	move.l	#$4e4e4e4e,d0                   ; 'NNNN' gap fill
-fill_track_buf:	; xref: 3524,352c,3534
+fill_track_buf:	; from: fill_track_dc, fill_track_35, fill_track_f5e295
 	lea	track_buf,a0
 	move.w	#$18f,d1                        ; 400 x 16 bytes
-fill_track_loop:	; xref: 354e
+fill_track_loop:
 	move.l	d0,(a0)+
 	move.l	d0,(a0)+
 	move.l	d0,(a0)+
@@ -5198,7 +5569,7 @@ fill_track_loop:	; xref: 354e
 ;----------------------------------------------------------------------
 ; Script handlers (address stored at script+6, called with jsr (a4))
 ;----------------------------------------------------------------------
-script_build_image:	; xref: 22ec
+script_build_image:	; from: emit_track_script
 	lea	track_buf,a0                    ; image start
 	movea.l	buffer_ptr,a2                   ; script bytes at +$a
 	lea	$a(a2),a2
@@ -5207,18 +5578,18 @@ script_build_image:	; xref: 22ec
 	lea	script_run_second,a4            ; next call: verify part
 	rts
 
-script_copy_raw_image:	; xref: 2428
+script_copy_raw_image:	; from: emit_raw_track_script
 	lea	track_buf,a0                    ; raw copy: d0+1 longs
 	movea.l	buffer_ptr,a2
 	move.w	(a2),d0                         ; number of longs
 	lea	$a(a2),a2
-raw_image_copy_loop:	; xref: 3586
+raw_image_copy_loop:
 	move.l	(a2)+,(a0)+
 	dbra	d0,raw_image_copy_loop
 	lea	script_finish,a4                ; next call: finish
 	rts
 
-script_run_second:	; xref: 356a
+script_run_second:	; from: script_build_image
 	clr.w	special_count                   ; a2 = verify part
 	movea.l	buffer_ptr,a2
 	clr.l	d0
@@ -5228,7 +5599,7 @@ script_run_second:	; xref: 356a
 	bsr.s	script_dispatch                 ; run the verify script
 	rts
 
-script_finish:	; xref: 358a
+script_finish:	; from: script_copy_raw_image
 	bsr.w	fdc_wait_status
 	clr.l	d0                              ; d0 = 0: ok
 	rts
@@ -5237,7 +5608,7 @@ script_finish:	; xref: 358a
 ;----------------------------------------------------------------------
 ; Script interpreter: read the opcode byte at (a2), jump through opcode_table
 ;----------------------------------------------------------------------
-script_dispatch:	; xref: 3568,35a8,3606,360c,361a,362a,363e,3646...
+script_dispatch:	; from: script_run_second, script_build_image, op_20_id_field, op_70_sync_read_track, op_6c_partial_write_track, op_64_rle_data, ...
 	move.w	d1,-(sp)
 	lea	opcode_table,a4                 ; opcode_table
 	clr.w	d1                              ; opcode byte
@@ -5252,7 +5623,7 @@ script_dispatch:	; xref: 3568,35a8,3606,360c,361a,362a,363e,3646...
 ; Each opcode returns to script_dispatch for the next item or rts with d0
 ; to end (0 = ok, -1 = error).
 ;----------------------------------------------------------------------
-op_00_sync_mark_fill:	; xref: 52b4
+op_00_sync_mark_fill:	; from: opcode_table
 	move.w	(a2)+,d1                        ; parameters: mark, length, first byte
 	move.w	(a2)+,d0
 	move.w	(a2)+,d2
@@ -5264,54 +5635,54 @@ op_00_sync_mark_fill:	; xref: 52b4
 	tst.w	d0                              ; length 0?
 	bra.s	data_field_body
 
-op_04_fill_words:	; xref: 52b8
+op_04_fill_words:	; from: opcode_table
 	move.w	(a2)+,d1                        ; skip opcode word, d1 = word
 	move.w	(a2)+,d1
-fill_words_loop:	; xref: 35e8
+fill_words_loop:
 	move.w	d1,(a0)+                        ; d0+1 words
 	dbra	d0,fill_words_loop
 	rts
 
-op_08_gap_literal:	; xref: 52bc
+op_08_gap_literal:	; from: opcode_table
 	move.w	(a2)+,d1                        ; d1 = opcode:flag, d0 = length - 1
 	move.w	(a2)+,d0
 	tst.b	d1                              ; flag byte 0: no gap
 	beq.s	gap_literal_copy
 	moveq	#15,d1
-gap_literal_4e_loop:	; xref: 35fc
+gap_literal_4e_loop:
 	move.b	#$4e,(a0)+                      ; 16 x $4e
 	dbra	d1,gap_literal_4e_loop
-gap_literal_copy:	; xref: 35f4,3602
+gap_literal_copy:
 	move.b	(a2)+,(a0)+                     ; copy d0+1 literal bytes
 	dbra	d0,gap_literal_copy
 	bra.s	script_dispatch
 
-op_3c_nop_skip:	; xref: 52f0
+op_3c_nop_skip:	; from: opcode_table
 	nop
-op_10_skip:	; xref: 52c4
+op_10_skip:	; from: opcode_table
 	addq.l	#1,a2
 	bra.s	script_dispatch
 
-op_14_fill_e5:	; xref: 52c8
+op_14_fill_e5:	; from: opcode_table
 	move.l	(a2)+,d0                        ; d0 = count
 	subq.w	#1,d0
-fill_e5_loop:	; xref: 3616
+fill_e5_loop:
 	move.b	#$e5,(a0)+                      ; $e5 fill
 	dbra	d0,fill_e5_loop
 	bra.s	script_dispatch
 
-op_18_data_field:	; xref: 52cc
+op_18_data_field:	; from: opcode_table
 	bsr.w	emit_3_sync                     ; three $f5
 	move.w	(a2)+,d1                        ; d1 = flags:mark
 	move.b	d1,(a0)
 	ori.b	#$f0,(a0)+                      ; mark | $f0
 	move.w	(a2)+,d0                        ; d0 = length
-data_field_body:	; xref: 35e0
+data_field_body:	; from: op_00_sync_mark_fill
 	beq.s	script_dispatch                 ; length 0?
 	subq.w	#1,d0
 	btst	#$7,d1                          ; bit 7: data given
 	bne.s	data_field_kind
-data_field_zero_loop:	; xref: 3636
+data_field_zero_loop:
 	clr.b	(a0)+                           ; zero data
 	dbra	d0,data_field_zero_loop
 	btst	#$6,d1                          ; bit 6: no 2 trailing zeros
@@ -5320,26 +5691,26 @@ data_field_zero_loop:	; xref: 3636
 	clr.b	(a0)+
 	bra.w	script_dispatch
 
-data_field_kind:	; xref: 3632
+data_field_kind:
 	btst	#$5,d1                          ; bit 5: fill byte
 	beq.s	data_field_copy_loop
 	move.w	(a2)+,d2
-data_field_fill_loop:	; xref: 3654
+data_field_fill_loop:
 	move.b	d2,(a0)+                        ; fill
 	dbra	d0,data_field_fill_loop
-data_field_crc:	; xref: 366c
+data_field_crc:
 	btst	#$4,d1                          ; bit 4: CRC
 	beq.s	data_field_next
 	move.b	#$f7,(a0)+                      ; CRC
-data_field_next:	; xref: 365c
+data_field_next:
 	bra.w	script_dispatch
 
-data_field_copy_loop:	; xref: 364e,3668
+data_field_copy_loop:
 	move.b	(a2)+,(a0)+                     ; copy data from the script
 	dbra	d0,data_field_copy_loop
 	bra.s	data_field_crc
 
-op_1c_fix_mark_bytes:	; xref: 52d0
+op_1c_fix_mark_bytes:	; from: opcode_table
 	move.w	$2(a2),d0                       ; word 1 = two bytes
 	bsr.s	is_mark_byte                    ; low byte a mark byte?
 	bne.s	fix_mark_a1
@@ -5348,40 +5719,40 @@ op_1c_fix_mark_bytes:	; xref: 52d0
 	bne.s	fix_mark_a1
 	move.b	$2(a2),-$1(a0)                  ; replace the last byte and append one
 	move.b	$3(a2),(a0)+
-fix_mark_a1:	; xref: 3674,367a
+fix_mark_a1:
 	move.w	$4(a2),d0                       ; word 2
 	addq.l	#6,a2
 	cmpi.w	#$ffff,d0                       ; $ffff?
 	bne.s	fix_mark_next
 	move.b	#$a1,-$8(a0)                    ; $a1 8 bytes back
-fix_mark_next:	; xref: 3690
+fix_mark_next:
 	bra.w	script_dispatch
 
 
-is_mark_byte:	; xref: 3672,3678
+is_mark_byte:	; from: op_1c_fix_mark_bytes
 	cmpi.b	#$f5,d0
 	bcs.s	not_mark_byte
 	cmpi.b	#$f8,d0
 	bcc.s	not_mark_byte
 	rts
 
-not_mark_byte:	; xref: 36a0,36a6
+not_mark_byte:
 	moveq	#0,d1
 	rts
 
-op_20_id_field:	; xref: 3c12,3f24,52d4
+op_20_id_field:	; from: op_58_fuzzy_marker, op_44_id_sector_ff, opcode_table
 	bsr.w	emit_3_sync                     ; three $f5
 	move.w	(a2)+,d0                        ; mark byte
 	move.b	d0,(a0)+
 	moveq	#3,d0                           ; 4 ID bytes
-id_field_copy_loop:	; xref: 36ba
+id_field_copy_loop:
 	move.b	(a2)+,(a0)+
 	dbra	d0,id_field_copy_loop
-id_field_crc:	; xref: 36e4
+id_field_crc:	; from: op_68_id_current_track
 	move.b	crc_code,(a0)+                  ; CRC code from the key track
 	bra.w	script_dispatch
 
-op_68_id_current_track:	; xref: 531c
+op_68_id_current_track:	; from: opcode_table
 	bsr.w	emit_3_sync                     ; three $f5
 	move.b	#$fe,(a0)+                      ; ID mark
 	move.b	cur_track_b,(a0)+               ; track
@@ -5391,20 +5762,20 @@ op_68_id_current_track:	; xref: 531c
 	move.b	#$2,(a0)+                       ; size code 2
 	bra.s	id_field_crc
 
-op_2c_end:	; xref: 52e0
+op_2c_end:	; from: opcode_table
 	addq.l	#2,a2                           ; d0 = 0: end
 	clr.l	d0
 	rts
 
-op_28_gap:	; xref: 52dc
+op_28_gap:	; from: opcode_table
 	move.w	(a2)+,d0                        ; d0 = opcode:count
 	tst.b	d0                              ; count 0: run list follows
 	bne.s	gap_emit_4e
 	bsr.w	emit_run_list
-gap_next:	; xref: 370c
+gap_next:
 	bra.w	script_dispatch
 
-gap_emit_4e:	; xref: 36f0
+gap_emit_4e:
 	clr.l	d1
 	move.b	d0,d1                           ; count
 	moveq	#78,d0                          ; $4e gap
@@ -5416,25 +5787,25 @@ gap_emit_4e:	; xref: 36f0
 
 
 ; Four bytes copied here from the copyright string (expected "EURO")
-key_euro:	; xref: 3718,375a
+key_euro:	; from: op_24_write_verify
 	dc.b	$00
-key_euro_1:	; xref: 3748
+key_euro_1:	; from: op_24_write_verify
 	dc.b	$00
-key_euro_2:	; xref: 3798
+key_euro_2:	; from: op_24_write_verify
 	dc.b	$00
-key_euro_3:	; xref: 37ce
+key_euro_3:	; from: op_24_write_verify
 	dc.b	$00
 
 ;----------------------------------------------------------------------
 ; Opcode $24: write the track and verify each listed sector (item: flags word,
 ; side/track, length, data), retried up to 5 times
 ;----------------------------------------------------------------------
-op_24_write_verify:	; xref: 52d8
+op_24_write_verify:	; from: opcode_table
 	lea	copyright+4-$1238,a5            ; a5 = copyright - $1178
 	move.l	$1238(a5),key_euro              ; key_euro = "EURO"
 	movea.l	a2,a5                           ; a5 -> item
 	move.b	#$5,verify_retries              ; 5 attempts
-wv_sector_loop:	; xref: 378a
+wv_sector_loop:
 	movea.l	a5,a2
 	move.w	(a2)+,d6                        ; item flags
 	clr.l	d1
@@ -5454,7 +5825,7 @@ wv_sector_loop:	; xref: 378a
 	btst	#$5,d6                          ; bit 5: deleted data mark
 	beq.s	wv_check_key
 	moveq	#1,d2                           ; command flag: deleted data
-wv_check_key:	; xref: 3756
+wv_check_key:
 	cmpi.b	#$45,key_euro                   ; tamper check: "E"
 	bne.w	script_dispatch                 ; wrong: treat as the next opcode
 	btst	#$3,d6                          ; bit 3: timed write
@@ -5463,21 +5834,21 @@ wv_check_key:	; xref: 3756
 	bsr.w	fdc_wait_status
 	btst	#$4,d7                          ; record not found?
 	beq.s	wv_next
-wv_retry:	; xref: 3750,37bc,37e0,37ec
+wv_retry:
 	subq.b	#1,verify_retries               ; attempts--
 	beq.s	wv_fail
 	tst.w	special_count                   ; special sectors: no retry
 	bne.s	wv_next
 	bra.s	wv_sector_loop
 
-wv_next:	; xref: 3778,3788
+wv_next:
 	bra.w	script_dispatch
 
-wv_fail:	; xref: 3780,37a0
+wv_fail:
 	moveq	#-1,d0                          ; d0 = -1: failed
 	rts
 
-wv_write_sector:	; xref: 376a
+wv_write_sector:
 	bsr.w	timed_write_sector
 	cmpi.b	#$52,key_euro_2                 ; tamper check: "R"
 	bne.s	wv_fail
@@ -5495,14 +5866,14 @@ wv_write_sector:	; xref: 376a
 	lea	read_buf2,a1
 	cmpi.b	#$4f,key_euro_3                 ; tamper check: "O"
 	bne.w	start                           ; wrong: restart the program
-wv_compare_loop:	; xref: 37dc
+wv_compare_loop:
 	cmpm.b	(a0)+,(a1)+
 	dbne	d0,wv_compare_loop
 	bne.s	wv_retry
 	btst	#$2,d6                          ; bit 2: read twice
 	beq.s	wv_done
 	moveq	#2,d2
-wv_reread_loop:	; xref: 3802,381e
+wv_reread_loop:
 	subq.w	#1,d2                           ; read again into read_buf3
 	beq.s	wv_retry
 	swap	d1
@@ -5517,11 +5888,11 @@ wv_reread_loop:	; xref: 3802,381e
 	adda.l	d0,a0
 	lea	$400(a0),a1
 	moveq	#15,d0
-wv_reread_compare:	; xref: 381a
+wv_reread_compare:
 	cmpm.b	(a0)+,(a1)+
 	dbne	d0,wv_reread_compare
 	beq.s	wv_reread_loop                  ; equal: not fuzzy enough, read again
-wv_done:	; xref: 37a6,37e6
+wv_done:
 	bra.w	script_dispatch
 
 
@@ -5529,10 +5900,10 @@ wv_done:	; xref: 37a6,37e6
 ; Write a sector at a precise position: wait for the DMA counter to reach the
 ; target, delay, then start Write Sector and deselect the drive to end it
 ;----------------------------------------------------------------------
-timed_write_sector:	; xref: 3794
+timed_write_sector:	; from: op_24_write_verify
 	move.w	#$30,delay_count                ; delay $30
 
-timed_write_sector_at:	; xref: 4024,4040
+timed_write_sector_at:	; from: op_60_long_track_write
 	bsr.w	fdc_write_sector_flags          ; Write Sector
 	bsr.w	read_psg_port_a                 ; d5 = port A deselected
 	lea	$ff860d,a1                      ; DMA base low
@@ -5542,61 +5913,61 @@ timed_write_sector_at:	; xref: 4024,4040
 	ori.w	#$700,sr
 	bsr.w	wait_dma_change                 ; DMA moving?
 	beq.s	timed_restore_sr
-timed_wait_nibble:	; xref: 3854
+timed_wait_nibble:
 	addi.b	#$10,d4                         ; next 16-byte step
 	subq.b	#1,d3
 	bcs.s	timed_wait_final
 	cmp.b	(a1),d4                         ; reached?
 	bne.s	timed_wait_nibble
-timed_wait_nibble2:	; xref: 3866
+timed_wait_nibble2:
 	addi.b	#$10,d4                         ; wait for each step
 	moveq	#-1,d0
-timed_wait_low:	; xref: 385e
+timed_wait_low:
 	cmp.b	(a1),d4
 	dbeq	d0,timed_wait_low
 	bne.s	timed_write_end
 	subq.b	#1,d3
 	bcc.s	timed_wait_nibble2
-timed_wait_final:	; xref: 3850
+timed_wait_final:
 	moveq	#-1,d0
 	move.w	delay_count,d2                  ; delay
-timed_wait_change:	; xref: 3872
+timed_wait_change:
 	cmp.b	(a1),d4                         ; wait for the next change
 	dbne	d0,timed_wait_change
-timed_delay:	; xref: 3876
+timed_delay:
 	dbra	d2,timed_delay                  ; delay loop
 	move.b	d5,$ff8802                      ; deselect the drive (ends the write)
 	btst	#$2,d6                          ; bit 2: toggle select
 	bne.s	timed_toggle_select
-timed_restore_sr:	; xref: 3848,38c4
+timed_restore_sr:
 	move.w	(sp)+,sr
-timed_write_end:	; xref: 383c,3862
+timed_write_end:
 	bsr.w	fdc_abort                       ; stop the FDC
 	swap	d5                              ; reselect the drive
 	move.b	d5,$ff8802                      ; PSG write data
 	rts
 
-timed_toggle_select:	; xref: 3884
+timed_toggle_select:
 	move.l	d5,d4                           ; d4 = selected
 	swap	d4
 	btst	#$1,d6                          ; bit 1?
 	beq.s	timed_toggle_loop
 	move.w	#$a0,d2                         ; $a0 toggles
-timed_toggle_loop:	; xref: 389e,38ba
+timed_toggle_loop:
 	move.b	d4,$ff8802                      ; select
 	btst	#$5,$fffa01                     ; FDC done?
 	beq.s	timed_toggle_done
 	move.b	d5,$ff8802                      ; deselect
 	dbra	d2,timed_toggle_loop
-timed_toggle_done:	; xref: 38b2
+timed_toggle_done:
 	move.b	d5,$ff8802                      ; deselect
 	bra.s	timed_restore_sr
 
-op_30_timed_sector_write:	; xref: 52e4
+op_30_timed_sector_write:	; from: opcode_table
 	move.w	sr,-(sp)                        ; IPL 1
 	move.w	#$2100,sr
 	move.b	#$2,d5                          ; 2 passes
-tsw_pass_loop:	; xref: 3932
+tsw_pass_loop:
 	move.b	$1(a2),d6                       ; count
 	clr.l	d1                              ; track
 	move.b	$3(a2),d1
@@ -5611,57 +5982,57 @@ tsw_pass_loop:	; xref: 3932
 	bsr.w	dma_write_mode
 	move.w	#$d4,(a6)                       ; Force Interrupt on index pulse
 	moveq	#-1,d0
-tsw_wait_index:	; xref: 390a
+tsw_wait_index:
 	btst	#$5,$fffa01                     ; wait for the index pulse
 	dbeq	d0,tsw_wait_index
 	move.w	#$b000,d0                       ; timeout
-tsw_write_loop:	; xref: 3926
+tsw_write_loop:
 	move.w	#$a0,(a6)                       ; Write Sector
-tsw_wait_done:	; xref: 391e
+tsw_wait_done:
 	btst	#$5,$fffa01                     ; wait until done
 	dbeq	d0,tsw_wait_done
 	bne.s	tsw_check                       ; timeout
 	subq.b	#1,d6                           ; count--
 	bne.s	tsw_write_loop
-tsw_check:	; xref: 3922
+tsw_check:
 	bsr.w	fdc_abort
 	tst.w	d6                              ; all written?
 	beq.s	tsw_done
 	subq.b	#1,d5                           ; next pass
 	bne.s	tsw_pass_loop
-tsw_done:	; xref: 392e
+tsw_done:
 	move.w	(sp)+,sr
 	clr.l	d0
 	move.w	$4(a2),d0                       ; item length
 	adda.l	d0,a2
 	bra.w	script_dispatch
 
-op_34_end_verify:	; xref: 52e8
+op_34_end_verify:	; from: opcode_table
 	addq.l	#2,a2                           ; d0 = 0: end
 	clr.l	d0
 	rts
 
-op_38_gap_long:	; xref: 52ec
+op_38_gap_long:	; from: opcode_table
 	move.l	(a2)+,d1                        ; d1 = count
 	move.w	d1,d0
 	bmi.s	gap_long_zeros                  ; negative: no gap
-gap_long_4e_loop:	; xref: 3952
+gap_long_4e_loop:
 	move.b	#$4e,(a0)+                      ; $4e gap
 	dbra	d0,gap_long_4e_loop
-gap_long_zeros:	; xref: 394c
+gap_long_zeros:
 	moveq	#11,d1                          ; 12 zero bytes
-gap_long_zero_loop:	; xref: 395a
+gap_long_zero_loop:
 	clr.b	(a0)+
 	dbra	d1,gap_long_zero_loop
 	bra.w	script_dispatch
 
 
 ; Four bytes copied here from the copyright string (expected "(c) ")
-key_copyright:	; xref: 39cc,3a0a,3a6c
+key_copyright:	; from: op_0c_write_special_sectors
 	dc.b	$00
-key_copyright_1:	; xref: 3a30
+key_copyright_1:	; from: op_0c_write_special_sectors
 	dc.b	$00
-key_copyright_2:	; xref: 3a64
+key_copyright_2:	; from: op_0c_write_special_sectors
 	dc.b	$00
 key_copyright_3:
 	dc.b	$00
@@ -5670,29 +6041,29 @@ key_copyright_3:
 ; Opcode $0c: write special sectors whose data is bit-shifted (roxr) so the
 ; bytes are out of sync, timed against the DMA counter
 ;----------------------------------------------------------------------
-op_0c_write_special_sectors:	; xref: 52c0
+op_0c_write_special_sectors:	; from: opcode_table
 	bsr.w	fdc_wait_status
 	move.l	#special_ids,special_id_ptr     ; special_id_ptr = special_ids
 	move.w	(a2)+,d0                        ; count * 4
 	andi.w	#$ff,d0
 	move.w	d0,special_count
-wss_sector_loop:	; xref: 3ad8
+wss_sector_loop:	; from: op_40_check_special_written
 	move.l	a2,script2_ptr                  ; remember the script position
 	move.b	#$12,write_retries              ; 18 attempts
 	bsr.w	read_ids_short                  ; reference: number of IDs
 	move.w	d0,id_count_ref
 	move.b	#$3,f_sync_in_data              ; 3 attempts before changing the delay
-wss_shift_loop_start:	; xref: 3b36
+wss_shift_loop_start:	; from: op_40_check_special_written
 	lea	shift_sector_data,a1            ; shift the sector data one bit
 	andi.b	#$ef,ccr                        ; X = 0
 	moveq	#5,d0                           ; 6 bytes
-wss_shift_loop:	; xref: 39b2
+wss_shift_loop:
 	move.b	(a2)+,d1
 	roxr.b	#1,d1
 	move.b	d1,(a1)+
 	dbra	d0,wss_shift_loop
 	moveq	#32,d1
-wss_shift_gap_loop:	; xref: 39be
+wss_shift_gap_loop:
 	moveq	#78,d0                          ; 33 x shifted $4e
 	roxr.b	#1,d0
 	move.b	d0,(a1)+
@@ -5719,7 +6090,7 @@ wss_shift_gap_loop:	; xref: 39be
 	moveq	#-1,d0                          ; timeout
 	moveq	#3,d3                           ; wait for 4 changes
 	move.w	write_delay,d2                  ; delay
-wss_wait_position:	; xref: 3a12,3a20,3a26
+wss_wait_position:
 	cmp.b	(a0),d1                         ; wait for the DMA low byte to change
 	dbne	d0,wss_wait_position
 	bne.s	wss_deselect                    ; timeout
@@ -5730,17 +6101,17 @@ wss_wait_position:	; xref: 3a12,3a20,3a26
 	bne.w	start                           ; wrong: restart the program
 	bra.w	wss_retry
 
-wss_deselect:	; xref: 3a24
+wss_deselect:
 	move.b	d5,$ff8802                      ; deselect the drive
 	swap	d5
-wss_delay_loop:	; xref: 3a48
+wss_delay_loop:
 	dbra	d2,wss_delay_loop               ; delay
 	clr.l	d2
 	clr.l	d2
 	move.b	d5,$ff8802                      ; reselect
 	move.w	(sp)+,sr
 	move.w	#$200,d2                        ; delay $200
-wss_delay2_loop:	; xref: 3a5c
+wss_delay2_loop:
 	dbra	d2,wss_delay2_loop
 	bsr.w	fdc_abort
 	cmpi.b	#$29,key_copyright_2            ; tamper check: ")"
@@ -5748,7 +6119,7 @@ wss_delay2_loop:	; xref: 3a5c
 	clr.l	d7
 	bra.w	script_dispatch
 
-op_40_check_special_written:	; xref: 52f4
+op_40_check_special_written:	; from: opcode_table
 	addq.l	#2,a2
 	btst	#$4,d7                          ; record not found?
 	bne.s	wss_retry
@@ -5776,11 +6147,11 @@ op_40_check_special_written:	; xref: 52f4
 	bne.w	wss_sector_loop
 	bsr.w	verify_special_sectors          ; verify all special sectors
 	beq.w	script_dispatch
-op_40_fail:	; xref: 3b2a
+op_40_fail:
 	moveq	#-1,d0
 	rts
 
-wss_retry:	; xref: 3a3c,3a7c,3a98
+wss_retry:	; from: op_0c_write_special_sectors
 	subq.b	#1,f_sync_in_data               ; attempts--
 	bne.s	wss_retry_check
 	bsr.w	read_ids_short                  ; count IDs now
@@ -5789,14 +6160,14 @@ wss_retry:	; xref: 3a3c,3a7c,3a98
 	addq.w	#1,write_delay                  ; longer delay
 	bra.s	wss_reset_count
 
-wss_delay_dec:	; xref: 3afa
+wss_delay_dec:
 	subq.w	#1,write_delay                  ; shorter delay
 	cmpi.w	#$66,write_delay                ; minimum $66
 	bcc.s	wss_reset_count
 	move.w	#$6a,write_delay                ; default $6a
-wss_reset_count:	; xref: 3b02,3b12
+wss_reset_count:
 	move.b	#$3,f_sync_in_data              ; reset the counter
-wss_retry_check:	; xref: 3aee
+wss_retry_check:
 	subq.b	#1,write_retries                ; attempts--
 	beq.s	op_40_fail
 	moveq	#80,d0                          ; write until the ID + 80
@@ -5808,7 +6179,7 @@ wss_retry_check:	; xref: 3aee
 ;----------------------------------------------------------------------
 ; Write Track and abort it once the DMA address passes id_fields+d0
 ;----------------------------------------------------------------------
-write_track_until:	; xref: 3ad0,3b2e,3dc2,3ed6
+write_track_until:	; from: op_54_shifted_sector_write, op_40_check_special_written
 	move.w	special_count,d1                ; count * 4
 	lea	id_fields,a5
 	add.l	$0(a5,d1.w),d0                  ; d0 += ID field address
@@ -5816,7 +6187,7 @@ write_track_until:	; xref: 3ad0,3b2e,3dc2,3ed6
 	bsr.w	fdc_write_track                 ; Write Track
 	moveq	#6,d1                           ; timeout
 	swap	d1
-wtu_wait_loop:	; xref: 3b6c
+wtu_wait_loop:
 	btst	#$5,$fffa01                     ; FDC done?
 	beq.s	wtu_stop
 	bsr.w	dma_get_address                 ; DMA address
@@ -5824,9 +6195,9 @@ wtu_wait_loop:	; xref: 3b6c
 	bcc.s	wtu_stop
 	subq.l	#1,d1
 	bne.s	wtu_wait_loop
-wtu_stop:	; xref: 3b5c,3b68
+wtu_stop:
 	moveq	#5,d1                           ; short delay
-wtu_delay_loop:	; xref: 3b70
+wtu_delay_loop:
 	dbra	d1,wtu_delay_loop
 	bra.w	fdc_abort                       ; Force Interrupt
 
@@ -5834,7 +6205,7 @@ wtu_delay_loop:	; xref: 3b70
 ;----------------------------------------------------------------------
 ; Re-read the sectors listed in special_ids to verify them
 ;----------------------------------------------------------------------
-verify_special_sectors:	; xref: 3adc,3ba6,3bac,459e
+verify_special_sectors:	; from: op_40_check_special_written, script_add_sector
 	move.l	#sector_list_100,d0             ; read into sector_list + $100
 	movea.l	special_id_ptr,a5
 	cmpa.l	#special_ids,a5                 ; list empty?
@@ -5850,17 +6221,17 @@ verify_special_sectors:	; xref: 3adc,3ba6,3bac,459e
 	beq.s	verify_special_sectors
 	btst	#$3,d7                          ; CRC error: ok
 	beq.s	verify_special_sectors
-verify_special_ret:	; xref: 3b8a
+verify_special_ret:
 	rts
 
-op_44_id_sector_ff:	; xref: 52f8
+op_44_id_sector_ff:	; from: opcode_table
 	lea	-$3c(a0),a0                     ; back 60 bytes
 	move.b	(a0),d0                         ; CRC byte there?
 	cmpi.b	#$f7,d0
 	bne.s	id_ff_store
 	moveq	#-27,d0                         ; $e5
 	move.b	d0,(a0)+
-id_ff_store:	; xref: 3bba
+id_ff_store:
 	move.b	d0,(a0)+
 	addq.w	#4,special_count                ; one more special sector
 	bsr.w	emit_3_sync                     ; three $f5
@@ -5888,14 +6259,14 @@ id_ff_store:	; xref: 3bba
 	move.l	a0,(a5)                         ; remember the position
 	bra.w	op_20_id_field                  ; then a normal ID field
 
-op_48_id_zero:	; xref: 52fc
+op_48_id_zero:	; from: opcode_table
 	lea	-$2c(a0),a0                     ; back 44 bytes
 	move.b	(a0),d0
 	cmpi.b	#$f7,d0                         ; CRC byte there?
 	bne.s	id_zero_store
 	moveq	#-27,d0                         ; $e5
 	move.b	d0,(a0)+
-id_zero_store:	; xref: 3c20
+id_zero_store:
 	move.b	d0,(a0)+
 	bsr.w	emit_3_sync                     ; three $f5
 	move.b	#$fe,(a0)+                      ; ID mark
@@ -5915,11 +6286,11 @@ id_zero_store:	; xref: 3c20
 	addq.l	#2,a2
 	bra.w	script_dispatch
 
-op_4c_verify_sectors:	; xref: 5300
+op_4c_verify_sectors:	; from: opcode_table
 	move.w	(a2)+,d6                        ; count
 	andi.w	#$ff,d6
 	bsr.w	fdc_wait_status
-verify_sectors_loop:	; xref: 3c7c
+verify_sectors_loop:
 	clr.l	d1                              ; d1 = sector:track
 	move.b	(a2)+,d1
 	swap	d1
@@ -5931,11 +6302,11 @@ verify_sectors_loop:	; xref: 3c7c
 	dbra	d6,verify_sectors_loop
 	bra.w	script_dispatch
 
-verify_sectors_fail:	; xref: 3c7a
+verify_sectors_fail:
 	moveq	#1,d0                           ; d0 = 1: failed
 	rts
 
-op_50_id_ff_sector1:	; xref: 5304
+op_50_id_ff_sector1:	; from: opcode_table
 	clr.l	d0
 	addq.l	#2,a2
 	move.w	(a2)+,d0                        ; offset in track
@@ -5963,11 +6334,11 @@ op_50_id_ff_sector1:	; xref: 5304
 	bsr.w	fill_bytes_loop
 	bra.w	script_dispatch
 
-shift_dma_target:	; xref: 3cfc,3d7e
+shift_dma_target:	; from: op_54_shifted_sector_write
 	dc.l	$00000000
-shift_delay:	; xref: 3d0e,3e36
+shift_delay:	; from: op_54_shifted_sector_write
 	dc.w	$0000
-op_54_shifted_sector_write:	; xref: 5308
+op_54_shifted_sector_write:	; from: opcode_table
 	move.l	(a2)+,d0                        ; d0 = offset
 	clr.l	d1
 	move.w	d0,d1
@@ -5990,14 +6361,14 @@ op_54_shifted_sector_write:	; xref: 5308
 	clr.l	(a1)+
 	clr.w	(a1)+
 	andi.b	#$ef,ccr                        ; X = 0
-ssw_shift_loop:	; xref: 3d34
+ssw_shift_loop:
 	move.b	(a2)+,d1                        ; shift the data one bit
 	roxr.b	#1,d1
 	move.b	d1,(a1)+
 	dbra	d0,ssw_shift_loop
 	move.b	#$12,write_retries              ; 18 attempts
 	move.b	#$3,f_sync_in_data              ; 3 before changing the delay
-ssw_write_loop:	; xref: 3dfa
+ssw_write_loop:
 	bsr.w	read_psg_port_a                 ; d5 = port A deselected
 	move.w	#$ff,d1                         ; track register $ff
 	bsr.w	fdc_set_track_reg
@@ -6019,26 +6390,26 @@ ssw_write_loop:	; xref: 3dfa
 	moveq	#-1,d0                          ; timeout
 	moveq	#3,d3                           ; wait for 4 changes
 	move.w	write_delay,d2                  ; delay
-ssw_wait_position:	; xref: 3d9c,3da2
+ssw_wait_position:
 	cmp.b	(a0),d1                         ; wait for the DMA low byte to change
 	dbne	d0,ssw_wait_position
 	bne.s	ssw_deselect                    ; timeout
 	dbra	d3,ssw_wait_position
-ssw_position_timeout:	; xref: 3e20,3e28,3e32
+ssw_position_timeout:
 	move.w	(sp)+,sr
 	bra.s	ssw_retry
 
-ssw_speed_up:	; xref: 3e9c,3ea4,3eae
+ssw_speed_up:
 	subq.b	#1,f_sync_in_data               ; attempts before changing the delay
 	bne.s	ssw_write_rest
 	addq.w	#1,write_delay                  ; longer delay
 	move.b	#$3,f_sync_in_data
-ssw_write_rest:	; xref: 3db0
+ssw_write_rest:
 	moveq	#80,d0                          ; write until the ID + 80
 	bsr.w	write_track_until
 	bra.s	ssw_retry
 
-ssw_slow_down:	; xref: 3eb8
+ssw_slow_down:
 	subq.b	#1,f_sync_in_data               ; attempts before changing the delay
 	bne.s	ssw_retry
 	subq.w	#1,write_delay                  ; shorter delay
@@ -6046,36 +6417,36 @@ ssw_slow_down:	; xref: 3eb8
 	cmpi.w	#$66,write_delay                ; minimum $66
 	bcc.s	ssw_retry
 	move.w	#$6a,write_delay                ; default $6a
-ssw_retry:	; xref: 3da8,3dc6,3dce,3de6,3e76
+ssw_retry:
 	bsr.w	fdc_abort                       ; stop the FDC
 	subq.b	#1,write_retries                ; attempts--
 	bne.w	ssw_write_loop
 	moveq	#-1,d0                          ; d0 = -1: failed
 	rts
 
-ssw_deselect:	; xref: 3da0
+ssw_deselect:
 	move.b	d5,$ff8802                      ; deselect the drive
 	swap	d5
-ssw_delay_loop:	; xref: 3e0a
+ssw_delay_loop:
 	dbra	d2,ssw_delay_loop               ; delay
 	clr.l	d2
 	clr.l	d2
 	move.b	d5,$ff8802                      ; reselect
 	moveq	#-1,d0
-ssw_wait_mid:	; xref: 3e1c
+ssw_wait_mid:
 	cmp.b	(a1),d7                         ; wait for the DMA mid byte
 	dbeq	d0,ssw_wait_mid
 	bne.s	ssw_position_timeout
-ssw_wait_low:	; xref: 3e24
+ssw_wait_low:
 	cmp.b	(a0),d6                         ; wait for the DMA low byte
 	dbeq	d0,ssw_wait_low
 	bne.w	ssw_position_timeout
-ssw_wait_low_change:	; xref: 3e2e
+ssw_wait_low_change:
 	cmp.b	(a0),d6                         ; wait for it to change
 	dbne	d0,ssw_wait_low_change
 	beq.w	ssw_position_timeout
 	move.w	shift_delay,d0                  ; delay
-ssw_delay2_loop:	; xref: 3e3c
+ssw_delay2_loop:
 	dbra	d0,ssw_delay2_loop
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.w	(sp)+,sr
@@ -6085,7 +6456,7 @@ ssw_delay2_loop:	; xref: 3e3c
 	move.w	#$e0,(a6)                       ; Read Track
 	moveq	#6,d7                           ; timeout
 	swap	d7
-ssw_read_wait:	; xref: 3e74
+ssw_read_wait:
 	btst	#$5,$fffa01                     ; FDC done?
 	beq.s	ssw_read_check
 	bsr.w	dma_get_address                 ; DMA address
@@ -6095,14 +6466,14 @@ ssw_read_wait:	; xref: 3e74
 	bne.s	ssw_read_wait
 	bra.w	ssw_retry
 
-ssw_read_check:	; xref: 3e64,3e70
+ssw_read_check:
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.l	id_fields,d0                    ; position of the ID
 	subi.l	#track_buf_8,d0
 	addi.l	#sector_buf,d0
 	movea.l	d0,a0
 	moveq	#32,d0                          ; find $a1 $a1
-ssw_find_sync_loop:	; xref: 3e98
+ssw_find_sync_loop:
 	cmpi.b	#$a1,(a0)+
 	dbeq	d0,ssw_find_sync_loop
 	bne.w	ssw_speed_up                    ; not found: longer delay
@@ -6112,7 +6483,7 @@ ssw_find_sync_loop:	; xref: 3e98
 	movea.l	a4,a1
 	cmpm.b	(a0)+,(a1)+                     ; first byte
 	bne.w	ssw_speed_up
-ssw_compare_loop:	; xref: 3eb4
+ssw_compare_loop:
 	cmpm.b	(a0)+,(a1)+
 	dbne	d0,ssw_compare_loop
 	bne.w	ssw_slow_down                   ; mismatch: shorter delay
@@ -6126,10 +6497,10 @@ ssw_compare_loop:	; xref: 3eb4
 	bsr.w	write_track_until
 	bra.w	script_dispatch
 
-op_58_fuzzy_marker:	; xref: 530c
+op_58_fuzzy_marker:	; from: opcode_table
 	moveq	#10,d1                          ; gap 10, offset 85
 	moveq	#85,d2
-fuzzy_marker_calc:	; xref: 41c0
+fuzzy_marker_calc:	; from: op_74_fuzzy_marker_params
 	lea	-$9(a0),a0                      ; back 9 bytes
 	move.l	a0,d0                           ; offset in the image
 	subi.l	#track_buf,d0
@@ -6141,16 +6512,16 @@ fuzzy_marker_calc:	; xref: 41c0
 	sub.l	d0,d1                           ; gap - remainder zero bytes
 	bra.s	fuzzy_marker_zero
 
-fuzzy_marker_zero_loop:	; xref: 3efe
+fuzzy_marker_zero_loop:
 	clr.b	(a0)+
-fuzzy_marker_zero:	; xref: 3efa
+fuzzy_marker_zero:
 	dbra	d1,fuzzy_marker_zero_loop
 	bra.s	fuzzy_marker_store
 
-fuzzy_marker_back:	; xref: 3ef6
+fuzzy_marker_back:
 	sub.l	d1,d0                           ; move back by remainder - gap
 	suba.l	d0,a0
-fuzzy_marker_store:	; xref: 3f02
+fuzzy_marker_store:
 	move.l	a0,d0                           ; fuzzy_pos = position + offset
 	add.l	d2,d0
 	move.l	d0,fuzzy_pos
@@ -6161,7 +6532,7 @@ fuzzy_marker_store:	; xref: 3f02
 	move.l	d0,fuzzy_sector
 	bra.w	op_20_id_field                  ; then a normal ID field
 
-op_5c_long_track_prep:	; xref: 5310
+op_5c_long_track_prep:	; from: opcode_table
 	addq.l	#2,a2
 	move.l	(a2)+,long_track_sector         ; sector:track
 	move.l	a0,d0                           ; position + $122
@@ -6170,7 +6541,7 @@ op_5c_long_track_prep:	; xref: 5310
 	lea	track_buf,a1
 	movea.l	a1,a4                           ; find $f5 $f5 $f5
 	moveq	#-11,d0
-ltp_find_f5_loop:	; xref: 3f4a,3f4e,3f52
+ltp_find_f5_loop:
 	cmp.b	(a1)+,d0
 	bne.s	ltp_find_f5_loop
 	cmp.b	(a1)+,d0
@@ -6179,26 +6550,26 @@ ltp_find_f5_loop:	; xref: 3f4a,3f4e,3f52
 	bne.s	ltp_find_f5_loop
 	subq.l	#3,a1                           ; back to the first $f5
 	moveq	#11,d0                          ; 12 zero bytes before it
-ltp_clear_loop:	; xref: 3f5a
+ltp_clear_loop:
 	clr.b	-(a1)
 	dbra	d0,ltp_clear_loop
 	move.l	a1,d0                           ; offset of the zeros
 	subi.l	#track_buf,d0
 	subi.w	#$42,d0                         ; - $42
-ltp_gap_loop:	; xref: 3f6e
+ltp_gap_loop:
 	move.b	#$4e,(a4)+                      ; $4e fill
 	dbra	d0,ltp_gap_loop
 	move.b	#$d3,(a4)+                      ; $d3 then $93 ... up to the zeros
-ltp_pattern_loop:	; xref: 3f7c
+ltp_pattern_loop:
 	move.b	#$93,(a4)+
 	cmpa.l	a4,a1
 	bne.s	ltp_pattern_loop
 	bra.w	script_dispatch
 
-op_60_long_track_write:	; xref: 5314
+op_60_long_track_write:	; from: opcode_table
 	addq.l	#2,a2
 	move.l	#track_buf,d2                   ; d2 = track_buf
-ltw_align_loop:	; xref: 3fb4
+ltw_align_loop:
 	bsr.w	fdc_wait_status
 	bsr.w	dma_get_address                 ; DMA address
 	sub.l	long_track_pos,d0               ; minus the target position
@@ -6206,7 +6577,7 @@ ltw_align_loop:	; xref: 3fb4
 	move.l	d0,d1
 	bpl.s	ltw_align_check
 	neg.w	d0
-ltw_align_check:	; xref: 3f9e
+ltw_align_check:
 	cmpi.w	#$30,d0                         ; aligned within $30?
 	bcs.s	ltw_build_image
 	sub.l	d1,d2                           ; shift the DMA start
@@ -6215,7 +6586,7 @@ ltw_align_check:	; xref: 3f9e
 	bsr.w	fdc_write_track_cmd             ; Write Track again
 	bra.s	ltw_align_loop
 
-ltw_build_image:	; xref: 3fa6
+ltw_build_image:
 	lea	sector_buf,a0
 	moveq	#-27,d0                         ; $e5
 	move.w	#$1d3,d1                        ; 468 x $e5
@@ -6234,12 +6605,12 @@ ltw_build_image:	; xref: 3fa6
 	bsr.w	fdc_abort                       ; stop the FDC
 	clr.w	ltw_delay_sub
 	clr.w	delay_count
-ltw_retry_loop:	; xref: 402a
+ltw_retry_loop:
 	addq.b	#1,delay_count_1                ; delay_count++
 	cmpi.b	#$8,delay_count_1               ; every 8: reset
 	bcs.s	ltw_retry_count
 	clr.w	delay_count
-ltw_retry_count:	; xref: 4008
+ltw_retry_count:
 	addq.b	#1,ltw_tries                    ; up to 30 tries
 	cmpi.b	#$1e,ltw_tries
 	bcc.s	ltw_fail
@@ -6251,7 +6622,7 @@ ltw_retry_count:	; xref: 4008
 	move.w	#$1ff,d1
 	moveq	#-27,d0
 	bsr.w	fill_bytes
-ltw_verify_loop:	; xref: 4076
+ltw_verify_loop:
 	bsr.w	set_write_params_id             ; write the ID part
 	bsr.w	timed_write_sector_at
 	bsr.w	set_write_params_data           ; then the data part
@@ -6260,28 +6631,28 @@ ltw_verify_loop:	; xref: 4076
 	bsr.w	fdc_wait_status
 	lea	sector_buf,a0
 	move.w	#$fe,d1                         ; 255 words
-ltw_find_e5_loop:	; xref: 4064
+ltw_find_e5_loop:
 	cmpi.w	#$e5e5,(a0)+                    ; find $e5e5
 	dbne	d1,ltw_find_e5_loop
 	bne.s	ltw_verify_retry                ; not found: retry
 	bra.w	script_dispatch
 
-ltw_verify_retry:	; xref: 4068
+ltw_verify_retry:
 	addi.b	#$8,delay_count_1               ; delay + 8
 	bpl.s	ltw_verify_loop                 ; up to 128
-ltw_fail:	; xref: 401e
+ltw_fail:
 	moveq	#-1,d0                          ; d0 = -1: failed
 	rts
 
-ltw_delay_sub:	; xref: 3fee
+ltw_delay_sub:	; from: op_60_long_track_write
 	dc.b	$00
-ltw_tries:	; xref: 4010,4016
+ltw_tries:	; from: op_60_long_track_write
 	dc.b	$00
 
-read_track_check_sig:	; xref: 4028
+read_track_check_sig:	; from: op_60_long_track_write
 	movem.l	a2,-(sp)
 	bsr.w	fdc_read_track                  ; Read Track
-rtc_wait_loop:	; xref: 409c
+rtc_wait_loop:
 	bsr.w	wait_dma_change                 ; DMA running?
 	beq.s	rtc_fail
 	bsr.w	dma_get_address                 ; DMA address
@@ -6293,26 +6664,26 @@ rtc_wait_loop:	; xref: 409c
 	bne.s	rtc_fail
 	bsr.w	detect_signature_b              ; signature B?
 	beq.s	rtc_ret
-rtc_fail:	; xref: 408a,40a6
+rtc_fail:
 	bsr.w	fdc_abort                       ; stop the FDC
 	moveq	#-1,d0                          ; d0 = -1: failed
-rtc_ret:	; xref: 40ac
+rtc_ret:
 	movem.l	(sp)+,a2
 	rts
 
 
-set_write_params_id:	; xref: 403c
+set_write_params_id:	; from: op_60_long_track_write
 	move.l	#id_fields,d0                   ; DMA from id_fields
 	move.w	#$60,d3                         ; Write Sector flags $60
 	move.l	long_track_sector,d1            ; sector:track
 	bra.s	set_write_params
 
 
-set_write_params_data:	; xref: 3fde,4020,4044
+set_write_params_data:	; from: op_60_long_track_write
 	move.l	#sector_buf,d0                  ; DMA from sector_buf
 	move.w	#$1e0,d3                        ; flags $1e0
 	clr.l	d1                              ; sector 0
-set_write_params:	; xref: 40ca
+set_write_params:	; from: set_write_params_id
 	clr.l	d2
 	clr.l	d6
 	move.l	d0,d4                           ; d4 = DMA address
@@ -6323,33 +6694,33 @@ set_write_params:	; xref: 40ca
 ; Opcode $64: run-length encoded track data: (count,value) byte pairs,
 ; count 0 = literal block (length word + bytes), (0,0) = end
 ;----------------------------------------------------------------------
-op_64_rle_data:	; xref: 5318
+op_64_rle_data:	; from: opcode_table
 	addq.l	#1,a2                           ; skip opcode byte
-rle_skip_pad:	; xref: 410c
+rle_skip_pad:
 	addq.l	#1,a2                           ; skip pad byte
-rle_loop:	; xref: 40f4,410a
+rle_loop:
 	clr.l	d0
 	move.b	(a2),d0                         ; count
 	beq.s	rle_literal                     ; count 0 = literal
 	move.w	(a2)+,d1                        ; d1.b = value
 	subq.w	#1,d0
-rle_fill_loop:	; xref: 40f0
+rle_fill_loop:
 	move.b	d1,(a0)+                        ; count x value
 	dbra	d0,rle_fill_loop
 	bra.s	rle_loop
 
-rle_literal:	; xref: 40e8
+rle_literal:
 	move.w	(a2)+,d1                        ; literal length
 	beq.w	script_dispatch                 ; length 0 = end
 	move.w	d1,d2
 	subq.w	#1,d1
-rle_literal_loop:	; xref: 4102
+rle_literal_loop:
 	move.b	(a2)+,(a0)+                     ; copy literal bytes
 	dbra	d1,rle_literal_loop
 	btst	#$0,d2                          ; odd length: skip pad
 	beq.s	rle_loop
 	bne.s	rle_skip_pad
-op_6c_partial_write_track:	; xref: 5320
+op_6c_partial_write_track:	; from: opcode_table
 	addq.l	#2,a2                           ; skip opcode word
 	clr.l	track_buf_60                    ; clear the sync at +$60
 	move.l	#track_buf_2,d0                 ; DMA from track_buf + 2
@@ -6358,29 +6729,29 @@ op_6c_partial_write_track:	; xref: 5320
 	move.w	#$f0,(a6)                       ; Write Track
 	bsr.w	wait_dma_change                 ; DMA running?
 	beq.s	pwt_abort
-pwt_wait_loop:	; xref: 4138
+pwt_wait_loop:
 	bsr.w	dma_get_address                 ; DMA address
 	cmpi.l	#track_buf_82,d0                ; past track_buf + $82?
 	bcs.s	pwt_wait_loop
 	moveq	#3,d0                           ; short delay
-pwt_delay_loop:	; xref: 413c
+pwt_delay_loop:
 	dbra	d0,pwt_delay_loop
-pwt_abort:	; xref: 412c
+pwt_abort:
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.l	#$f5f5f5fb,track_buf_60         ; restore sync + data mark at +$60
 	bra.w	script_dispatch
 
-op_70_sync_read_track:	; xref: 5324
+op_70_sync_read_track:	; from: opcode_table
 	addq.l	#2,a2                           ; skip opcode word
 	bsr.w	fdc_wait_status
 	moveq	#20,d5                          ; 21 tries
-srt_read_loop:	; xref: 41aa
+srt_read_loop:
 	move.l	#sector_buf,d0                  ; read into sector_buf
 	bsr.w	dma_set_address
 	bsr.w	fdc_read_track_cmd              ; Read Track
 	bsr.w	wait_dma_change                 ; DMA running?
 	beq.s	srt_retry
-srt_wait_loop:	; xref: 417c
+srt_wait_loop:
 	bsr.w	dma_get_address                 ; DMA address
 	subi.l	#sector_buf,d0
 	cmpi.w	#$80,d0                         ; $80 bytes read?
@@ -6388,22 +6759,22 @@ srt_wait_loop:	; xref: 417c
 	bsr.w	fdc_abort                       ; stop the FDC
 	moveq	#64,d0                          ; in the first 65 bytes
 	lea	sector_buf,a0
-srt_find_14_loop:	; xref: 418e,4198
+srt_find_14_loop:
 	cmpi.b	#$14,(a0)+                      ; find $14 $0b
 	dbeq	d0,srt_find_14_loop
 	bne.s	srt_retry
 	cmpi.b	#$b,(a0)
 	dbeq	d0,srt_find_14_loop
 	beq.s	srt_done
-srt_retry:	; xref: 416c,4192
+srt_retry:
 	bsr.w	fdc_abort                       ; stop the FDC
 	bsr.w	fdc_write_track                 ; Write Track and try again
 	bsr.w	fdc_wait_status
 	dbra	d5,srt_read_loop
-srt_done:	; xref: 419c
+srt_done:
 	bra.w	script_dispatch
 
-op_74_fuzzy_marker_params:	; xref: 5328
+op_74_fuzzy_marker_params:	; from: opcode_table
 	moveq	#0,d1                           ; gap, offset from the script
 	moveq	#0,d2
 	move.b	$1(a2),d1
@@ -6415,7 +6786,7 @@ op_74_fuzzy_marker_params:	; xref: 5328
 ;----------------------------------------------------------------------
 ; Read PSG port A -> d5 = value | 7 (both drives deselected) in both words
 ;----------------------------------------------------------------------
-read_psg_port_a:	; xref: 3472,3830,39c2,3d48,45ea
+read_psg_port_a:	; from: timed_write_sector_at, op_54_shifted_sector_write, op_0c_write_special_sectors, write_fuzzy_bits, script_add_sector
 	move.b	#$e,$ff8800                     ; select PSG register 14
 	move.b	$ff8800,d0                      ; read port A
 	move.w	d0,d5
@@ -6425,10 +6796,10 @@ read_psg_port_a:	; xref: 3472,3830,39c2,3d48,45ea
 	rts
 
 
-fill_bytes:	; xref: 3700,3708,3fc2,3fd2,3fda,4038,41e0
+fill_bytes:	; from: op_60_long_track_write, fill_bytes_loop, op_28_gap
 	move.b	d0,(a0)+                        ; d1+1 bytes of d0
 
-fill_bytes_loop:	; xref: 2d3c,2d44,2d76,2d7e,2d86,3aca,3be4,3bec...
+fill_bytes_loop:	; from: op_54_shifted_sector_write, op_50_id_ff_sector1, op_48_id_zero, op_44_id_sector_ff, op_40_check_special_written, copy_raw_sector
 	dbra	d1,fill_bytes
 	rts
 
@@ -6436,26 +6807,26 @@ fill_bytes_loop:	; xref: 2d3c,2d44,2d76,2d7e,2d86,3aca,3be4,3bec...
 ;----------------------------------------------------------------------
 ; Emit three $f5 sync bytes (clearing a preceding $f5/$f6)
 ;----------------------------------------------------------------------
-emit_3_sync:	; xref: 361c,36ae,36c8,3bc8,3bf0,3c28,3c4c,3ca0...
+emit_3_sync:	; from: op_20_id_field, op_68_id_current_track, op_50_id_ff_sector1, op_48_id_zero, op_44_id_sector_ff, op_18_data_field
 	moveq	#2,d0                           ; 3 bytes
 	cmpi.b	#$f5,-$1(a0)                    ; previous byte $f5?
 	beq.s	emit_3_sync_clear
 	cmpi.b	#$f6,-$1(a0)                    ; or $f6?
 	bne.s	emit_3_sync_loop
-emit_3_sync_clear:	; xref: 41ee
+emit_3_sync_clear:
 	clr.b	-$1(a0)                         ; clear it
-emit_3_sync_loop:	; xref: 41f6,4200
+emit_3_sync_loop:
 	move.b	#$f5,(a0)+                      ; three $f5
 	dbra	d0,emit_3_sync_loop
 	rts
 
-run_list_invert:	; xref: 4216
+run_list_invert:	; from: emit_run_list
 	eori.b	#$ff,d1                         ; invert the fill byte
-run_list_fill_loop:	; xref: 420c
+run_list_fill_loop:
 	move.b	d1,(a0)+                        ; count x byte
 	dbra	d0,run_list_fill_loop
 
-emit_run_list:	; xref: 36f2
+emit_run_list:	; from: op_28_gap
 	clr.w	d0                              ; count
 	move.b	(a2),d0                         ; count:value word
 	move.w	(a2)+,d1
@@ -6463,7 +6834,7 @@ emit_run_list:	; xref: 36f2
 	rts
 
 
-restore_check_wprot:	; xref: 0d44,10ce
+restore_check_wprot:	; from: copy_disk_protected, copy_disk_normal
 	bsr.s	restore_drive                   ; restore first
 	clr.l	d7
 	move.w	(a6),d7                         ; status bits
@@ -6473,17 +6844,17 @@ restore_check_wprot:	; xref: 0d44,10ce
 	rts
 
 
-restore_drive:	; xref: 0a3c,0af4,0e1a,1200,421a
+restore_drive:	; from: format_disk, copy_disk_protected, restore_check_wprot, copy_disk_normal
 	bsr.s	verify_rsc_checksums
 
-select_and_restore:	; xref: 42e2
+select_and_restore:	; from: read_key_track
 	bsr.w	select_drive_side
 
-reset_track_and_restore:	; xref: 0dde,0ffe,1070,11ca,1254
+reset_track_and_restore:	; from: copy_disk_normal, copy_disk_protected
 	clr.w	dp_track(a4)                    ; track 0
 	clr.w	dp_cur_track(a4)                ; current track 0
 
-set_steprate_restore:	; xref: 42f8
+set_steprate_restore:	; from: read_key_track
 	bsr.w	fdc_restore                     ; Restore
 	bra.w	fdc_wait_done
 
@@ -6492,7 +6863,7 @@ set_steprate_restore:	; xref: 42f8
 ; Anti-tamper: key_numn - key_numm must be 1 and the XOR checksums of the five
 ; cached resource strings must match rsc_checksums, otherwise hang
 ;----------------------------------------------------------------------
-verify_rsc_checksums:	; xref: 422e
+verify_rsc_checksums:	; from: restore_drive
 	move.w	sr,-(sp)                        ; disable interrupts
 	ori.w	#$700,sr
 	move.l	key_numn,d0                     ; key_numn - key_numm - 1 = 0?
@@ -6502,16 +6873,16 @@ verify_rsc_checksums:	; xref: 422e
 	lea	rsc_strings,a0                  ; five cached strings
 	lea	rsc_checksums,a2
 	moveq	#4,d2
-rsc_checksum_loop:	; xref: 427a
+rsc_checksum_loop:
 	movea.l	(a0)+,a1                        ; string address
 	clr.l	d0
-rsc_xor_loop:	; xref: 4272
+rsc_xor_loop:
 	move.b	(a1)+,d1                        ; XOR checksum of the string
 	eor.b	d1,d0
 	tst.b	d1
 	bne.s	rsc_xor_loop
 	cmp.b	(a2)+,d0                        ; compare with the table
-rsc_checksum_hang:	; xref: 4258,4278
+rsc_checksum_hang:
 	nop                                     ; hang on mismatch
 	bne.s	rsc_checksum_hang
 	dbra	d2,rsc_checksum_loop
@@ -6523,7 +6894,7 @@ rsc_checksum_hang:	; xref: 4258,4278
 ; Key disk check (once): the track read at start must contain "EUROSYSTEMS"
 ; followed within 256+ bytes by an $f7 byte, otherwise hang forever
 ;----------------------------------------------------------------------
-check_key_disk:	; xref: 0766,109c
+check_key_disk:	; from: build_track_image, copy_disk_protected
 	tst.w	key_checked                     ; already checked?
 	bne.s	key_disk_ret
 	addq.w	#1,key_checked
@@ -6531,36 +6902,36 @@ check_key_disk:	; xref: 0766,109c
 	ori.w	#$700,sr
 	move.l	#track_buf,d2                   ; start of the key track
 	moveq	#80,d0                          ; search in the first 81 bytes
-key_scan_restart:	; xref: 42be
+key_scan_restart:
 	movea.l	d2,a0
 	lea	copyright+5-$1555,a1            ; a1 = copyright - $1494
 	lea	$1555(a1),a1                    ; a1 = copyright + 5 ("UROSYSTEMS")
 	moveq	#9,d1                           ; 10 bytes
-key_find_e_loop:	; xref: 42b0
+key_find_e_loop:
 	cmpi.b	#$45,(a0)+                      ; find "E"
 	dbeq	d0,key_find_e_loop
 	bne.s	key_disk_hang                   ; not found: hang
 	move.l	a0,d2                           ; continue after it
-key_compare_loop:	; xref: 42ba
+key_compare_loop:
 	cmpm.b	(a1)+,(a0)+                     ; compare "UROSYSTEMS"
 	dbne	d1,key_compare_loop
 	bne.s	key_scan_restart                ; mismatch: search on
 	lea	$100(a0),a0                     ; skip 256 bytes
 	move.w	#$1000,d0                       ; within 4K
-key_find_f7_loop:	; xref: 42cc
+key_find_f7_loop:
 	cmpi.b	#$f7,(a0)+                      ; find an $f7 byte
 	dbne	d0,key_find_f7_loop
-key_disk_hang:	; xref: 42b4,42d0
+key_disk_hang:
 	bne.s	key_disk_hang                   ; hang if not found
 	move.w	(sp)+,sr
-key_disk_ret:	; xref: 4288
+key_disk_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Read the key track: seek to track 80 and Read Track into track_buf
 ;----------------------------------------------------------------------
-read_key_track:	; xref: 01ee
+read_key_track:	; from: main
 	bsr.w	lock_floppy
 	bsr.w	load_base_regs
 	bsr.w	fdc_wait_status
@@ -6579,7 +6950,7 @@ read_key_track:	; xref: 01ee
 ; During Read Track, sample the DMA address to find the index position and
 ; the first ID mark; flags unformatted and over-long tracks
 ;----------------------------------------------------------------------
-read_track_find_index:	; xref: 114e
+read_track_find_index:	; from: copy_disk_protected
 	clr.w	f_unformatted
 	lea	track_buf,a0
 	clr.w	$3a(a4)                         ; first mark position = 0
@@ -6589,16 +6960,16 @@ read_track_find_index:	; xref: 114e
 	beq.s	rtfi_check_length               ; none: check the length
 	move.b	d1,last_mark                    ; remember the mark byte
 	move.w	d0,$3c(a4)                      ; offset of the first sync
-rtfi_skip_marks:	; xref: 4338
+rtfi_skip_marks:
 	cmpi.b	#$fc,d1                         ; ID mark?
 	bcc.s	rtfi_first_mark
 	bsr.w	find_next_mark                  ; next mark
 	bne.s	rtfi_skip_marks
 	bra.s	rtfi_check_length
 
-rtfi_first_mark:	; xref: 4332
+rtfi_first_mark:
 	move.w	d0,$3a(a4)                      ; offset of the first ID mark
-rtfi_wait_end:	; xref: 434e
+rtfi_wait_end:
 	bsr.w	sample_dma_address              ; follow the DMA address
 	cmpi.l	#track_buf_1900,d0              ; past $1900?
 	bcc.s	rtfi_timeout
@@ -6612,7 +6983,7 @@ rtfi_wait_end:	; xref: 434e
 	rts
 
 
-rtfi_timeout:	; xref: 434a,4448
+rtfi_timeout:	; from: sample_dma_address, read_track_find_index
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.w	#$d4,(a6)                       ; Force Interrupt on index pulse
 	moveq	#-1,d7                          ; d7 = -1
@@ -6620,34 +6991,34 @@ rtfi_timeout:	; xref: 434a,4448
 	moveq	#1,d7                           ; d7 = 1
 	rts
 
-rtfi_check_length:	; xref: 4322,433a
+rtfi_check_length:	; from: read_track_find_index
 	move.l	dma_pos,d0                      ; length of the track
 	subi.l	#track_buf,d0
 	cmpi.w	#$17f0,d0                       ; shorter than $17f0?
 	bcc.s	rtfi_long_track
-rtfi_unformatted:	; xref: 4360
+rtfi_unformatted:	; from: read_track_find_index
 	st	f_unformatted                   ; unformatted
 	cmpi.b	#$2f,cur_track_b                ; track 47?
 	bne.s	rtfi_fill_35
 	bsr.w	fill_track_dc                   ; fill with $dc
 	bra.s	rtfi_fill_sync
 
-rtfi_fill_35:	; xref: 4398
+rtfi_fill_35:
 	bsr.w	fill_track_35                   ; fill with $35
-rtfi_fill_sync:	; xref: 439e
+rtfi_fill_sync:
 	move.l	#$a1a1a1a1,track_buf_1760       ; sync at +$1760
-rtfi_ok:	; xref: 43b6,43c0
+rtfi_ok:
 	clr.l	d0                              ; d0 = 0: ok
 	rts
 
-rtfi_long_track:	; xref: 4388
+rtfi_long_track:
 	cmpi.w	#$1960,d0                       ; shorter than $1960?
 	bcs.s	rtfi_ok
 	bsr.w	fdc_abort                       ; stop the FDC
 	bsr.w	fill_track_f5e295               ; fill with $f5 $e2 $95 $00
 	bra.s	rtfi_ok
 
-find_mark_fail:	; xref: 43d0,43d4,43de
+find_mark_fail:	; from: find_next_mark
 	tst.w	d7                              ; index seen?
 	beq.s	find_next_mark                  ; no: keep sampling
 	clr.w	d0                              ; d0 = 0: no more marks
@@ -6657,15 +7028,15 @@ find_mark_fail:	; xref: 43d0,43d4,43de
 ;----------------------------------------------------------------------
 ; Find the next $a1 $a1 + mark (>= $f8) from a0 up to offset d0 -> d0, d1 = mark
 ;----------------------------------------------------------------------
-find_next_mark:	; xref: 13c2,17ae,3004,3094,431e,4334,43c4
+find_next_mark:	; from: orphan_rts, rtfi_timeout, scan_track_sectors, find_next_id, read_track_find_index
 	bsr.s	sample_dma_address              ; DMA position
 	subq.l	#3,d0                           ; minus 3
 	sub.l	a0,d0                           ; bytes available from a0
 	bcs.s	find_mark_fail                  ; none
-find_mark_loop:	; xref: 43e4,43ee
+find_mark_loop:
 	subq.w	#1,d0
 	bcs.s	find_mark_fail
-find_mark_a1_loop:	; xref: 43da
+find_mark_a1_loop:
 	cmpi.b	#$a1,(a0)+                      ; find $a1
 	dbeq	d0,find_mark_a1_loop
 	bne.s	find_mark_fail
@@ -6682,33 +7053,33 @@ find_mark_a1_loop:	; xref: 43da
 ;----------------------------------------------------------------------
 ; Once: take the CRC bytes used in ID/data fields from the key track (+$1000)
 ;----------------------------------------------------------------------
-load_crc_from_key_track:	; xref: 076a,10a0
+load_crc_from_key_track:	; from: build_track_image, copy_disk_protected
 	lea	crc_loaded,a0                   ; first call?
 	cmpi.b	#$1,(a0)
 	bne.s	load_crc_ret
 	addq.b	#1,(a0)
 	move.w	track_buf_1000,crc_code         ; from key track + $1000
-load_crc_ret:	; xref: 4404
+load_crc_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Sample the DMA address (two consistent reads) -> d0, dma_pos
 ;----------------------------------------------------------------------
-sample_dma_address:	; xref: 4340,43ca,443e
+sample_dma_address:	; from: find_next_mark, read_track_find_index
 	tst.w	d7                              ; index seen?
 	beq.s	sample_dma_timeout
 	move.l	dma_pos,d0                      ; use the final position
 	rts
 
-sample_dma_timeout:	; xref: 4416
+sample_dma_timeout:
 	subq.l	#1,dma_timeout                  ; timeout--
 	beq.s	sample_dma_abort
 	btst	#$5,$fffa01                     ; index pulse?
 	bne.s	sample_dma_read
-sample_dma_index:	; xref: 444c
+sample_dma_index:
 	st	d7                              ; d7 = -1: index seen
-sample_dma_read:	; xref: 4430
+sample_dma_read:
 	move.b	$9(a6),d6                       ; DMA low byte
 	bsr.w	dma_get_address                 ; DMA address
 	cmp.b	d6,d0                           ; changed meanwhile?
@@ -6716,12 +7087,12 @@ sample_dma_read:	; xref: 4430
 	move.l	d0,dma_pos                      ; dma_pos
 	rts
 
-sample_dma_abort:	; xref: 4426
+sample_dma_abort:
 	bsr.w	rtfi_timeout                    ; stop the FDC
 	bra.s	sample_dma_index
 
 
-init_id_list:	; xref: 114a
+init_id_list:	; from: copy_disk_protected
 	clr.w	dp_num_sectors(a4)              ; num_sectors = 0
 	lea	sector_buf,a1                   ; a1 = ID time list
 	clr.l	d2
@@ -6732,7 +7103,7 @@ init_id_list:	; xref: 114a
 ; Read Address loop: store FDC status + time of each ID in sector_buf and
 ; the ID bytes (via DMA) in id_fields -> d0 = number of IDs
 ;----------------------------------------------------------------------
-read_ids_short:	; xref: 398e,3af0
+read_ids_short:	; from: op_0c_write_special_sectors, op_40_check_special_written
 	moveq	#8,d6                           ; 8 IDs
 	move.w	#$48,d2                         ; d2 = $48
 	move.l	#sector_list,d0                 ; DMA to sector_list
@@ -6740,7 +7111,7 @@ read_ids_short:	; xref: 398e,3af0
 	bra.s	read_ids_start
 
 
-read_ids_timed:	; xref: 1154
+read_ids_timed:	; from: copy_disk_protected
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.w	dp_first_mark(a4),d2            ; d2 = first mark position
 	move.w	d2,d6
@@ -6749,13 +7120,13 @@ read_ids_timed:	; xref: 1154
 	move.w	#$200,d2
 	bra.s	read_ids_set_buffer
 
-read_ids_min:	; xref: 447e
+read_ids_min:
 	cmpi.w	#$10,d2                         ; at least $10
 	bcc.s	read_ids_set_buffer
 	moveq	#16,d2
-read_ids_set_buffer:	; xref: 4484,448a
+read_ids_set_buffer:
 	move.l	#id_fields,d0                   ; DMA to id_fields
-read_ids_start:	; xref: 446e
+read_ids_start:	; from: read_ids_short
 	mulu.w	#$7,d2                          ; timeout = 3.5 * d2 + $ad40
 	lsr.w	#1,d2
 	addi.w	#$ad40,d2
@@ -6766,16 +7137,16 @@ read_ids_start:	; xref: 446e
 	bcc.s	read_ids_first
 	move.w	#$d4,(a6)                       ; Force Interrupt on index pulse
 	moveq	#-1,d7
-read_ids_wait_index:	; xref: 44c0
+read_ids_wait_index:
 	btst	#$5,$fffa01                     ; wait for the index pulse
 	dbeq	d7,read_ids_wait_index
-read_ids_first:	; xref: 44b0
+read_ids_first:
 	move.w	#$c0,(a6)                       ; Read Address
 	clr.l	d6
 	move.b	drive_speed,d6                  ; speed factor
 	move.l	d2,d0                           ; timeout - 8
 	subq.w	#8,d0
-read_ids_loop:	; xref: 44dc,44fa
+read_ids_loop:
 	btst	#$5,$fffa01                     ; wait for the ID
 	dbeq	d0,read_ids_loop
 	bne.s	read_ids_end                    ; timeout
@@ -6789,19 +7160,19 @@ read_ids_loop:	; xref: 44dc,44fa
 	move.w	d1,(a1)+                        ; store the time
 	subq.w	#4,d0                           ; timeout - 4
 	bcc.s	read_ids_loop
-read_ids_end:	; xref: 44e0
+read_ids_end:
 	moveq	#-1,d1                          ; end marker
 	move.l	d1,(a1)
 	cmpa.l	#sector_buf,a1                  ; nothing read?
 	beq.s	read_ids_done
 	moveq	#2,d1                           ; let 3 more Read Address finish
-read_ids_drain_loop:	; xref: 4512,451c
+read_ids_drain_loop:
 	btst	#$5,$fffa01                     ; MFP GPIP, FDC/HDC interrupt (low = done)
 	dbeq	d0,read_ids_drain_loop
 	move.w	#$c0,(a6)                       ; FDC Read Address
 	moveq	#-1,d0
 	dbra	d1,read_ids_drain_loop
-read_ids_done:	; xref: 4506
+read_ids_done:
 	bsr.w	fdc_abort                       ; stop the FDC
 	move.w	num_sectors,d0                  ; d0 = number of IDs
 	rts
@@ -6810,18 +7181,18 @@ read_ids_done:	; xref: 4506
 ;----------------------------------------------------------------------
 ; Append the sectors flagged as special to the verify script
 ;----------------------------------------------------------------------
-emit_special_sector_script:	; xref: 1c94,1efa
+emit_special_sector_script:	; from: emit_script_scheme_c, emit_track_script
 	move.b	#$c,(a4)+                       ; opcode $0c
 	move.b	special_count_1,(a4)+           ; count * 4
 	movea.l	sector_list_end,a3
-special_script_loop:	; xref: 455a
+special_script_loop:
 	btst	#$7,(a3)                        ; special?
 	beq.s	special_script_next
 	move.l	$2(a3),(a4)+                    ; ID bytes and CRC
 	move.w	$6(a3),(a4)+
 	bsr.s	script_add_sector               ; add the sector
 	move.w	#$4000,(a4)+                    ; opcode $40
-special_script_next:	; xref: 4540
+special_script_next:
 	lea	-$12(a3),a3                     ; previous entry
 	cmpa.l	#sector_list,a3
 	bcc.s	special_script_loop
@@ -6829,23 +7200,23 @@ special_script_next:	; xref: 4540
 
 
 ; Four bytes copied here from the copyright string (expected "SYST")
-key_syst:	; xref: 4574,45d0
+key_syst:	; from: script_add_sector
 	dc.b	$00
-key_syst_1:	; xref: 45e2
+key_syst_1:	; from: script_add_sector
 	dc.b	$00
-key_syst_2:	; xref: 4608
+key_syst_2:	; from: script_add_sector
 	dc.b	$00
-key_syst_3:	; xref: 4596
+key_syst_3:	; from: script_add_sector
 	dc.b	$00
 
 ;----------------------------------------------------------------------
 ; Append one sector of sector_list (a3) to the verify script (a4) and the
 ; data to the image buffer (a5).  Checks the "SYST" key bytes on the way.
 ;----------------------------------------------------------------------
-script_add_sector:	; xref: 1ca0,1ca8,1cb8,1d48,1d62,1d72,1eee,1f62...
+script_add_sector:	; from: emit_script_scheme_c, emit_special_sector_script, emit_script_scheme_dup, emit_track_script
 	move.l	a4,script2_ptr
 	move.l	a5,dma_pos
-	lea	$ffff8f9c,a4                    ; a4 = copyright - $7064
+	lea	copyright+8-$7128,a4            ; a4 = copyright - $7064
 	move.l	$7128(a4),key_syst              ; key_syst = "SYST"
 	movea.l	script2_ptr,a4
 	clr.w	f_sync_in_data
@@ -6862,7 +7233,7 @@ script_add_sector:	; xref: 1ca0,1ca8,1cb8,1d48,1d62,1d72,1eee,1f62...
 	beq.s	add_sector_id
 	bclr	#$4,d0
 	bclr	#$4,d4
-add_sector_id:	; xref: 45b6
+add_sector_id:
 	move.b	d0,(a4)+                        ; track
 	move.b	d4,(a4)+                        ; sector
 	clr.l	d0
@@ -6879,7 +7250,7 @@ add_sector_id:	; xref: 45b6
 	bne.s	add_sector_fuzzy
 	cmpi.b	#$2,$1(a3)                      ; ordinal < 2?
 	bcs.s	add_sector_data
-add_sector_fuzzy:	; xref: 45f2
+add_sector_fuzzy:
 	clr.l	d1
 	move.b	$1(a3),d1                       ; ordinal * 16 bytes
 	lsl.w	#4,d1
@@ -6889,27 +7260,27 @@ add_sector_fuzzy:	; xref: 45f2
 	bne.w	start                           ; wrong: restart the program
 	bra.s	add_sector_fuzzy_copy
 
-add_sector_fuzzy_loop:	; xref: 4618
+add_sector_fuzzy_loop:
 	move.b	(a5)+,(a4)+                     ; copy the bytes
-add_sector_fuzzy_copy:	; xref: 4614
+add_sector_fuzzy_copy:
 	dbra	d1,add_sector_fuzzy_loop
 	add.l	d0,d2                           ; skip the full length
 	movea.l	d2,a5
 	bra.s	add_sector_align
 
-add_sector_data:	; xref: 45e0,45fa
+add_sector_data:
 	move.w	d0,(a4)+                        ; length
 	move.b	(a5),d2                         ; first byte
 	move.b	d2,data_uniform_byte
 	clr.w	d3                              ; d3 = 0: uniform
 	bra.s	add_sector_data_next
 
-add_sector_data_loop:	; xref: 465c
+add_sector_data_loop:
 	move.b	(a5)+,d1
 	cmp.b	d2,d1
 	beq.s	add_sector_data_store           ; different byte
 	st	d3
-add_sector_data_store:	; xref: 4634
+add_sector_data_store:
 	move.b	d1,(a4)+
 	cmpi.b	#$f5,d1                         ; sync byte $f5..$f7?
 	bcs.s	add_sector_data_next
@@ -6919,27 +7290,27 @@ add_sector_data_store:	; xref: 4634
 	cmpi.b	#$2,cur_track_b                 ; track 2?
 	bne.s	add_sector_data_next
 	st	f_patch_fffb                    ; patch the fffb check later
-add_sector_data_next:	; xref: 462e,463e,4644,4654
+add_sector_data_next:
 	dbra	d0,add_sector_data_loop
 	move.b	d3,f_data_not_uniform           ; f_data_not_uniform
-add_sector_align:	; xref: 4620
+add_sector_align:
 	btst	#$0,d4                          ; odd length?
 	beq.s	add_sector_ret
 	addq.l	#2,a5                           ; skip the pad
-add_sector_ret:	; xref: 4592,466a
+add_sector_ret:
 	rts
 
-f_data_not_uniform:	; xref: 209e,20ac,4588,4660
+f_data_not_uniform:	; from: script_add_sector, emit_track_script
 	dc.b	$00
-data_uniform_byte:	; xref: 4626
+data_uniform_byte:	; from: script_add_sector
 	dc.b	$00
 
 ;----------------------------------------------------------------------
 ; Read the sectors flagged as special again and check them for fuzzy bits
 ;----------------------------------------------------------------------
-read_special_sectors:	; xref: 18ae
+read_special_sectors:	; from: read_all_sectors
 	movea.l	sector_list_end,a1              ; from the last entry backwards
-read_special_loop:	; xref: 46a2
+read_special_loop:
 	btst	#$7,(a1)                        ; special?
 	beq.s	read_special_next
 	bsr.s	read_sector_verify              ; read the sector
@@ -6949,9 +7320,9 @@ read_special_loop:	; xref: 46a2
 	beq.s	read_special_fuzzy
 	cmpi.w	#$80,$e(a1)                     ; at least $80 bytes?
 	bcs.s	read_special_next
-read_special_fuzzy:	; xref: 468a
+read_special_fuzzy:
 	bsr.w	detect_fuzzy_sector             ; check for fuzzy bits
-read_special_next:	; xref: 467c,4684,4692
+read_special_next:
 	lea	-$12(a1),a1
 	cmpa.l	#sector_list,a1
 	bcc.s	read_special_loop               ; first entry done?
@@ -6961,14 +7332,14 @@ read_special_next:	; xref: 467c,4684,4692
 ;----------------------------------------------------------------------
 ; Read one sector into the buffer, flag errors, then apply known patches
 ;----------------------------------------------------------------------
-read_sector_verify:	; xref: 18e2,467e
+read_sector_verify:	; from: read_all_sectors, read_special_sectors
 	movea.l	a0,a2                           ; a2 = buffer
 	clr.l	d1
 	move.w	$e(a1),d1                       ; data length
 	btst	#$0,d1                          ; odd?
 	beq.s	read_sector_verify_even
 	addq.w	#1,d1                           ; round up
-read_sector_verify_even:	; xref: 46b2
+read_sector_verify_even:
 	move.l	a0,d0                           ; d0 = buffer address
 	adda.l	d1,a0                           ; advance the buffer
 	bsr.w	read_sector_entry               ; read the sector
@@ -6976,10 +7347,10 @@ read_sector_verify_even:	; xref: 46b2
 	btst	#$4,(a1)                        ; no data field?
 	beq.s	read_sector_patch
 	movea.l	a2,a0                           ; undo the advance
-read_sector_verify_ret:	; xref: 46ce,46d4,46da,46de,46e2
+read_sector_verify_ret:
 	rts
 
-read_sector_patch:	; xref: 46c4
+read_sector_patch:
 	btst	#$3,d7                          ; CRC error?
 	bne.s	read_sector_verify_ret
 	bsr.w	patch_boot_scheme_b             ; boot scheme B
@@ -6996,7 +7367,7 @@ read_sector_patch:	; xref: 46c4
 ; Known protection patches applied to sector data (track 2 sector 2, track 6
 ; sector 10, boot sector variants compared at the offsets in boot_*_offsets)
 ;----------------------------------------------------------------------
-patch_track2_sector2:	; xref: 46e0
+patch_track2_sector2:	; from: read_sector_verify
 	cmpi.b	#$2,cur_track_b                 ; track 2?
 	bne.s	patch_t2s2_ret
 	cmpi.b	#$2,d1                          ; sector 2?
@@ -7005,7 +7376,7 @@ patch_track2_sector2:	; xref: 46e0
 	lea	pat_t2s2,a1                     ; pat_t2s2 at +$82
 	lea	$82(a2),a2
 	moveq	#3,d0                           ; 4 longs
-patch_t2s2_loop:	; xref: 4706
+patch_t2s2_loop:
 	cmpm.l	(a1)+,(a2)+
 	dbne	d0,patch_t2s2_loop
 	movem.l	(sp)+,a1-a2
@@ -7014,12 +7385,12 @@ patch_t2s2_loop:	; xref: 4706
 	move.w	#$1752,$86(a2)
 	rts
 
-patch_t2s2_ret:	; xref: 46ec,46f2,470e
+patch_t2s2_ret:
 	moveq	#0,d0
 	rts
 
 
-patch_track6_sector10:	; xref: 46dc
+patch_track6_sector10:	; from: read_sector_verify
 	cmpi.b	#$6,cur_track_b                 ; track 6?
 	bne.s	patch_t6s10_ret
 	cmpi.b	#$a,d1                          ; sector 10?
@@ -7027,7 +7398,7 @@ patch_track6_sector10:	; xref: 46dc
 	movem.l	a1-a2,-(sp)
 	lea	pat_t6s10,a1                    ; pat_t6s10 at +0
 	moveq	#3,d0                           ; 4 longs
-patch_t6s10_loop:	; xref: 4742
+patch_t6s10_loop:
 	cmpm.l	(a1)+,(a2)+
 	dbne	d0,patch_t6s10_loop
 	movem.l	(sp)+,a1-a2
@@ -7037,12 +7408,12 @@ patch_t6s10_loop:	; xref: 4742
 	move.w	d0,$6(a2)
 	rts
 
-patch_t6s10_ret:	; xref: 472c,4732,474a
+patch_t6s10_ret:
 	moveq	#0,d0
 	rts
 
 
-patch_boot_scheme_a:	; xref: 46d6
+patch_boot_scheme_a:	; from: read_sector_verify
 	movem.l	d1/a0-a1,-(sp)
 	tst.w	cur_track                       ; track 0?
 	bne.s	patch_boot_a_track2
@@ -7057,19 +7428,19 @@ patch_boot_scheme_a:	; xref: 46d6
 	bsr.w	compare_at_offsets              ; already patched?
 	beq.s	patch_boot_a_flag
 	bne.s	patch_boot_a_ret
-patch_boot_a_apply:	; xref: 4782
+patch_boot_a_apply:
 	lea	boot_a_offsets,a0
 	lea	boot_a_replace,a1
 	bsr.w	store_at_offsets                ; store the patch
 	st	f_fix_id_bit4                   ; fix bit 4 of the IDs
-patch_boot_a_flag:	; xref: 4794
+patch_boot_a_flag:
 	st	f_patched_boot_a
-patch_boot_a_ret:	; xref: 4770,4796,47c6,47d0,47d6,47e8,47fa
+patch_boot_a_ret:
 	movem.l	(sp)+,d1/a0-a1
 	tst.w	f_patched_boot_a
 	rts
 
-patch_boot_a_track2:	; xref: 476a
+patch_boot_a_track2:
 	tst.w	f_patched_boot_a                ; scheme A found on track 0?
 	beq.s	patch_boot_a_ret
 	cmpi.b	#$2,cur_track_b                 ; track 2?
@@ -7086,7 +7457,7 @@ patch_boot_a_track2:	; xref: 476a
 	bra.s	patch_boot_a_ret
 
 
-patch_boot_scheme_b:	; xref: 46d0
+patch_boot_scheme_b:	; from: read_sector_verify
 	movem.l	d1/a0-a1,-(sp)
 	tst.w	cur_track                       ; track 0?
 	bne.s	patch_boot_b_later
@@ -7101,12 +7472,12 @@ patch_boot_scheme_b:	; xref: 46d0
 	bsr.w	store_at_offsets                ; store the patch
 	st	f_fix_id_bit4                   ; fix bit 4 of the IDs
 	st	f_patched_boot_b
-patch_boot_b_ret:	; xref: 480c,481e,484e,485e,486e,487e,4888,488e...
+patch_boot_b_ret:
 	movem.l	(sp)+,d1/a0-a1
 	tst.w	f_patched_boot_b
 	rts
 
-patch_boot_b_later:	; xref: 4806
+patch_boot_b_later:
 	tst.w	f_patched_boot_b                ; scheme B found on track 0?
 	beq.s	patch_boot_b_ret
 	cmpi.b	#$1,cur_track_b                 ; track 1?
@@ -7122,7 +7493,7 @@ patch_boot_b_later:	; xref: 4806
 	bsr.s	store_at_offsets                ; store the patch
 	bra.s	patch_boot_b_ret
 
-patch_boot_b_track6:	; xref: 4858
+patch_boot_b_track6:
 	cmpi.b	#$6,cur_track_b                 ; track 6?
 	bne.s	patch_boot_b_ret
 	cmpi.b	#$f5,d1                         ; sector $f5?
@@ -7136,10 +7507,10 @@ patch_boot_b_track6:	; xref: 4858
 ;----------------------------------------------------------------------
 ; Compare the bytes at the offsets in (a0) with the values in (a1)
 ;----------------------------------------------------------------------
-compare_at_offsets:	; xref: 477e,4790,47e4,481a,486c
+compare_at_offsets:	; from: patch_boot_scheme_a, patch_boot_scheme_b
 	moveq	#0,d0                           ; count - 1
 	move.w	(a0)+,d0
-compare_offsets_loop:	; xref: 48ac
+compare_offsets_loop:
 	move.w	(a0)+,d1                        ; offset
 	move.b	$0(a2,d1.w),d1                  ; byte in the sector
 	cmp.b	(a1)+,d1                        ; expected?
@@ -7150,50 +7521,50 @@ compare_offsets_loop:	; xref: 48ac
 ;----------------------------------------------------------------------
 ; Store the bytes in (a1) at the offsets in (a0)
 ;----------------------------------------------------------------------
-store_at_offsets:	; xref: 47a4,47f6,482c,487c
+store_at_offsets:	; from: patch_boot_scheme_a, patch_boot_scheme_b
 	moveq	#0,d0                           ; count - 1
 	move.w	(a0)+,d0
-store_offsets_loop:	; xref: 48bc
+store_offsets_loop:
 	move.w	(a0)+,d1                        ; offset
 	move.b	(a1)+,$0(a2,d1.w)               ; store
 	dbra	d0,store_offsets_loop
 	rts
 
-boot_a_offsets:	; xref: 4772,4784,4798
+boot_a_offsets:	; from: patch_boot_scheme_a
 	dc.w	$0007,$00c9,$00e1,$00f5,$012b,$015d,$016f,$01fe
 	dc.w	$01ff
-boot_a_match:	; xref: 4778
+boot_a_match:	; from: patch_boot_scheme_a
 	dc.b	$f7,$f7,$f5,$b1,$fa,$c1,$5e,$72
-boot_a_replace:	; xref: 478a,479e
+boot_a_replace:	; from: patch_boot_scheme_a
 	dc.b	$e7,$e7,$e5,$a1,$ea,$d1,$5e,$b2
-boot_a2_offsets:	; xref: 47d8,47ea
+boot_a2_offsets:	; from: patch_boot_scheme_a
 	dc.w	$0006,$00e1,$00f9,$0115,$0129,$015f,$0191,$01a3
-boot_a2_match:	; xref: 47de
+boot_a2_match:	; from: patch_boot_scheme_a
 	dc.b	$55,$05,$cd,$a5,$bc,$94,$24
-boot_a2_replace:	; xref: 47f0
+boot_a2_replace:	; from: patch_boot_scheme_a
 	dc.b	$57,$07,$cf,$a7,$ba,$96,$22
-boot_b_offsets:	; xref: 480e,4820
+boot_b_offsets:	; from: patch_boot_scheme_b
 	dc.w	$0006,$00c3,$00d7,$010d,$013f,$0151,$01fe,$01ff
-boot_b_match:	; xref: 4814
+boot_b_match:	; from: patch_boot_scheme_b
 	dc.b	$f7,$f5,$ab,$fa,$bb,$72,$90
-boot_b_replace:	; xref: 4826
+boot_b_replace:	; from: patch_boot_scheme_b
 	dc.b	$e7,$e5,$bb,$ea,$ab,$72,$c0
-boot_b2_offsets:	; xref: 4860,4870
+boot_b2_offsets:	; from: patch_boot_scheme_b
 	dc.w	$0005,$00e5,$00fd,$0111,$0147,$0175,$0183
-boot_b2_match:	; xref: 4866
+boot_b2_match:	; from: patch_boot_scheme_b
 	dc.b	$59,$09,$61,$30,$98,$c8
-boot_b2_replace:	; xref: 4876
+boot_b2_replace:	; from: patch_boot_scheme_b
 	dc.b	$5f,$0f,$67,$32,$9e,$ca
-pat_t6s10:	; xref: 4738
+pat_t6s10:	; from: patch_track6_sector10
 	dc.w	$1092,$91b9,$0000,$10c8,$303c,$1f40,$51c8,$fffe
-pat_t2s2:	; xref: 46f8
+pat_t2s2:	; from: patch_track2_sector2
 	dc.w	$4279,$00ff,$8240,$4ef9,$0001,$0000,$4444,$2020
 
-all_bytes_even:	; xref: 49ac
+all_bytes_even:	; from: detect_fuzzy_sector
 	movem.l	d0-d1/a0,-(sp)                  ; 160 bytes
 	movea.l	a2,a0
 	move.w	#$9f,d0
-all_even_loop:	; xref: 496c
+all_even_loop:
 	move.b	(a0)+,d1
 	bclr	#$0,d1                          ; bit 0 set?
 	tst.b	d1
@@ -7205,7 +7576,7 @@ all_even_loop:	; xref: 496c
 ;----------------------------------------------------------------------
 ; Read the sector twice and compare: a difference marks a fuzzy sector
 ;----------------------------------------------------------------------
-detect_fuzzy_sector:	; xref: 1902,4694
+detect_fuzzy_sector:	; from: read_all_sectors, read_special_sectors
 	movem.l	d4-d6,-(sp)                     ; read again
 	move.l	a0,d0
 	bsr.w	read_sector_entry               ; read the sector
@@ -7222,7 +7593,7 @@ detect_fuzzy_sector:	; xref: 1902,4694
 	cmp.w	d4,d2                           ; earliest difference
 	bcs.s	fuzzy_classify
 	move.w	d4,d2
-fuzzy_classify:	; xref: 499c
+fuzzy_classify:
 	btst	#$1,(a1)                        ; data mark present?
 	bne.s	fuzzy_check_length
 	cmpi.w	#$b0,d2                         ; difference at $b0 or later?
@@ -7231,11 +7602,11 @@ fuzzy_classify:	; xref: 499c
 	beq.s	fuzzy_set_flag
 	cmpi.w	#$5053,(a2)                     ; "PS"?
 	bne.s	fuzzy_mark_sector
-fuzzy_set_flag:	; xref: 49ae
+fuzzy_set_flag:
 	st	f_fuzzy_sector                  ; f_fuzzy_sector
 	bra.s	fuzzy_mark_sector
 
-fuzzy_check_length:	; xref: 49a4
+fuzzy_check_length:
 	cmpa.l	last_sector,a1                  ; last sector?
 	beq.s	fuzzy_mark_sector
 	move.w	$e(a1),d4                       ; length - difference
@@ -7243,7 +7614,7 @@ fuzzy_check_length:	; xref: 49a4
 	bcs.s	fuzzy_restore_a0                ; difference past the end?
 	cmpi.w	#$40,d4                         ; less than $40 left?
 	bcs.s	fuzzy_restore_a0
-fuzzy_mark_sector:	; xref: 49aa,49b4,49bc,49c4
+fuzzy_mark_sector:
 	bset	#$2,(a1)                        ; bit 2: fuzzy
 	lsr.w	#4,d2                           ; difference / 16
 	move.b	d2,$1(a1)                       ; as the ordinal
@@ -7252,28 +7623,28 @@ fuzzy_mark_sector:	; xref: 49aa,49b4,49bc,49c4
 	btst	#$7,(a1)                        ; special?
 	bne.s	fuzzy_restore_a0
 	clr.b	$1(a1)                          ; ordinal 0
-fuzzy_restore_a0:	; xref: 498c,49cc,49d2,49e2,49e8,4a0c
+fuzzy_restore_a0:
 	movea.l	d0,a0
-fuzzy_ret:	; xref: 4986
+fuzzy_ret:
 	movem.l	(sp)+,d4-d6
 	rts
 
-fuzzy_read_failed:	; xref: 4980,4994
+fuzzy_read_failed:
 	bclr	#$3,(a1)                        ; clear the error bit
 	move.l	a0,d0
 	move.l	a2,d2                           ; a2 = buffer
 	move.w	$e(a1),d1                       ; length
 	bra.s	fuzzy_copy
 
-fuzzy_copy_loop:	; xref: 4a06
+fuzzy_copy_loop:
 	move.b	(a0)+,(a2)+                     ; copy the data read
-fuzzy_copy:	; xref: 4a02
+fuzzy_copy:
 	dbra	d1,fuzzy_copy_loop
 	movea.l	d2,a2
 	bra.s	fuzzy_restore_a0
 
 
-read_sector_entry:	; xref: 46ba,497c,4992
+read_sector_entry:	; from: detect_fuzzy_sector, read_sector_verify
 	clr.l	d1                              ; sector:track
 	move.b	$4(a1),d1
 	swap	d1
@@ -7287,24 +7658,24 @@ read_sector_entry:	; xref: 46ba,497c,4992
 ;----------------------------------------------------------------------
 ; Compare two sector reads -> Z set if equal, d2 = first difference
 ;----------------------------------------------------------------------
-compare_sector_reads:	; xref: 4988,4996
+compare_sector_reads:	; from: detect_fuzzy_sector
 	move.l	a0,d0
 	move.w	$e(a1),d1                       ; length
 	cmpi.w	#$20,d1                         ; at least 32
 	bcc.s	compare_reads_start
 	moveq	#32,d1
-compare_reads_start:	; xref: 4a32
+compare_reads_start:
 	subq.w	#1,d1
 	clr.l	d2                              ; d2 = position
 	movem.l	a2,-(sp)
-compare_reads_loop:	; xref: 4a42
+compare_reads_loop:
 	addq.w	#1,d2                           ; compare byte by byte
 	cmpm.b	(a0)+,(a2)+
 	dbne	d1,compare_reads_loop
 	beq.s	compare_reads_ret               ; equal
 	subq.l	#1,a0                           ; back to the difference
 	subq.l	#1,a2
-compare_reads_7bit:	; xref: 4a5a
+compare_reads_7bit:
 	move.b	(a0)+,d5                        ; compare ignoring bit 7
 	move.b	(a2)+,d6
 	bclr	#$7,d5
@@ -7313,7 +7684,7 @@ compare_reads_7bit:	; xref: 4a5a
 	dbne	d1,compare_reads_7bit
 	bne.s	compare_reads_ret               ; still different
 	move.b	#$1,f_weak_msb                  ; only bit 7 differs
-compare_reads_ret:	; xref: 4a46,4a5e
+compare_reads_ret:
 	movem.l	(sp)+,a2
 	rts
 
@@ -7321,7 +7692,7 @@ compare_reads_ret:	; xref: 4a46,4a5e
 ;----------------------------------------------------------------------
 ; Read a sector with a timed start (position derived from drive_speed)
 ;----------------------------------------------------------------------
-read_sector_timed:	; xref: 1910
+read_sector_timed:	; from: read_all_sectors
 	movem.l	d0-d7/a0-a1,-(sp)
 	clr.l	d1
 	clr.l	d2
@@ -7335,7 +7706,7 @@ read_sector_timed:	; xref: 1910
 	move.l	a1,d4                           ; remember the entry
 	move.b	$2(a1),d1                       ; track, sector
 	move.b	$4(a1),d2
-timed_find_prev_loop:	; xref: 4aa2,4aa8
+timed_find_prev_loop:
 	lea	-$12(a1),a1                     ; find the previous entry with the same ID
 	cmp.b	$2(a1),d1
 	bne.s	timed_find_prev_loop
@@ -7345,7 +7716,7 @@ timed_find_prev_loop:	; xref: 4aa2,4aa8
 	mulu.w	d0,d5                           ; d5 = offset * speed / 16
 	lsr.l	#4,d5
 	movea.l	d4,a1
-timed_calc_delay:	; xref: 4a8e
+timed_calc_delay:
 	move.w	$c(a1),d2                       ; this data offset
 	addi.w	#$200,d2                        ; + $200
 	mulu.w	d0,d2                           ; d2 = (offset + $200) * speed / 16 - d5
@@ -7360,18 +7731,18 @@ timed_calc_delay:	; xref: 4a8e
 	bsr.w	dma_read_mode
 	move.w	#$d4,(a6)                       ; Force Interrupt on index pulse
 	moveq	#-1,d0                          ; timeout
-timed_wait_index:	; xref: 4aec
+timed_wait_index:
 	btst	#$5,$fffa01                     ; wait for the index pulse
 	dbeq	d0,timed_wait_index
-timed_wait_delay:	; xref: 4af8
+timed_wait_delay:
 	btst	#$5,$fffa01                     ; delay d5 loops
 	dbra	d5,timed_wait_delay
 	move.w	#$80,(a6)                       ; Read Sector
 	bra.s	timed_watch_loop
 
-timed_store_pos:	; xref: 4b20
+timed_store_pos:
 	move.w	d0,dma_pos_w                    ; remember the DMA position
-timed_watch_loop:	; xref: 4b00,4b10
+timed_watch_loop:
 	btst	#$5,$fffa01                     ; wait for the IRQ
 	dbeq	d2,timed_watch_loop
 	beq.s	timed_read_done                 ; done
@@ -7382,10 +7753,10 @@ timed_watch_loop:	; xref: 4b00,4b10
 	moveq	#16,d0                          ; bit 4: not found
 	bra.s	timed_set_flags
 
-timed_read_done:	; xref: 4b14
+timed_read_done:
 	move.w	(a6),d0                         ; FDC status
 	andi.b	#$8,d0                          ; bit 3: CRC
-timed_set_flags:	; xref: 4b28
+timed_set_flags:
 	or.b	d0,(a1)                         ; merge into the flags
 	btst	#$4,(a1)                        ; no data field?
 	bne.s	timed_read_ret
@@ -7394,16 +7765,16 @@ timed_set_flags:	; xref: 4b28
 	move.w	$e(a1),d0                       ; length
 	beq.s	timed_read_ret
 	subq.w	#1,d0
-timed_fix_marks_loop:	; xref: 4b5a
+timed_fix_marks_loop:
 	move.b	(a0)+,d1                        ; sync bytes in the data -> $e5
 	cmpi.b	#$f5,d1
 	bcs.s	timed_fix_marks_next
 	cmpi.b	#$f8,d1
 	bcc.s	timed_fix_marks_next
 	move.b	#$e5,-$1(a0)
-timed_fix_marks_next:	; xref: 4b4c,4b52
+timed_fix_marks_next:
 	dbra	d0,timed_fix_marks_loop
-timed_read_ret:	; xref: 4b36,4b3c,4b42
+timed_read_ret:
 	movem.l	(sp)+,d0-d7/a0-a1
 	rts
 
@@ -7411,7 +7782,7 @@ timed_read_ret:	; xref: 4b36,4b3c,4b42
 ;----------------------------------------------------------------------
 ; FDC Restore with the system step rate
 ;----------------------------------------------------------------------
-fdc_restore:	; xref: 423c
+fdc_restore:	; from: set_steprate_restore
 	move.w	#$80,$2(a6)                     ; command/status register
 	bsr.w	fdc_wait_done
 	move.w	$440.w,d0                       ; seekrate
@@ -7423,16 +7794,16 @@ fdc_restore:	; xref: 423c
 ;----------------------------------------------------------------------
 ; Select drive (dp_drive) and side (dp_side) through PSG port A
 ;----------------------------------------------------------------------
-select_drive_side:	; xref: 099e,4230,4c66
+select_drive_side:	; from: select_and_restore, fdc_error_alert, seek_and_show
 	moveq	#2,d0                           ; bit 1 = drive A off
 	tst.b	dp_drive+1(a4)                  ; drive B?
 	bne.s	select_side_bit
 	moveq	#4,d0                           ; bit 2 = drive B off
-select_side_bit:	; xref: 4b80
+select_side_bit:
 	tst.b	dp_side+1(a4)                   ; side 1?
 	bne.s	select_write_psg
 	bset	#$0,d0                          ; bit 0 = side 0
-select_write_psg:	; xref: 4b88
+select_write_psg:
 	move.w	sr,-(sp)
 	ori.w	#$700,sr
 	move.b	#$e,(a5)                        ; PSG register 14 (port A)
@@ -7448,14 +7819,14 @@ select_write_psg:	; xref: 4b88
 ; Wait for Write Track to finish; with 9 sectors and no verify the command is
 ; aborted once most of the track is written
 ;----------------------------------------------------------------------
-fdc_wait_write_track:	; xref: 0a5c,0e7c
+fdc_wait_write_track:	; from: format_disk, copy_disk_normal
 	cmpi.b	#$a,dp_spt+1(a4)                ; 10+ sectors?
 	bcc.s	fdc_wait_result
 	tst.b	verify_flag                     ; verify on?
 	bne.s	fdc_wait_result
 	bsr.w	wait_dma_change                 ; DMA running?
 	beq.s	fdc_wait_result
-wait_wt_loop:	; xref: 4bd6
+wait_wt_loop:
 	subq.l	#1,d7                           ; timeout--
 	beq.s	fdc_wait_result
 	btst	#$5,$fffa01                     ; FDC done?
@@ -7469,7 +7840,7 @@ wait_wt_loop:	; xref: 4bd6
 	rts
 
 
-fdc_wait_result_rw:	; xref: 0d7e,0f44,3c76
+fdc_wait_result_rw:	; from: op_4c_verify_sectors, copy_disk_normal
 	bsr.s	fdc_wait_result                 ; lost data, CRC, RNF
 	andi.w	#$1c,d7
 	rts
@@ -7479,12 +7850,12 @@ fdc_wait_result_rw:	; xref: 0d7e,0f44,3c76
 ; Wait for the FDC and return error bits in d7: -1 timeout, $100 DMA error,
 ; else status & $5c
 ;----------------------------------------------------------------------
-fdc_wait_result:	; xref: 0b62,0e9e,33fe,4bae,4bb6,4bbc,4bc0,4be0
+fdc_wait_result:	; from: fdc_wait_result_rw, format_disk, fdc_wait_write_track, write_track_from_script, copy_disk_normal
 	bsr.s	fdc_wait_done
 	tst.l	d7                              ; timeout?
 	beq.s	fdc_timeout
 
-fdc_error_bits:	; xref: 4bca,4bda
+fdc_error_bits:	; from: fdc_wait_write_track
 	move.w	#$90,$2(a6)                     ; sector count register
 	move.w	$2(a6),d7                       ; DMA status
 	btst	#$0,d7                          ; DMA error?
@@ -7494,7 +7865,7 @@ fdc_error_bits:	; xref: 4bca,4bda
 	andi.w	#$5c,d7                         ; WP, RNF, CRC, lost data
 	rts
 
-fdc_timeout:	; xref: 4bec,4bfc
+fdc_timeout:	; from: fdc_wait_result
 	moveq	#-1,d7                          ; timeout
 	rts
 
@@ -7502,7 +7873,7 @@ fdc_timeout:	; xref: 4bec,4bfc
 ;----------------------------------------------------------------------
 ; Wait for the FDC to finish -> d7 = status
 ;----------------------------------------------------------------------
-fdc_wait_status:	; xref: 0a50,0d6a,0e26,0e70,0e8a,10f6,1124,121e...
+fdc_wait_status:	; from: script_finish, script_run_second, script_build_image, op_70_sync_read_track, op_60_long_track_write, op_54_shifted_sector_write, ...
 	bsr.s	fdc_wait_done
 	move.w	(a6),d7                         ; d7 = status
 	rts
@@ -7511,7 +7882,7 @@ fdc_wait_status:	; xref: 0a50,0d6a,0e26,0e70,0e8a,10f6,1124,121e...
 ;----------------------------------------------------------------------
 ; Force Interrupt (immediate), then wait
 ;----------------------------------------------------------------------
-fdc_abort:	; xref: 0ab0,0aba,1136,1320,1324,3466,34bc,3888...
+fdc_abort:	; from: op_70_sync_read_track, op_6c_partial_write_track, op_60_long_track_write, timed_write_sector_at, read_track_check_sig, op_54_shifted_sector_write, ...
 	move.w	#$d8,(a6)                       ; Force Interrupt immediate
 	bsr.s	fdc_delay
 	move.w	#$d0,(a6)                       ; clear Force Interrupt
@@ -7519,7 +7890,7 @@ fdc_abort:	; xref: 0ab0,0aba,1136,1320,1324,3466,34bc,3888...
 ;----------------------------------------------------------------------
 ; Wait until the FDC is not busy (timeout -> Force Interrupt)
 ;----------------------------------------------------------------------
-fdc_wait_done:	; xref: 4240,42ec,4b6a,4be8,4c10
+fdc_wait_done:	; from: fdc_wait_status, fdc_wait_result, set_steprate_restore, fdc_restore, read_key_track
 	bsr.s	fdc_delay
 	moveq	#6,d7                           ; timeout $60000
 	swap	d7
@@ -7527,21 +7898,21 @@ fdc_wait_done:	; xref: 4240,42ec,4b6a,4be8,4c10
 	btst	#$0,d7                          ; busy?
 	beq.s	fdc_wait_ret
 
-fdc_wait_irq:	; xref: 4370,4c3a
+fdc_wait_irq:	; from: rtfi_timeout
 	subq.l	#1,d7                           ; timeout--
 	beq.s	fdc_clear_force
 	btst	#$5,$fffa01                     ; FDC IRQ?
 	bne.s	fdc_wait_irq
-fdc_wait_ret:	; xref: 4c2c
+fdc_wait_ret:	; from: fdc_wait_done
 	rts
 
-fdc_clear_force:	; xref: 4c30,4d3e,4d52
+fdc_clear_force:	; from: read_ids_after_index
 	move.w	#$d0,(a6)                       ; Force Interrupt
 
-fdc_delay:	; xref: 4c1a,4c20
+fdc_delay:	; from: fdc_wait_done, fdc_abort
 	move.l	d7,-(sp)
 	moveq	#32,d7                          ; 33 loops
-fdc_delay_loop:	; xref: 4c46
+fdc_delay_loop:
 	dbra	d7,fdc_delay_loop
 	move.l	(sp)+,d7
 	rts
@@ -7550,7 +7921,7 @@ fdc_delay_loop:	; xref: 4c46
 ;----------------------------------------------------------------------
 ; Select drive/side, seek to dp_track and update the side/track display
 ;----------------------------------------------------------------------
-seek_and_show:	; xref: 0a48,0d66,0e1e,0e52,0e86,10f2,1214
+seek_and_show:	; from: format_disk, copy_disk_protected, copy_disk_normal
 	move.w	dp_side(a4),d0
 	cmp.w	dp_shown_side(a4),d0            ; side changed?
 	beq.s	seek_check_track
@@ -7559,7 +7930,7 @@ seek_and_show:	; xref: 0a48,0d66,0e1e,0e52,0e86,10f2,1214
 	move.b	d0,txt_side_digit
 	bsr.w	select_drive_side               ; select drive and side
 	bsr.w	show_side
-seek_check_track:	; xref: 4c56
+seek_check_track:
 	clr.l	d0
 	move.w	dp_track(a4),d0
 	cmp.w	dp_shown_track(a4),d0           ; track changed?
@@ -7578,7 +7949,7 @@ seek_check_track:	; xref: 4c56
 ;----------------------------------------------------------------------
 ; FDC Seek to track d0
 ;----------------------------------------------------------------------
-fdc_seek:	; xref: 42e8,4c7e
+fdc_seek:	; from: seek_and_show, read_key_track
 	move.w	#$86,$2(a6)                     ; data register
 	move.w	d0,(a6)                         ; target track
 	move.w	#$80,$2(a6)                     ; command/status register
@@ -7586,14 +7957,14 @@ fdc_seek:	; xref: 42e8,4c7e
 	andi.w	#$3,d7
 	bset	#$4,d7                          ; Seek command
 	move.w	d7,(a6)
-fdc_seek_ret:	; xref: 4c78
+fdc_seek_ret:	; from: seek_and_show
 	rts
 
 
 ;----------------------------------------------------------------------
 ; Load the FDC track register with d1 (cached in fdc_track_reg)
 ;----------------------------------------------------------------------
-fdc_set_track_reg:	; xref: 22b2,2a88,3420,38da,39d8,3d50,4a7c,4ce0...
+fdc_set_track_reg:	; from: fdc_read_sector, fdc_write_sector_flags, op_54_shifted_sector_write, op_0c_write_special_sectors, advance_script, emit_track_script, ...
 	cmp.w	fdc_track_reg_w,d1              ; same track?
 	beq.s	fdc_track_reg_done
 	move.w	#$82,$2(a6)                     ; track register
@@ -7601,7 +7972,7 @@ fdc_set_track_reg:	; xref: 22b2,2a88,3420,38da,39d8,3d50,4a7c,4ce0...
 	move.w	#$86,$2(a6)                     ; data register
 	move.w	d1,(a6)
 	move.w	#$80,(a6)                       ; command/status register
-fdc_track_reg_done:	; xref: 4cc2
+fdc_track_reg_done:
 	move.l	d1,fdc_track_reg
 	rts
 
@@ -7609,11 +7980,11 @@ fdc_track_reg_done:	; xref: 4cc2
 ;----------------------------------------------------------------------
 ; Read Sector: d1 = sector:track, d0 = DMA address
 ;----------------------------------------------------------------------
-fdc_read_sector:	; xref: 34d4,34f8,37b0,37f6,3b9a,3c72,404e,4a1a
+fdc_read_sector:	; from: op_60_long_track_write, op_4c_verify_sectors, verify_special_sectors, write_fuzzy_bits, read_sector_entry, op_24_write_verify
 	bsr.s	fdc_set_track_reg
 	swap	d1                              ; d1.w = sector
 
-fdc_read_sector_cmd:	; xref: 0aa2,0d76,0f3c
+fdc_read_sector_cmd:	; from: format_disk, copy_disk_normal
 	bsr.w	fdc_set_sector_dma              ; sector register, DMA address
 	bsr.w	dma_read_mode
 	move.w	#$80,(a6)                       ; Read Sector
@@ -7623,7 +7994,7 @@ fdc_read_sector_cmd:	; xref: 0aa2,0d76,0f3c
 ;----------------------------------------------------------------------
 ; Write Sector with command flags d2: d1 = sector:track, d0 = DMA address
 ;----------------------------------------------------------------------
-fdc_write_sector_flags:	; xref: 376c,382c,3fe2
+fdc_write_sector_flags:	; from: op_60_long_track_write, timed_write_sector_at, op_24_write_verify
 	bsr.s	fdc_set_track_reg
 	swap	d1
 	bsr.w	fdc_set_sector_dma
@@ -7636,7 +8007,7 @@ fdc_write_sector_flags:	; xref: 376c,382c,3fe2
 ;----------------------------------------------------------------------
 ; Write Sector: d1 = sector, d0 = DMA address
 ;----------------------------------------------------------------------
-fdc_write_sector:	; xref: 0b5e,0e96
+fdc_write_sector:	; from: format_disk, copy_disk_normal
 	bsr.s	fdc_set_sector_dma
 	bsr.w	dma_write_mode
 	move.w	#$a0,(a6)                       ; Write Sector
@@ -7646,10 +8017,10 @@ fdc_write_sector:	; xref: 0b5e,0e96
 ;----------------------------------------------------------------------
 ; Read Track into track_buf
 ;----------------------------------------------------------------------
-fdc_read_track:	; xref: 1128,12d2,4082,42f0
+fdc_read_track:	; from: read_track_check_sig, copy_disk_protected, measure_drive_speed, read_key_track
 	bsr.s	dma_set_track_buf
 
-fdc_read_track_cmd:	; xref: 4164
+fdc_read_track_cmd:	; from: op_70_sync_read_track
 	bsr.w	dma_read_mode
 	move.w	#$e0,(a6)                       ; Read Track
 	rts
@@ -7658,10 +8029,10 @@ fdc_read_track_cmd:	; xref: 4164
 ;----------------------------------------------------------------------
 ; Write Track from track_buf
 ;----------------------------------------------------------------------
-fdc_write_track:	; xref: 0a54,0e74,33fa,345c,3b4c,41a2
+fdc_write_track:	; from: op_70_sync_read_track, write_track_until, format_disk, write_track_from_script, write_fuzzy_bits, copy_disk_normal
 	bsr.s	dma_set_track_buf
 
-fdc_write_track_cmd:	; xref: 3fb0
+fdc_write_track_cmd:	; from: op_60_long_track_write
 	bsr.s	dma_write_mode
 	move.w	#$f0,(a6)                       ; Write Track
 	rts
@@ -7670,7 +8041,7 @@ fdc_write_track_cmd:	; xref: 3fb0
 ;----------------------------------------------------------------------
 ; Wait for the index pulse, then Read Address three times into sector_list
 ;----------------------------------------------------------------------
-read_ids_after_index:	; xref: 0c24
+read_ids_after_index:	; from: read_source_bpb
 	move.l	#sector_list,d0                 ; DMA to sector_list
 	bsr.s	dma_set_address
 	bsr.s	dma_read_mode
@@ -7678,14 +8049,14 @@ read_ids_after_index:	; xref: 0c24
 	swap	d7
 	moveq	#2,d0                           ; 3 Read Address
 	move.w	#$d4,(a6)                       ; Force Interrupt on index pulse
-rai_wait_index:	; xref: 4d4a
+rai_wait_index:
 	subq.l	#1,d7                           ; timeout--
 	beq.w	fdc_clear_force
 	btst	#$5,$fffa01                     ; wait for the index pulse
 	bne.s	rai_wait_index
-rai_read_address:	; xref: 4d60
+rai_read_address:
 	move.w	#$c0,(a6)                       ; Read Address
-rai_wait_id:	; xref: 4d5e
+rai_wait_id:
 	subq.l	#1,d7                           ; timeout--
 	beq.w	fdc_clear_force
 	btst	#$5,$fffa01                     ; wait for the ID
@@ -7695,19 +8066,19 @@ rai_wait_id:	; xref: 4d5e
 	rts
 
 
-dma_set_track_buf:	; xref: 4d12,4d1e
+dma_set_track_buf:	; from: fdc_write_track, fdc_read_track
 	move.l	#track_buf,d0
 	bra.s	dma_set_address
 
 
-fdc_set_sector_dma:	; xref: 4ce4,4cf6,4d06
+fdc_set_sector_dma:	; from: fdc_read_sector_cmd, fdc_write_sector_flags, fdc_write_sector
 	move.w	#$84,$2(a6)                     ; sector register
 	move.w	d1,(a6)
 
 ;----------------------------------------------------------------------
 ; DMA helpers
 ;----------------------------------------------------------------------
-dma_set_address:	; xref: 2aa8,38f4,39ee,3a84,3d64,3e4c,3fac,411c...
+dma_set_address:	; from: op_70_sync_read_track, dma_set_track_buf, op_6c_partial_write_track, op_60_long_track_write, op_54_shifted_sector_write, op_40_check_special_written, ...
 	move.b	d0,$9(a6)                       ; DMA base low
 	lsr.l	#8,d0
 	move.b	d0,$7(a6)                       ; DMA base mid
@@ -7716,7 +8087,7 @@ dma_set_address:	; xref: 2aa8,38f4,39ee,3a84,3d64,3e4c,3fac,411c...
 	rts
 
 
-dma_write_mode:	; xref: 38f8,39f2,3d68,4120,4cfa,4d08,4d20
+dma_write_mode:	; from: fdc_write_track_cmd, op_6c_partial_write_track, fdc_write_sector_flags, op_54_shifted_sector_write, op_0c_write_special_sectors, fdc_write_sector, ...
 	move.w	#$90,$2(a6)                     ; toggle read/write
 	move.w	#$190,$2(a6)                    ; sector count register, write
 	move.w	#$d,(a6)                        ; sector count = 13
@@ -7724,7 +8095,7 @@ dma_write_mode:	; xref: 38f8,39f2,3d68,4120,4cfa,4d08,4d20
 	rts
 
 
-dma_read_mode:	; xref: 2aac,3a88,3e50,44a8,4ada,4ce8,4d14,4d30
+dma_read_mode:	; from: fdc_read_track_cmd, fdc_read_sector_cmd, op_54_shifted_sector_write, op_40_check_special_written, read_ids_timed, read_ids_after_index, ...
 	move.w	#$190,$2(a6)                    ; toggle write/read
 	move.w	#$90,$2(a6)                     ; sector count register, read
 	move.w	#$d,(a6)                        ; sector count = 13
@@ -7735,7 +8106,7 @@ dma_read_mode:	; xref: 2aac,3a88,3e50,44a8,4ada,4ce8,4d14,4d30
 ;----------------------------------------------------------------------
 ; DMA address -> d0
 ;----------------------------------------------------------------------
-dma_get_address:	; xref: 12ee,2b04,3b5e,3e66,3f8e,408c,412e,416e...
+dma_get_address:	; from: op_70_sync_read_track, op_6c_partial_write_track, op_60_long_track_write, read_track_check_sig, op_54_shifted_sector_write, write_track_until, ...
 	clr.l	d0
 	move.b	$5(a6),d0                       ; DMA base high
 	swap	d0
@@ -7748,44 +8119,44 @@ dma_get_address:	; xref: 12ee,2b04,3b5e,3e66,3f8e,408c,412e,416e...
 ;----------------------------------------------------------------------
 ; Wait until the DMA address has moved away from sector_list
 ;----------------------------------------------------------------------
-wait_dma_start:	; xref: 0aaa
+wait_dma_start:	; from: format_disk
 	moveq	#4,d7                           ; timeout $40000
 	swap	d7
 	move.l	#sector_list,d1                 ; start address
-wait_dma_start_loop:	; xref: 4de0
+wait_dma_start_loop:
 	bsr.s	dma_get_address
 	cmp.w	d1,d0                           ; moved away?
 	bne.s	wait_dma_start_ret
 	subq.l	#1,d7
 	bne.s	wait_dma_start_loop
-wait_dma_start_ret:	; xref: 4ddc
+wait_dma_start_ret:
 	rts
 
 
 ; Second half of the tamper key ("numm" + 1)
-key_numn:	; xref: 424a
+key_numn:	; from: verify_rsc_checksums
 	dc.b	'numn'
 
 ;----------------------------------------------------------------------
 ; Wait until the DMA address low byte changes (Z set on timeout)
 ;----------------------------------------------------------------------
-wait_dma_change:	; xref: 1130,12d6,3460,3844,3fe6,4086,4128,4168...
+wait_dma_change:	; from: op_70_sync_read_track, op_6c_partial_write_track, op_60_long_track_write, timed_write_sector_at, read_track_check_sig, fdc_wait_write_track, ...
 	moveq	#4,d7                           ; timeout $40000
 	swap	d7
 	move.b	$9(a6),d0                       ; DMA low byte
-wait_dma_change_loop:	; xref: 4df8
+wait_dma_change_loop:
 	cmp.b	$9(a6),d0                       ; changed?
 	bne.s	wait_dma_change_ret
 	subq.l	#1,d7
 	bne.s	wait_dma_change_loop
-wait_dma_change_ret:	; xref: 4df4
+wait_dma_change_ret:
 	rts
 
 
 ;----------------------------------------------------------------------
 ; VBL handler: when the floppy is idle, deselect both drives via PSG port A
 ;----------------------------------------------------------------------
-vbl_deselect_drives:	; xref: 4e5e
+vbl_deselect_drives:	; from: vbl_queue_entry
 	tst.w	$43e.w                          ; floppy locked?
 	bne.s	vbl_ret
 	tst.w	drives_deselected               ; already deselected?
@@ -7799,7 +8170,7 @@ vbl_deselect_drives:	; xref: 4e5e
 	ori.b	#$7,d0                          ; deselect both drives, side 0
 	move.b	d0,$ff8802                      ; write port A
 	move.w	d0,drives_deselected
-vbl_ret:	; xref: 4e00,4e08,4e1c
+vbl_ret:
 	rts
 
 
@@ -7807,44 +8178,44 @@ vbl_ret:	; xref: 4e00,4e08,4e1c
 
 
 ; Copy of the system VBL queue (8 entries) plus vbl_deselect_drives
-vbl_queue:	; xref: 004a
+vbl_queue:	; from: prg_init
 	dc.l	$00000000,$00000000,$00000000,$00000000
 	dc.l	$00000000,$00000000,$00000000,$00000000
 vbl_queue_entry:
 	dc.l	vbl_deselect_drives
-drives_deselected:	; xref: 32f2,4e02,4e36
+drives_deselected:	; from: vbl_deselect_drives, unlock_floppy
 	dc.w	$0001
 
 ; Resource file name and alert strings
-rsc_name:	; xref: 0532
+rsc_name:	; from: load_resource
 	dc.b	'ACOPY.RSC',0
-alert_no_rsc:	; xref: 0130
+alert_no_rsc:	; from: main
 	dc.b	'[3][The RSC-file is missing!][ OK ]',0
-alert_sys_error:	; xref: 0138
+alert_sys_error:	; from: main
 	dc.b	'[3][System error|Reset computer!][ OK ]',0
-alert_resolution:	; xref: 0102
+alert_resolution:	; from: main
 	dc.b	'[1][You should use|MEDIUM or HIGH resolution!][Cancel|Continue]'
 	dc.b	0
-alert_insert_source:	; xref: 104e,12b2
+alert_insert_source:	; from: copy_disk_protected, copy_disk_normal
 	dc.b	'[1][Insert SOURCE| in drive '
-alert_insert_source_drv:	; xref: 06ac
+alert_insert_source_drv:	; from: read_settings
 	dc.b	'A!][ OK |Cancel]',0
 dat_4f27:
 	dc.b	$0e
-alert_insert_target:	; xref: 0df6,11e2
+alert_insert_target:	; from: copy_disk_protected, copy_disk_normal
 	dc.b	'[1][Insert TARGET| in drive B!][ OK |Cancel]',0
 dat_4f55:
 	dc.b	$00
 alert_insert_both:
 	dc.b	'[1][Insert SOURCE in drive A!|Insert TARGET in drive B!][ OK |Cancel]'
 	dc.b	0
-alert_target_mode:	; xref: 1016,126c
+alert_target_mode:	; from: copy_disk_protected, copy_disk_normal
 	dc.b	'[1][Insert TARGET in drive B!][Write|Read|Cancel]',0
-alert_format:	; xref: 06e0
+alert_format:	; from: read_settings
 	dc.b	'[1][Format disk|in drive A!][ OK |Cancel]',0
 alert_insert_disk:
 	dc.b	'[1][Insert disk|in drive A!][ OK |Cancel]',0
-alert_cannot_normal:	; xref: 0300,0364
+alert_cannot_normal:	; from: main_loop
 	dc.b	'[3][I cannot copy this disk|in normal mode!][ OK ]',0
 dat_5055:
 	dc.b	$6e
@@ -7861,7 +8232,7 @@ alert_lost_data:
 	dc.b	'[1][    LOST DATA Error!    ][Retry|Cancel|Continue]',0
 dat_5101:
 	dc.b	$5b
-alert_timeout:	; xref: 093c
+alert_timeout:	; from: fdc_error_alert
 	dc.b	'[1][     TIMEOUT Error!     ][Retry|Cancel|Continue]',0
 dat_5137:
 	dc.b	$70
@@ -7887,14 +8258,14 @@ dat_5237:
 	dc.b	$69
 
 ; AES and VDI parameter blocks
-aes_pb:	; xref: 00a2
+aes_pb:	; from: aes_trap
 	dc.l	control
 	dc.l	global
 	dc.l	intin
 	dc.l	intout
 	dc.l	addrin
 	dc.l	addrout
-vdi_pb:	; xref: 00b0
+vdi_pb:	; from: vdi_trap
 	dc.l	control
 	dc.l	intin
 	dc.l	ptsin
@@ -7902,47 +8273,47 @@ vdi_pb:	; xref: 00b0
 	dc.l	ptsout
 
 ; Object/state pairs applied when only one drive is present
-single_drive_states:	; xref: 01b2
+single_drive_states:	; from: main
 	dc.b	$07,$08,$0a,$01,$0b,$08,$00,$6e
 
 ; Objects whose text address and screen position are cached in obj_text_table
-text_objects:	; xref: 01fc
+text_objects:	; from: main
 	dc.b	$31,$37,$3b,$3c,$00,$5d
 
 ; Radio button objects read into the settings bytes
-radio_objects:	; xref: 0686
+radio_objects:	; from: read_settings
 	dc.b	$07,$0b,$0e,$12,$16,$2c,$1b,$21,$22,$26,$00,$65
-txt_reading:	; xref: 08c8
+txt_reading:	; from: show_reading
 	dc.b	' Reading ',0
-txt_writing:	; xref: 08d0
+txt_writing:	; from: show_writing
 	dc.b	' Writing ',0
-txt_formating:	; xref: 08d8
+txt_formating:	; from: show_formatting
 	dc.b	'Formating',0
-txt_drive_letter:	; xref: 08e8,08f6
+txt_drive_letter:	; from: show_formatting
 	dc.b	$20,$00
-txt_side_digit:	; xref: 0918,4c60
+txt_side_digit:	; from: seek_and_show, show_side
 	dc.b	$20,$00
-txt_track_digits:	; xref: 0928,4c88
+txt_track_digits:	; from: seek_and_show, show_side
 	dc.b	$20
-txt_track_digit_lo:	; xref: 4c94
+txt_track_digit_lo:	; from: seek_and_show
 	dc.b	$20,$00,$43
 
 ; Start/end track as set with the arrow buttons
-start_track:	; xref: 0382,108e,1108
+start_track:	; from: copy_disk_protected, button_track_arrows
 	dc.b	$00
-end_track:	; xref: 0b78
+end_track:	; from: init_disk_params
 	dc.b	$51
 
 ; XOR checksums of the five resource strings (see verify_rsc_checksums)
-rsc_checksums:	; xref: 4260
+rsc_checksums:	; from: verify_rsc_checksums
 	dc.b	$c7,$01,$1e,$42,$3c,$42
 
 ; Sector length by size code
-sector_sizes:	; xref: 2b22
+sector_sizes:	; from: sector_length
 	dc.w	$0080,$0100,$0200,$0400
 
 ; Script opcode table, indexed by opcode byte / 4
-opcode_table:	; xref: 35b6
+opcode_table:	; from: script_dispatch
 	dc.l	op_00_sync_mark_fill            ; opcode $00
 	dc.l	op_04_fill_words                ; opcode $04
 	dc.l	op_08_gap_literal               ; opcode $08
@@ -7975,14 +8346,14 @@ opcode_table:	; xref: 35b6
 	dc.l	op_74_fuzzy_marker_params       ; opcode $74
 
 ; Signature tables used by detect_signature_a/b
-sig_table_a:	; xref: 16ba
+sig_table_a:	; from: detect_signature_a
 	dc.b	$01,$03,$3e,$0f,$ff,$ff,$02,$06,$7c,$1f,$ff,$ff,$04,$0c,$f8,$3f
 	dc.b	$ff,$ff,$08,$19,$f0,$7f,$ff,$ff,$10,$33,$e0,$ff,$ff,$ff,$20,$67
 	dc.b	$c1,$ff,$ff,$ff,$40,$cf,$83,$ff,$ff,$ff,$80,$81,$9f,$07,$ff,$ff
 	dc.b	$5e,$5c,$40,$b0,$00,$00,$bc,$b8,$81,$60,$00,$00,$97,$10,$2c,$00
 	dc.b	$00,$00,$2f,$2e,$20,$58,$00,$00,$e5,$c4,$0b,$00,$00,$00,$cb,$88
 	dc.b	$16,$00,$00,$00,$79,$71,$02,$c0,$00,$00,$f2,$e2,$05,$80,$00,$00
-sig_table_b:	; xref: 16fc
+sig_table_b:	; from: detect_signature_b
 	dc.b	$24,$01,$09,$09,$ff,$48,$02,$12,$12,$ff,$09,$00,$42,$42,$ff,$12
 	dc.b	$00,$84,$84,$ff,$42,$40,$10,$90,$ff,$84,$80,$21,$21,$ff,$90,$04
 	dc.b	$24,$24,$ff,$21,$20,$08,$48,$ff,$c9,$da,$72,$72,$00,$93,$b4,$e4
@@ -7993,170 +8364,170 @@ sig_table_b:	; xref: 16fc
 
 
 ; Variables
-bpb_ptr:	ds.b	4	; xref: 0734
-buffer_start:	ds.b	4	; xref: 006a,0184,0bfe,0cc4,25b6,2640,273a,2772...
-buffer_end:	ds.b	4	; xref: 0dc4
-buffer_limit:	ds.b	4	; xref: 11bc,1246
-buffer_ptr:	ds.b	4	; xref: 0db8,0e36,0e56,0eea,11b6,1240,18c8,1958...
-buffer_ptr_saved:	ds.b	4	; xref: 0e36,0e56,0f18
-saved_ssp:	ds.b	4	; xref: 0010,0090
-resolution:	ds.b	2	; xref: 00e4,00f2,0450
-key_checked:	ds.b	1	; xref: 4282,428a
-crc_loaded:	ds.b	1	; xref: 43fa
-crc_code:	ds.b	1	; xref: 36be,4408
-crc_code_1:	ds.b	1	; xref: 07d4
-rsc_strings:	ds.b	20	; xref: 01c8,425a
-source_drive:	ds.b	1	; xref: 068c,0724,0b6a,0bee,0d38,10c2
-target_drive:	ds.b	1	; xref: 0a2c,0e12,11f8
-verify_flag:	ds.b	1	; xref: 0a62,0ef4,2256,34c0,4bb0
-multiple_flag:	ds.b	1	; xref: 1002,1258
-format_flag:	ds.b	1	; xref: 0e4a,0ec0,0f22,0fc2
-two_sides:	ds.b	1	; xref: 0b84
-prot_mode:	ds.b	1	; xref: 034e
-ten_sectors:	ds.b	1	; xref: 0748
-eleven_sectors:	ds.b	1	; xref: 073e
-interleave_6:	ds.b	1	; xref: 0758
-same_drive:	ds.b	2	; xref: 06c6,06fa,0de2,103a,11ce,129e
+bpb_ptr:	ds.b	4	; from: get_bpb
+buffer_start:	ds.b	4	; from: prg_init, main, read_source_bpb, init_copy_buffer, patch_fffb_check, patch_branches, ...
+buffer_end:	ds.b	4	; from: copy_disk_normal
+buffer_limit:	ds.b	4	; from: copy_disk_protected
+buffer_ptr:	ds.b	4	; from: script_run_second, script_copy_raw_image, script_build_image, init_copy_buffer, copy_disk_protected, advance_script, ...
+buffer_ptr_saved:	ds.b	4	; from: copy_disk_normal
+saved_ssp:	ds.b	4	; from: prg_init
+resolution:	ds.b	2	; from: main, gem_init
+key_checked:	ds.b	1	; from: check_key_disk
+crc_loaded:	ds.b	1	; from: load_crc_from_key_track
+crc_code:	ds.b	1	; from: op_20_id_field, load_crc_from_key_track
+crc_code_1:	ds.b	1	; from: build_track_image
+rsc_strings:	ds.b	20	; from: main, verify_rsc_checksums
+source_drive:	ds.b	1	; from: read_source_bpb, get_bpb, read_settings, init_disk_params, copy_disk_protected, copy_disk_normal
+target_drive:	ds.b	1	; from: format_disk, copy_disk_protected, copy_disk_normal
+verify_flag:	ds.b	1	; from: format_disk, fdc_wait_write_track, write_fuzzy_bits, emit_track_script, copy_disk_normal
+multiple_flag:	ds.b	1	; from: copy_disk_protected, copy_disk_normal
+format_flag:	ds.b	1	; from: copy_disk_normal
+two_sides:	ds.b	1	; from: init_disk_params
+prot_mode:	ds.b	1	; from: main_loop
+ten_sectors:	ds.b	1	; from: build_format_track
+eleven_sectors:	ds.b	1	; from: build_format_track
+interleave_6:	ds.b	1	; from: build_format_track
+same_drive:	ds.b	2	; from: read_settings, copy_disk_protected, copy_disk_normal
 
 ; Disk parameter block (BPB + private fields, see dp_* equates)
-disk_params:	ds.b	24	; xref: 09ea,0ba6,0c3c,0c68,0cb4
-cur_drive:	ds.b	3	; xref: 011e
-cur_side_b:	ds.b	5	; xref: 24f4,36d6
-cur_track:	ds.b	1	; xref: 22ac,24ec,2576,4764,4800
-cur_track_b:	ds.b	25	; xref: 19cc,1b74,2368,270e,2cee,36d0,4390,464c...
-first_mark_pos:	ds.b	4	; xref: 3032
-num_sectors:	ds.b	3	; xref: 1166,151a,1568,1662,1696,17f2,18b8,1992...
-last_mark:	ds.b	1	; xref: 13da,2fd8,4324
-dma_pos:	ds.b	2	; xref: 13e4,1410,14ec,1d66,2070,213c,2310,2464...
-dma_pos_w:	ds.b	2	; xref: 4b02,4b1a
-fuzzy_pos:	ds.b	4	; xref: 33f2,3408,3476,3f0c
-fuzzy_sector:	ds.b	4	; xref: 34c8,34ec,3f1e
-long_track_sector:	ds.b	4	; xref: 3f2a,4048,40c4
-long_track_pos:	ds.b	4	; xref: 3f38,3f92
-time_offset:	ds.b	2	; xref: 1368,2fee,3016,30a2,30de
-gap_end:	ds.b	2	; xref: 136e,14be,306c,3078
-first_id_pos:	ds.b	2	; xref: 1374,13a4,302a,304e,30b4,30bc
-sector_list_end:	ds.b	4	; xref: 0f18,0f68,0f76,14e6,15ba,1882,193e,196a...
-last_sector:	ds.b	5	; xref: 150a,181c,18ec,19a2,1ba6,1be0,1c82,1cbc...
-drive_speed:	ds.b	1	; xref: 12c8,131a,44ca,4a82
-f_data_over_index:	ds.b	2	; xref: 1362,142e,1844,1fa2
-f_overlong_data:	ds.b	2	; xref: 15c8,1606,1ddc,201e
-f_track_overflow:	ds.b	2	; xref: 15ce,1650,179e,1de2,2010
-leadin_special_pos:	ds.b	2	; xref: 1f06,222a,28f6,294c,2974,2b36,2f78,2f98
-sig_a1a1_pos:	ds.b	2	; xref: 1eb0,235a,23c4,23da
-pregap_pos:	ds.b	2	; xref: 2238,289e,2b3c
-f_scheme_0b09:	ds.b	2	; xref: 1f12,2b42,2ec4
-f_no_sync_fix:	ds.b	2	; xref: 24b6,2ce8,2f0c,2f44,2f90,2faa
-f_extra_id:	ds.b	2	; xref: 15d4,17d2,189c,1de8,1ee0,2036,221e
-f_sig_table_a:	ds.b	2	; xref: 15da,16de,1dee,1f52
-f_scheme_c:	ds.b	2	; xref: 1b6e,1bd6,1ec0
-f_fuzzy_any:	ds.b	1	; xref: 188a,1dcc,1e3e
-f_weak_msb:	ds.b	1	; xref: 4a60
-f_dup_scheme:	ds.b	2	; xref: 117a,1908,1df4,1e56,2ab0
-f_fuzzy_sector:	ds.b	2	; xref: 1890,1dd2,49b6
-f_dup_scheme_alt:	ds.b	2	; xref: 1e4e,1ed0
-f_uniform_gap:	ds.b	2	; xref: 2046,28a6,28d8,29f0,2b62
-f_scheme_1b:	ds.b	2	; xref: 198c,19c4,297c,2a2c
-f_unformatted:	ds.b	2	; xref: 2638,4302,438a
-f_ids_rotated:	ds.b	2	; xref: 137a,2b70,3194
-f_patched_boot_b:	ds.b	2	; xref: 4836,4840,4848
-f_patched_boot_a:	ds.b	2	; xref: 2360,47ae,47b8,47c0
-f_fix_id_bit4:	ds.b	2	; xref: 1862,186c,2280,251e,28ac,29c8,2b48,31d0...
-special_count:	ds.b	1	; xref: 1c8c,1ef2,2026,324e,33ec,3592,3782,397a...
-special_count_1:	ds.b	1	; xref: 3bd4,4530
-f_dup_ids:	ds.b	2	; xref: 2246,31f4,3226
-fdc_track_reg:	ds.b	1	; xref: 4cd8
-fdc_track_reg_1:	ds.b	1	; xref: 3aa6
-fdc_track_reg_w:	ds.b	1	; xref: 4cbc
-fdc_track_reg_3:	ds.b	1	; xref: 3aa0
-script2_ptr:	ds.b	4	; xref: 206a,2136,3980,3b30,4562,457c
-special_id_ptr:	ds.b	4	; xref: 396a,3a9a,3aac,3b7e,3b94
-dma_timeout:	ds.b	4	; xref: 4314,4420
-fuzzy_retries:	ds.b	3	; xref: 344c,3454
-verify_retries:	ds.b	1	; xref: 3722,377a
-f_sync_in_data:	ds.b	1	; xref: 203e,2c88,3998,3ae8,3b1c,3d40,3daa,3db8...
-write_retries:	ds.b	1	; xref: 3986,3b24,3d38,3df4
-f_patch_fffb:	ds.b	2	; xref: 10a4,25ae,2630,4656
-read_retries:	ds.b	1	; xref: 1102,1114,33c4,33ca,33d2
-read_retries_1:	ds.b	1	; xref: 111a
-delay_count:	ds.b	1	; xref: 3824,386a,3ff4,400a
-delay_count_1:	ds.b	1	; xref: 3ffa,4000,406e
-gap_size:	ds.b	2	; xref: 185a,2b54,2c7a
-f_id_ambiguous:	ds.b	2	; xref: 115e,1336,30d8
-write_delay:	ds.b	2	; xref: 10aa,3a18,3afc,3b04,3b0a,3b14,3d94,3db2...
-id_count_ref:	ds.b	4	; xref: 3992,3af4
-obj_text_table:	ds.b	16	; xref: 0202,038e
-waiting_text:	ds.b	4	; xref: 09b0
-waiting_xy:	ds.b	4	; xref: 09b8
+disk_params:	ds.b	24	; from: fill_bpb_dialog, read_source_bpb, load_base_regs, copy_disk_normal
+cur_drive:	ds.b	3	; from: main
+cur_side_b:	ds.b	5	; from: op_68_id_current_track, emit_sector_header
+cur_track:	ds.b	1	; from: emit_track_script, patch_track3, emit_sector_header, patch_boot_scheme_a, patch_boot_scheme_b
+cur_track_b:	ds.b	25	; from: op_68_id_current_track, script_add_sector, copy_raw_sector, detect_a1a1_scheme, rebuild_track79, patch_cmp_sequence, ...
+first_mark_pos:	ds.b	4	; from: find_next_id
+num_sectors:	ds.b	3	; from: read_ids_timed, copy_disk_protected, emit_track_script, emit_pregap_copy, detect_scheme_dup, detect_scheme_1b, ...
+last_mark:	ds.b	1	; from: scan_track_sectors, copy_raw_sector, read_track_find_index
+dma_pos:	ds.b	2	; from: script_add_sector, emit_script_scheme_dup, check_f0f7_sector, emit_track_script, emit_data_check_opcode, read_sector_timed, ...
+dma_pos_w:	ds.b	2	; from: read_sector_timed
+fuzzy_pos:	ds.b	4	; from: op_58_fuzzy_marker, write_track_from_script, write_fuzzy_bits
+fuzzy_sector:	ds.b	4	; from: op_58_fuzzy_marker, write_fuzzy_bits
+long_track_sector:	ds.b	4	; from: op_60_long_track_write, set_write_params_id, op_5c_long_track_prep
+long_track_pos:	ds.b	4	; from: op_60_long_track_write, op_5c_long_track_prep
+time_offset:	ds.b	2	; from: scan_track_sectors, find_next_id, copy_raw_sector
+gap_end:	ds.b	2	; from: scan_track_sectors, find_next_id
+first_id_pos:	ds.b	2	; from: scan_track_sectors, find_next_id
+sector_list_end:	ds.b	4	; from: emit_track_script, emit_special_sector_script, emit_script_scheme_dup, emit_dup_sector_timing, detect_scheme_dup, read_track_sectors, ...
+last_sector:	ds.b	5	; from: emit_script_scheme_c, emit_script_scheme_dup, emit_track_script, emit_inter_sector_gap, detect_scheme_dup, detect_scheme_1b, ...
+drive_speed:	ds.b	1	; from: read_ids_timed, read_sector_timed, measure_drive_speed
+f_data_over_index:	ds.b	2	; from: emit_track_script, choose_gap_size, scan_track_sectors
+f_overlong_data:	ds.b	2	; from: emit_track_script, detect_scheme_dup, calc_sector_gaps
+f_track_overflow:	ds.b	2	; from: emit_track_script, detect_scheme_dup, calc_sector_gaps, orphan_rts
+leadin_special_pos:	ds.b	2	; from: emit_track_script, emit_leadin_gap, emit_leadin_or_gap, copy_raw_sector
+sig_a1a1_pos:	ds.b	2	; from: emit_track_script, emit_script_a1a1, detect_a1a1_scheme
+pregap_pos:	ds.b	2	; from: emit_track_script, emit_pregap_copy, emit_leadin_or_gap
+f_scheme_0b09:	ds.b	2	; from: emit_track_script, emit_leadin_or_gap, copy_raw_sector
+f_no_sync_fix:	ds.b	2	; from: fix_sync_bytes, copy_raw_sector
+f_extra_id:	ds.b	2	; from: emit_track_script, detect_scheme_dup, read_all_sectors, calc_sector_gaps, orphan_rts
+f_sig_table_a:	ds.b	2	; from: detect_signature_a, emit_track_script, detect_scheme_dup, calc_sector_gaps
+f_scheme_c:	ds.b	2	; from: emit_track_script, detect_scheme_c
+f_fuzzy_any:	ds.b	1	; from: detect_scheme_dup, read_all_sectors
+f_weak_msb:	ds.b	1	; from: compare_sector_reads
+f_dup_scheme:	ds.b	2	; from: copy_disk_protected, emit_dup_sector_timing, detect_scheme_dup, read_all_sectors
+f_fuzzy_sector:	ds.b	2	; from: detect_scheme_dup, read_all_sectors, detect_fuzzy_sector
+f_dup_scheme_alt:	ds.b	2	; from: emit_track_script, detect_scheme_dup
+f_uniform_gap:	ds.b	2	; from: emit_track_script, emit_gap_after_id, emit_leadin_or_gap, detect_uniform_gap
+f_scheme_1b:	ds.b	2	; from: emit_scheme_1b_data, emit_gap_after_id, detect_scheme_1b
+f_unformatted:	ds.b	2	; from: patch_timing_loops, read_track_find_index, rtfi_timeout
+f_ids_rotated:	ds.b	2	; from: emit_leadin_or_gap, scan_track_sectors, rotate_id_list
+f_patched_boot_b:	ds.b	2	; from: patch_boot_scheme_b
+f_patched_boot_a:	ds.b	2	; from: detect_a1a1_scheme, patch_boot_scheme_a
+f_fix_id_bit4:	ds.b	2	; from: emit_track_script, script_add_sector, emit_gap_after_id, emit_sector_header, emit_leadin_or_gap, detect_uniform_gap, ...
+special_count:	ds.b	1	; from: script_run_second, op_54_shifted_sector_write, write_track_until, op_44_id_sector_ff, op_40_check_special_written, op_0c_write_special_sectors, ...
+special_count_1:	ds.b	1	; from: op_44_id_sector_ff, emit_special_sector_script
+f_dup_ids:	ds.b	2	; from: emit_track_script, mark_special_sectors
+fdc_track_reg:	ds.b	1	; from: fdc_set_track_reg
+fdc_track_reg_1:	ds.b	1	; from: op_40_check_special_written
+fdc_track_reg_w:	ds.b	1	; from: fdc_set_track_reg
+fdc_track_reg_3:	ds.b	1	; from: op_40_check_special_written
+script2_ptr:	ds.b	4	; from: op_0c_write_special_sectors, op_40_check_special_written, script_add_sector, emit_track_script
+special_id_ptr:	ds.b	4	; from: op_40_check_special_written, verify_special_sectors, op_0c_write_special_sectors
+dma_timeout:	ds.b	4	; from: sample_dma_address, read_track_find_index
+fuzzy_retries:	ds.b	3	; from: write_fuzzy_bits
+verify_retries:	ds.b	1	; from: op_24_write_verify
+f_sync_in_data:	ds.b	1	; from: op_54_shifted_sector_write, op_0c_write_special_sectors, op_40_check_special_written, script_add_sector, emit_inter_sector_gap, emit_track_script
+write_retries:	ds.b	1	; from: op_54_shifted_sector_write, op_0c_write_special_sectors, op_40_check_special_written
+f_patch_fffb:	ds.b	2	; from: copy_disk_protected, patch_fffb_check, script_add_sector
+read_retries:	ds.b	1	; from: copy_disk_protected, write_track_from_script
+read_retries_1:	ds.b	1	; from: copy_disk_protected
+delay_count:	ds.b	1	; from: op_60_long_track_write, timed_write_sector_at, timed_write_sector
+delay_count_1:	ds.b	1	; from: op_60_long_track_write
+gap_size:	ds.b	2	; from: emit_inter_sector_gap, emit_leadin_or_gap, choose_gap_size
+f_id_ambiguous:	ds.b	2	; from: copy_disk_protected, scan_track_sectors, find_next_id
+write_delay:	ds.b	2	; from: op_54_shifted_sector_write, op_0c_write_special_sectors, op_40_check_special_written, copy_disk_protected
+id_count_ref:	ds.b	4	; from: op_0c_write_special_sectors, op_40_check_special_written
+obj_text_table:	ds.b	16	; from: main, button_track_arrows
+waiting_text:	ds.b	4	; from: show_waiting
+waiting_xy:	ds.b	4	; from: show_status_text
 drive_text:	ds.b	4
-drive_label_xy:	ds.b	4	; xref: 0226
-sector_id_ptrs:	ds.b	44	; xref: 0786,080a
-drive_xy:	ds.b	4	; xref: 0220,08e2
-side_xy:	ds.b	4	; xref: 0912
-track_xy:	ds.b	4	; xref: 0922
-vdi_handle:	ds.b	4	; xref: 0448,047e,0648
-tree_main:	ds.b	4	; xref: 01a2,01f2
-tree_about:	ds.b	4	; xref: 01d6,02d6
-tree_blank:	ds.b	4	; xref: 0418
-tree_bpb:	ds.b	4	; xref: 0310
-char_w:	ds.b	2	; xref: 0148,0456
-char_h_adj:	ds.b	2	; xref: 00fc,061e
-desk_xy:	ds.b	4	; xref: 04ec,0678
-desk_wh:	ds.b	4	; xref: 04f2,067e
-dlg_xy:	ds.b	4	; xref: 05ca
-dlg_wh:	ds.b	4	; xref: 05d4
-control:	ds.b	12	; xref: 065c,5238,5250
-contrl_handle:	ds.b	10	; xref: 047e,0648
-global:	ds.b	30	; xref: 523c
-intin:	ds.b	2	; xref: 045c,04ac,04cc,050c,0548,05e6,0608,062c...
-intin_1:	ds.b	254	; xref: 04d2,054e
-ptsin:	ds.b	512	; xref: 0626,5258
-intout:	ds.b	2	; xref: 0128,0442,04c0,0566,05f6,5244,525c
-intout_1:	ds.b	2	; xref: 04e6,05ca,0618
-intout_2:	ds.b	2	; xref: 05d4
-intout_3:	ds.b	250	; xref: 052a
-ptsout:	ds.b	24	; xref: 5260
-addrin:	ds.b	256	; xref: 04a6,0532,0574,05a2,05b8,05e0,0602,5248
-addrout:	ds.b	254	; xref: 0560,524c
-track_buf_m2:	ds.b	2	; xref: 23be
+drive_label_xy:	ds.b	4	; from: main
+sector_id_ptrs:	ds.b	44	; from: fill_sector_ids, build_track_image
+drive_xy:	ds.b	4	; from: main, show_formatting
+side_xy:	ds.b	4	; from: show_side
+track_xy:	ds.b	4	; from: show_side
+vdi_handle:	ds.b	4	; from: vdi_call, gem_init
+tree_main:	ds.b	4	; from: main
+tree_about:	ds.b	4	; from: main, main_loop
+tree_blank:	ds.b	4	; from: redraw_main_dialog
+tree_bpb:	ds.b	4	; from: main_loop
+char_w:	ds.b	2	; from: main, gem_init
+char_h_adj:	ds.b	2	; from: main, object_screen_pos
+desk_xy:	ds.b	4	; from: set_intin_clip, get_desktop_area
+desk_wh:	ds.b	4	; from: set_intin_clip, get_desktop_area
+dlg_xy:	ds.b	4	; from: center_dialog
+dlg_wh:	ds.b	4	; from: center_dialog
+control:	ds.b	12	; from: set_control, aes_pb, vdi_pb
+contrl_handle:	ds.b	10	; from: vdi_call, gem_init
+global:	ds.b	30	; from: aes_pb
+intin:	ds.b	2	; from: alert, object_screen_pos, set_intin_clip, do_dialog, mouse_busy, draw_text, ...
+intin_1:	ds.b	254	; from: get_tree, get_desktop_area
+ptsin:	ds.b	512	; from: draw_text, vdi_pb
+intout:	ds.b	2	; from: main, alert, do_dialog, get_tree, gem_init, aes_pb, ...
+intout_1:	ds.b	2	; from: object_screen_pos, center_dialog, get_desktop_area
+intout_2:	ds.b	2	; from: center_dialog
+intout_3:	ds.b	250	; from: get_mouse_button
+ptsout:	ds.b	24	; from: vdi_pb
+addrin:	ds.b	256	; from: alert, object_screen_pos, unselect_button_nodraw, do_dialog, draw_tree, center_dialog, ...
+addrout:	ds.b	254	; from: get_tree, aes_pb
+track_buf_m2:	ds.b	2	; from: detect_a1a1_scheme
 
 ; Track image / raw track buffer
-track_buf:	ds.b	1	; xref: 076e,134a,13ea,140a,14f2,1558,1676,17a6...
-track_buf_1:	ds.b	1	; xref: 242e
-track_buf_2:	ds.b	1	; xref: 16a0,4116
-track_buf_3:	ds.b	1	; xref: 2954,2f72
-track_buf_4:	ds.b	4	; xref: 291e
-track_buf_8:	ds.b	2	; xref: 3e84
-track_buf_a:	ds.b	6	; xref: 21b0
-track_buf_10:	ds.b	80	; xref: 12f2
-track_buf_60:	ds.b	34	; xref: 2380,2d0a,2d16,4110,4144
-track_buf_82:	ds.b	558	; xref: 4132
-track_buf_2b0:	ds.b	3408	; xref: 2d24
-track_buf_1000:	ds.b	1888	; xref: 1a70,4408
-track_buf_1760:	ds.b	96	; xref: 43a4
-track_buf_17c0:	ds.b	256	; xref: 4bd0
-shift_sector_buf:	ds.b	19	; xref: 39e8
-shift_sector_data:	ds.b	45	; xref: 39a0
-track_buf_1900:	ds.b	256	; xref: 4344
-sector_buf:	ds.b	8	; xref: 135c,1896,1a36,1ea2,3134,3184,319e,3a7e...
-sector_buf_8:	ds.b	4	; xref: 2722
-sector_buf_c:	ds.b	500	; xref: 272e
-sector_buf_200:	ds.b	512	; xref: 3e6a
-id_fields:	ds.b	256	; xref: 1356,2fe4,31a4,3ab2,3b40,3b62,3c00,3c96...
-shift_buf2:	ds.b	1280	; xref: 3cf6,3d1a,3d5e
-verify_buf:	ds.b	512	; xref: 0f36,0f5e,3302
-special_ids:	ds.b	1024	; xref: 396a,3b84
-read_buf2:	ds.b	1024	; xref: 34ce,3506,37aa,37c8,3804
-read_buf3:	ds.b	1024	; xref: 34f2,37f0
+track_buf:	ds.b	1	; from: script_copy_raw_image, script_build_image, op_58_fuzzy_marker, dma_set_track_buf, op_60_long_track_write, read_track_check_sig, ...
+track_buf_1:	ds.b	1	; from: emit_raw_track_script
+track_buf_2:	ds.b	1	; from: op_6c_partial_write_track, detect_signature_a
+track_buf_3:	ds.b	1	; from: emit_leadin_gap, copy_raw_sector
+track_buf_4:	ds.b	4	; from: emit_leadin_gap
+track_buf_8:	ds.b	2	; from: op_54_shifted_sector_write
+track_buf_a:	ds.b	6	; from: emit_track_script
+track_buf_10:	ds.b	80	; from: measure_drive_speed
+track_buf_60:	ds.b	34	; from: op_6c_partial_write_track, copy_raw_sector, detect_a1a1_scheme
+track_buf_82:	ds.b	558	; from: op_6c_partial_write_track
+track_buf_2b0:	ds.b	3408	; from: copy_raw_sector
+track_buf_1000:	ds.b	1888	; from: load_crc_from_key_track, rebuild_track79
+track_buf_1760:	ds.b	96	; from: rtfi_timeout
+track_buf_17c0:	ds.b	256	; from: fdc_wait_write_track
+shift_sector_buf:	ds.b	19	; from: op_0c_write_special_sectors
+shift_sector_data:	ds.b	45	; from: op_0c_write_special_sectors
+track_buf_1900:	ds.b	256	; from: read_track_find_index
+sector_buf:	ds.b	8	; from: op_70_sync_read_track, op_60_long_track_write, set_write_params_data, op_54_shifted_sector_write, op_4c_verify_sectors, op_40_check_special_written, ...
+sector_buf_8:	ds.b	4	; from: patch_cmp_sequence
+sector_buf_c:	ds.b	500	; from: patch_cmp_sequence
+sector_buf_200:	ds.b	512	; from: op_54_shifted_sector_write
+id_fields:	ds.b	256	; from: op_60_long_track_write, set_write_params_id, op_54_shifted_sector_write, write_track_until, op_50_id_ff_sector1, op_44_id_sector_ff, ...
+shift_buf2:	ds.b	1280	; from: op_54_shifted_sector_write
+verify_buf:	ds.b	512	; from: copy_disk_normal, prepare_sector_fill
+special_ids:	ds.b	1024	; from: verify_special_sectors, op_0c_write_special_sectors
+read_buf2:	ds.b	1024	; from: write_fuzzy_bits, op_24_write_verify
+read_buf3:	ds.b	1024	; from: write_fuzzy_bits, op_24_write_verify
 
 ; Sector list (18-byte entries) / sector usage map in normal mode
-sector_list:	ds.b	2	; xref: 0a9c,0b14,0b24,0b58,0c36,0cca,1350,13ca...
-sector_list_2:	ds.b	8	; xref: 1544
-sector_list_a:	ds.b	2	; xref: 1550
-sector_list_c:	ds.b	16	; xref: 1526
-sector_list_1c:	ds.b	2	; xref: 153a
-sector_list_1e:	ds.b	226	; xref: 1532
-sector_list_100:	ds.b	5552	; xref: 3b78
+sector_list:	ds.b	2	; from: read_ids_short, read_source_bpb, read_ids_after_index, format_disk, wait_dma_start, emit_track_script, ...
+sector_list_2:	ds.b	8	; from: scan_track_sectors
+sector_list_a:	ds.b	2	; from: scan_track_sectors
+sector_list_c:	ds.b	16	; from: scan_track_sectors
+sector_list_1c:	ds.b	2	; from: scan_track_sectors
+sector_list_1e:	ds.b	226	; from: scan_track_sectors
+sector_list_100:	ds.b	5552	; from: verify_special_sectors
 bss_end:
 
 	end
