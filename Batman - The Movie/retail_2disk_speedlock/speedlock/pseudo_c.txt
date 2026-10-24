@@ -1,0 +1,446 @@
+Batman The Movie (Ocean, 1989) - 2 disk retail release, SpeedLock protection
+============================================================================
+The original release, on two disks; later reissued on one disk
+(retail_1disk_speedlock).  The SpeedLock stages are on disk 1; disk 2 has no
+boot sector (its checksum is not $1234) and no protection on track 1.
+
+C pseudocode of the boot stages, from the boot sector up to the game loader.
+Names match bootsect.s, protect.s and layer3.s; addresses are 68000 addresses.
+
+  bootsect.s  track 0 sector 1       boot sector, run by TOS
+  protect.s   track 1 sectors 5-7    at $1FD66: 3 stage decryptor, timing check
+  layer3.s    track 1 sectors 8-10   at $1FF68: same 3 stages, then a 3rd layer,
+                                     then load and decrypt the game loader
+  loader.bin  track 0 sectors 2-9    at $21000: game loader (a different one from the
+                                     1 disk reissue's: loadstub.s, loader.s)
+
+Flow:
+
+  TOS -> boot sector -> protect.s (decrypt, time sector 1, check its ID field)
+      -> patched boot sector code -> protect.s stages again over sectors 8-10
+      -> layer3.s (third layer) -> Floprd sectors 2-9 -> decrypt -> $21000
+      -> game loader
+
+Anything wrong ends in an endless ILLEGAL loop or a reboot.
+
+Helpers used below:
+
+  rol32(v, n), ror32(v, n)   32 bit rotates; the 68000 takes a register count mod 64,
+                             and a rotate by 32-63 equals a rotate by count - 32
+  swap(v)                    exchange the 16 bit halves of v
+  delay()                    dbra loop of $28 + 1 between FDC register accesses
+  dma_mode  = (short *)$FF8606, fdc = (short *)$FF8604, dma_addr = $FF8609/$FF860B/$FF860D
+  gpip      = (char *)$FFFA01, bit 5 = FDC interrupt, low while pending
+  psg       = (char *)$FF8800
+
+
+1. BOOT SECTOR (bootsect.s, track 0 sector 1)
+---------------------------------------------
+TOS reads the sector into its disk buffer and calls it, as its words add up to $1234.
+"boot" is the address of the sector in the buffer; all code is PC relative.
+
+  void boot_start(void)                          // boot + $3A
+  {
+      sp = boot + $22C;                          // boot_stack
+      SR = $2700;                                // interrupts off
+      *(long *)$08 = 0;                          // bus error
+      *(long *)$0C = 0;                          // address error
+      *(long *)$10 = 0;                          // illegal instruction
+      *(long *)$20 = 0;                          // privilege violation
+      *(long *)$24 = 0;                          // trace
+
+      // decrypt_loop: $132 bytes from $68, each eored with the byte $2E before it,
+      // which is already decrypted (the key runs from boot_start)
+      for (i = $68; i < $68 + $132; i++)
+          boot[i] ^= boot[i - $2E];
+
+      // decrypted_code
+      Setscreen($78000, $78000, 0);              // XBIOS 5
+      read_loader();
+  }
+
+  void read_loader(void)                         // boot + $80, also re-run by protect.s
+  {
+      *(long *)$20 = boot + $80;                 // privilege violation vector: lets protect.s find
+                                                 // this code to patch it
+
+      int first   = 5;                           // boot + $104, patched to 8
+      int count   = 3;                           // boot + $124
+      long dest   = $1FD66;                      // low word at boot + $C6, patched to $1FF68
+
+      psg[0] = 14;                               // port A
+      psg[2] = (psg[0] & $F8) | 5;               // drive A, side 0
+
+      *dma_mode = $86; delay(); *fdc = 1;        // data register: track 1
+      *dma_mode = $80; delay(); *fdc = $14;      // SEEK, verify, 6 ms
+      while (*gpip & $20) ;                      // wait_seek
+
+      *dma_mode = $84; delay(); *fdc = first;    // sector register
+      dma_addr = dest;
+      *dma_mode = $190; *dma_mode = $90;         // clear the DMA, sector count register
+      *fdc = count;
+      *dma_mode = $80; delay(); *fdc = $90;      // READ MULTIPLE SECTORS
+
+      // wait_dma: the FDC would go on to the end of the track, so watch the DMA address
+      short end = (dest + count * 512) & $FFFF;  // via addq.b #6 on the rotated address
+      for (;;) {
+          if (!(*gpip & $20))                    // the FDC stopped first
+              reboot();                          // jmp through the reset vector ($4)
+          if ((short)(DMA mid/low) >= end)       // signed compare
+              break;
+      }
+      *dma_mode = $80; delay(); *fdc = $D0;      // FORCE INTERRUPT
+
+      long *p = (long *)(dest + $600);           // fill_loop
+      for (i = 0; i <= $5000; i++) *p++ = $FFFFFFFF;
+      *(short *)$FF8240 = 0;                     // background black
+      goto dest;                                 // jmp (a6); after the patch: jmp $1FD66
+  }
+
+
+2. LOADER STAGES (protect.s, $1FD66-$1FF67, plain code)
+-------------------------------------------------------
+On the disk $1FF68-$20267 ($300 bytes) is encrypted.  The same stages run twice:
+over sectors 5-7 (first pass) and over sectors 8-10 read to $1FF68 (second pass).
+
+  long stage_regs[8] = { 0, 0, 3, 0, 0, 0, 0, 0 };   // $1FD6A, d0-d7
+  long bus_return_pc = $0001FED4;                    // $1FDCA, already this value on the disk
+
+  void bus_error(void)                           // vector $08
+  {
+      // 68000 group 0 frame: status word, access address, IR, SR, PC
+      sp += 10;                                  // drop all but the PC
+      *(long *)sp += 4;                          // stacked PC = faulting instruction + 2, so
+                                                 // + 4 is the next instruction
+      bus_return_pc = *(long *)sp;               // bus_error_return = $1FED4
+      return;                                    // rts to bus_error_return
+  }
+
+  void address_error(void)                       // vector $0C
+  {
+      sp += 16;
+      if (*(long *)$1FF68 != 0)                  // check_long
+          goto other_entry;                      // $20686, never on this disk
+      goto protection_check;                     // $1FF70 (first pass) / wipe_loader (second)
+  }
+
+  // mix_key: one long of the loader's own code goes into the key
+  void mix_key(long d0, long d1, long d2, long d3, long *d4, long d5, long *d6, long d7)
+  {
+      long i = ((*d6 + d0 + d1 + d2 + d3 + d7) ^ d5) & $FE;
+      *d6 = *(long *)($1FE08 + i);               // mix_table: the code from $1FE08 on
+      *d4 ^= *d6;
+  }
+
+  void loader_start(void)                        // $1FE0E
+  {
+      save d0-a7 at $5FF80;                      // saved_registers
+      d0..a6 = 0;                                // zero_regs
+      SR = $2700;
+      for (a = $08; a < $800; a += 4) {          // save_vectors_loop
+          *(long *)($60000 + a - 8) = *(long *)a;
+          *(long *)a = 0;
+      }
+      *(long *)$08 = bus_error;
+      *(long *)$0C = address_error;
+
+      // stage 1: forwards over blocks of $F0 bytes
+      d0..d7 = stage_regs;                       // only once, the registers carry on
+      for (a0 = $1FF68; a0 < $20268; a0 += $F0) {
+          for (d0 = 0; d0 != $FC; d0 = (d0 + 4) & $FF) {        // each long of the block
+              d4 = 0;
+              for (d1 = (d0 + 4) & $FF; d1 != d0; d1 = (d1 + 4) & $FF) {   // all the others
+                  d5 = *(long *)(a0 + d1);
+                  d6 = *(long *)($008 + d1);     // low vectors: 0 except $08 and $0C
+                  d7 = *(long *)($108 + d1);     // system variables: 0
+                  d4 ^= d5;  d4 ^= d6;  d4 += d5;  d4 += d7;
+                  d4 = ror32(d4, d2);            // d2 = 3
+                  d4 ^= d5;  d4 += d6;
+              }
+              mix_key(...);
+              *(long *)(a0 + d0) ^= d4;
+          }
+      }
+      a0 -= $F0;                                 // the last block
+
+      // stage 2: two passes over $180 words, key = the loader code from $1FD68 ($200 bytes)
+      for (pass = 0; pass < 2; pass++) {
+          unsigned short *data = $1FF68, *key = $1FD68, sum = 0;
+          for (i = 0; i < $180; i++) {
+              unsigned short k = key[i & $FF];
+              sum += k;
+              data[i] ^= k;
+              d2 = (data[i] & $FE) + 2;          // 2..256
+              bus_return_pc.w = *(short *)($1000000 - d2);   // $FFFF00-$FFFFFE: BUS ERROR,
+                                                 // the handler sets bus_return_pc = $0001FED4
+              data[i] ^= (unsigned short)(bus_return_pc >> 16) + i * 2;    // $0001 + offset
+          }
+          for (i = 0; i < $180; i++)             // stage2_swap
+              data[i] = rol16(data[i] ^ sum, 8) ^ sum;
+      }
+      // Without a bus error the read returns whatever is on the bus, the key is wrong
+      // and the code decrypts to garbage.
+
+      // stage 3: as stage 1, backwards, with d7 added before d5
+      d0..d7 = stage_regs;
+      for (; a0 >= $1FF68; a0 -= $F0) {
+          for (d0 = $F8; d0 != $FC; d0 = (d0 - 4) & $FF) {
+              d4 = 0;
+              for (d1 = (d0 + 4) & $FF; d1 != d0; d1 = (d1 + 4) & $FF) {
+                  d5 = *(long *)(a0 + d1);  d6 = *(long *)($008 + d1);  d7 = *(long *)($108 + d1);
+                  d4 ^= d5;  d4 ^= d6;  d4 += d7;  d4 += d5;
+                  d4 = ror32(d4, d2);
+                  d4 ^= d5;  d4 += d6;
+              }
+              mix_key(...);
+              *(long *)(a0 + d0) ^= d4;
+          }
+      }
+
+      *(long *)1 = *(long *)1;                   // odd_access: ADDRESS ERROR -> address_error
+  }
+
+
+3. PROTECTION CHECK (protect.s, $1FF70-$20209, decrypted by the stages)
+-----------------------------------------------------------------------
+  short measurements[32];                        // $20242
+  short *measure_ptr;                            // $2020E
+  short block_averages[4];                       // $2021A
+  char  dma_buffer[];                            // $20382, after the sectors
+
+  void protection_check(void)                    // $1FF70
+  {
+      SR = $2700;
+      for (a = $08; a < $800; a += 2) {          // restore_vectors_loop
+          *(short *)a = *(short *)($60000 + a - 8);
+          *(short *)($60000 + a - 8) = 0;
+      }
+      d0..a7 = saved_registers;                  // TOS registers and stack back
+      SR = $2500;                                // MFP interrupts (level 6) allowed
+      *(long *)$18 = check_passed;               // CHK vector
+
+      saved_timer_a = *(long *)$134;
+      *(long *)$134 = timer_a_irq;
+      IERA |= $20;  IMRA |= $20;                 // timer A on
+      saved_timer_ctrl = { TACR, TBCR, TCDCR };
+      TACR = 0;  TADR = 255;  TBCR = 0;  TCDCR = 0;
+
+      measure_ptr = measurements;
+      measure_sector();
+
+      // average_blocks: m[0] counted twice, so each group has 8 values
+      block_averages[0] = (2*m[0] + m[1] + ... + m[6]) / 8;
+      block_averages[1] = (m[7]  + ... + m[14]) / 8;
+      block_averages[2] = (m[15] + ... + m[22]) / 8;
+      block_averages[3] = (m[23] + ... + m[30]) / 8;
+
+      // check_timing
+      short w0 = block_averages[0], w1 = ..[1], w2 = ..[2], w3 = ..[3];
+      short d0 = $60 + 2*w1 + w3 - w0 - 2*w2;
+      short d1 = ($FF8800 >> 4) & $FF;           // $80, made from the PSG address in a4
+      if (d0 < 0 || d0 > d1)                     // chk.w d1,d0
+          goto check_passed;                     // through the CHK exception
+      check_failed();
+  }
+
+  // On the disk sector 1 of track 1 has a normal quarter, a slow quarter (bytes 128-255,
+  // about 3% slow), a fast quarter (bytes 256-383, about 6% fast) and a normal quarter:
+  //   w = 618, 649, 588, 617  ->  d0 = $60 + 1298 + 617 - 618 - 1176 = 217: passed
+  // A copy written at an even rate gives w0 = w1 = w2 = w3, so d0 = $60: failed.
+
+  void check_failed(void)                        // $20050
+  {
+      sp = *(long *)$42E - 4;                    // phystop
+      *(long *)$10 = $0E;                        // illegal instruction vector
+      *(short *)$0E = $4AFC;                     // ILLEGAL (illegal_word)
+      illegal();                                 // -> $0E -> ILLEGAL -> $0E ... for ever
+  }
+
+  void check_passed(void)                        // $20068, CHK exception
+  {
+      sp += 6;                                   // drop the SR and PC of the CHK frame
+      IERA ^= $20;  IMRA ^= $20;                 // timer A off
+      TACR, TBCR, TCDCR = saved_timer_ctrl;
+
+      dma_addr = dma_buffer;
+      *dma_mode = $190; *dma_mode = $90; delay();
+      *fdc = 14; delay();                        // 14 x 512 bytes
+      *dma_mode = $80; delay();
+      *fdc = $E0;                                // READ TRACK, track 1
+      while (*gpip & $20) ;                      // wait_fdc
+
+      // the first $FE byte within bytes $18-$97 of the track must be the ID mark of
+      // sector 1
+      unsigned char *p = dma_buffer + $18;
+      for (n = 0; n < 128; n++, p++)             // find_id_loop
+          if (p[0] == $FE) {                     // a possible ID mark
+              if (p[3] == 1)                     // track, side, sector 1
+                  goto patch_boot;
+              break;                             // id_not_found: the 1 disk reissue
+          }                                      // searches on here
+      check_failed();
+
+  patch_boot:                                    // $200F8
+      char *rl = *(char **)$20;                  // read_loader in the boot sector
+      *(short *)(rl + $A4)  = 3;                 // boot + $124: sector count 3
+      *(short *)(rl + $84)  = 8;                 // boot + $104: first sector 8
+      *(char  *)(rl + $A6)  = $5C;               // boot + $126: unchanged
+      *(char  *)(rl + $EC)  = $06;               // boot + $16C: unchanged
+      *(long  *)(rl + $46)  = $0000FF68;         // boot + $C6: DMA address $1FF68
+      *(long  *)(rl + $102) = $4EF90001;         // boot + $182: jmp $0001FD66
+      *(long  *)(rl + $106) = $FD669544;
+      goto rl;                                   // read sectors 8-10 to $1FF68, run $1FD66:
+                                                 // the stages of section 2 decrypt them
+  }
+
+  void measure_sector(void)                      // $2012E
+  {
+      *dma_mode = $84; delay(); *fdc = 1;        // sector 1
+      *dma_mode = $190; *dma_mode = $90; delay();
+      *fdc = 1; delay();                         // 1 sector
+      dma_addr = dma_buffer;
+      *dma_mode = $80; delay(); *fdc = $80; delay();   // READ SECTOR
+      last = DMA low byte;
+      TACR = 0;  TADR = 255;
+      wait_dma();                                // the first 16 bytes
+      TACR = 1;                                  // delay mode, /4: 614.4 kHz
+      for (k = 0; k < 32; k++) {                 // measure_loop
+          *measure_ptr = $FFFF;                  // high byte: counted down by timer_a_irq
+          wait_dma();                            // the next 16 bytes
+          TACR = 0;                              // stop: the counter holds its value
+          unsigned char count = TADR;
+          TADR = 255;
+          TACR = 1;
+          ((char *)measure_ptr)[1] = count;
+          *measure_ptr = -*measure_ptr << 1;     // ticks used x 2
+          measure_ptr++;
+      }
+  }
+  // measurement k is the time of bytes 16*(k+1) .. 16*(k+1)+15.  The 32nd wait times out,
+  // as the sector has no 33rd burst; only 0-30 are used.
+
+  void wait_dma(void)                            // $201CC
+  {
+      for (n = $20000; n; n--)
+          if (DMA low byte != last) { last = DMA low byte; return; }
+  }
+
+  void timer_a_irq(void)                         // $201F4, every 255 timer A ticks
+  {
+      ISRA &= ~$20;                              // end of interrupt
+      ((char *)measure_ptr)[0]--;
+  }
+
+
+4. SECOND PASS AND THIRD LAYER (layer3.s, $1FF68-$20567)
+--------------------------------------------------------
+Sectors 8-10 are read over the first pass's data; the stages of section 2 run again over
+$1FF68-$20267, check_long decrypts to 0 again and address_error goes to $1FF70.
+
+  void wipe_loader(void)                         // $1FF70
+  {
+      for (p = $1FDF4; p <= $1FF7E; p += 4)      // mix_key up to wipe_loop
+          *(long *)p = 0;
+      SR = $2700;
+      restore the vectors from $60000 as in protection_check;
+      third_layer();
+  }
+
+  // third_layer: $11E longs from $2003A, keyed by the loop's own code.  The first long it
+  // decrypts, at $2003A, is the loop's own branch back (bra.s layer_loop).
+  void third_layer(void)                         // $1FFA0
+  {
+      unsigned long d1 = 0, d3 = $FFFFFFBF, d4 = $0000FFEC, d5 = 7, d6 = $22, d2, d0;
+      short d7 = $11D;
+      long *a0 = $2003A;                         // data
+      char *a1 = $1FFD6, *a3 = $1FFD6;           // layer_loop
+      char *a2 = $1FFF8;                         // layer_store
+      char *a4 = $1FFDE, *a5 = $1FFF2, *a6 = $1FFDC, *a7 = $20002;
+
+      for (;;) {                                 // layer_loop
+          d0  = *a0++;
+          d2  = *(long *)(a1 + (short)d1);
+          d3 ^= d2;
+          d2 += d6;
+          d3  = rol32(d3, d2 & 63);
+          d3.w += *(short *)(a3 + (short)d1);
+          d2 += d3;
+          d2 |= 1;  d2 = swap(d2);  d2 |= 1;
+          d0 ^= d2;                              // decrypted
+          d1.w += d3.w;
+
+          *(long *)a2 ^= d4;  a2 += 4;           // toggles layer_store in memory
+          a0[-1] = d0;                           // layer_store: runs as prefetched, -4(a0)
+          d3 += *(long *)(a2 - 4);               // reads the toggled long
+          d2 &= d5;
+          d3.b += a4[(short)d2];
+          d2 |= $10;
+          d3.b += a5[(short)d2 - 2];
+          d3.b -= a6[(short)d2 + 8];             // can read the toggled long
+          d3.b += a7[(short)d2];
+          d2  = rol32(d2, d2 & 63);
+          d3 += (long)a2;
+          d6 += d2;
+          a2 -= 4;  *(long *)a2 ^= d4;           // toggle back
+
+          if (--d7 == -1) break;
+          d1.w &= $7E;  if (d1.w >= $60) d1.w -= $60;
+          a2 = a1 + (short)d6;                   // always layer_store on this disk
+          // $2003A: bra.s layer_loop (decrypted on the first round)
+      }
+      goto *(long *)$204AA;                      // layer_exit = load_game_loader
+  }
+
+  // Prefetch: the eor at $1FFF6 changes layer_store, the next instruction, from
+  // 'move.l d0,-4(a0)' (21 40 FF FC) to 'move.l d0,$10(a0)' (21 40 00 10).  A 68000 has
+  // already fetched the opcode and its displacement, so it still stores at -4(a0).  A CPU
+  // or emulator without the prefetch stores every long 20 bytes too far and crashes.
+
+  void load_game_loader(void)                    // $2003C, decrypted by the third layer
+  {
+      d0..a7 = saved_registers;
+      SR = $2700;
+      sp = $10000;
+      Floprd($21000, 0, 0, 2, 0, 0, 8);          // XBIOS 8: track 0 sectors 2-9, drive A;
+                                                 // the result is not checked
+      unsigned long k1 = $76FCD913, k2 = $671039DF;
+      for (i = 0; i < $400; i++) {               // decrypt_loader_loop
+          unsigned long v = ((long *)$21000)[i] ^ k1 ^ k2;
+          k1 ^= k2;
+          k2  = ror32(k2, k2 & 63);
+          k1  = rol32(k1, k1 & 63);
+          ((long *)$21000)[i] = v;
+      }
+      goto $21000;                               // the game loader (loader.bin)
+  }
+
+
+5. WHAT A MACHINE MUST DO FOR IT TO BOOT
+----------------------------------------
+- Bus error for reads at $FFFF00-$FFFFFE, with the 68000 group 0 frame and the stacked PC
+  = faulting instruction + 2 (stage 2).
+- Address error for a long access at an odd address (end of the stages).
+- CHK exception (the pass path).
+- 68000 prefetch: an instruction changed by the one before it runs as fetched (layer 3).
+- FDC: per 16 byte timing of track 1 sector 1 as mastered, with the DMA address counter
+  moving burst by burst; Read Track with the sector 1 ID field near the start of track 1.
+- MFP timer A in delay mode /4 with its interrupt, and a stopped timer that holds its count.
+- TOS Floprd for track 0 sectors 2-9.
+
+
+6. WHAT THE 1 DISK REISSUE CHANGED
+----------------------------------
+- Boot sector and track 1 sectors 8-10: the same bytes on the disk.
+- Track 1 sectors 5-7: the same plain loader code; the encrypted part differs on the disk
+  but decrypts to the same code except one byte, the branch at $200F6 (66 F6 here, 66 EC in
+  the reissue).  Here the first $FE byte found after Read Track must start the ID field of
+  sector 1, so a stray $FE in the gap before it fails the check; the reissue keeps looking,
+  which looks like a fix.
+- Track 0 sector 9 has a bad data CRC on both disks of this version; on the reissue it is a
+  normal sector.  It reads back the same data every time, so the bad CRC does not come
+  from weak bits.  On disk 1 the sector holds only leftover code of the tool that wrote the game
+  tracks, which the game loader never runs (loader.s, RETAIL_2DISK, from $1c22).  Nothing checks the
+  bad CRC: layer3 does not look at the Floprd result, and the game loader reads track 0
+  only with Read Track, which has no CRC check.  Whether it is deliberate is not known.
+- loader.bin, the game loader at $21000, is a different program: it copies $400 longs to
+  $1000 (the reissue's stub copies $500 and first writes $2E to $2E).
