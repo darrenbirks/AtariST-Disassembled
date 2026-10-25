@@ -1,10 +1,13 @@
 <!doctype html>
 <!--
-  Batman The Movie map editor, for the level 1 and level 5 map files.
+  Batman The Movie map editor, for levels 1 and 5.
 
   Open this page in a web browser, then open (or drop on it) an unpacked level1.map or
-  level5.map.  Everything happens in the browser; "Save map" hands the edited file back.
-  The README's "Map files" section describes the file format this page reads and writes.
+  level5.map, and to edit the bad guys and start positions too, the level's source
+  (level1.s or level5.s).  Everything happens in the browser; "Save map" and "Save
+  source" hand the edited files back.
+  The README's "Map files" section describes the map format, and the comment above
+  spawn_table in each source the object tables.
 -->
 <html lang="en">
 <head>
@@ -12,12 +15,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Batman Map Editor</title>
 <style>
-/* Colours: the page, and the overlay colour of each tile type. */
+/* Colours: the page, the overlay colour of each tile type, and the object markers. */
 :root {
   --bg: #16181d; --panel: #1f2229; --line: #343844; --text: #e4e6eb; --muted: #9aa0ab;
   --accent: #f2c14e; --bad: #ef6461; --ok: #5bc27a;
   --wall: rgba(239, 100, 97, .45); --open: rgba(0, 0, 0, 0); --floor: rgba(91, 194, 122, .5);
   --ladder: rgba(77, 163, 255, .55); --deadly: rgba(214, 92, 214, .6);
+  --thug: #ff9f43; --goon: #ff5e57; --special: #c56cf0; --event: #ffd32a; --checkpoint: #0be881;
+  --start: #48dbfb; --other: #d2dae2;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
@@ -30,15 +35,26 @@ button:disabled { opacity: .4; cursor: default; }
 label.file input { display: none; }
 label.check { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
 
-/* The map on the left: two canvases on top of each other (the tiles, then the overlay). */
+/* The map on the left: two canvases on top of each other (the tiles, then the overlay),
+   and the objects drawn over them as SVG. */
 main { flex: 1; display: flex; min-height: 0; }
 #view { flex: 1; overflow: auto; position: relative; background: #0d0e11; }
 #stack { position: relative; }
 #stack canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+#objectLayer { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+#stack.objects-mode #objectLayer { pointer-events: auto; }
+#stack.objects-mode { cursor: crosshair; }
+#objectLayer * { vector-effect: non-scaling-stroke; }
+#objectLayer text { pointer-events: none; font-family: system-ui, sans-serif; font-weight: 600; paint-order: stroke; stroke: #000; stroke-width: 2px; }
+#objectLayer .marker { pointer-events: none; }
+#stack.objects-mode #objectLayer .marker { pointer-events: all; cursor: move; }
+#objectLayer .link { stroke: rgba(255, 255, 255, .25); stroke-dasharray: 3 3; }
+#objectLayer .link.strong { stroke: rgba(255, 255, 255, .8); }
+#objectLayer .selected { stroke: var(--accent); stroke-width: 3px; }
 #cursor { position: absolute; border: 1px solid var(--accent); pointer-events: none; display: none; }
 #drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
 
-/* The side panel on the right: selected block, cursor, block list, tile counts. */
+/* The side panel on the right: selected block or object, cursor, lists. */
 aside { width: 340px; flex: none; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px; }
 aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
 .group { margin-bottom: 8px; }
@@ -56,41 +72,77 @@ th { color: var(--muted); font-weight: 500; }
 #msg.bad { color: var(--bad); }
 #msg.ok { color: var(--ok); }
 .hint { color: var(--muted); font-size: 12px; }
+.fields { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin: 6px 0; }
+.fields input, .fields select { background: #2b2f39; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font: inherit; width: 100%; }
+.buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.warning { color: var(--bad); }
+.tiles-only, .objects-only { display: none; }
+body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
 </style>
 </head>
-<body>
+<body class="tiles-mode">
 <header>
   <h1>Batman Map Editor</h1>
   <label class="file">Open map…<input type="file" id="file" accept=".map,.MAP"></label>
+  <label class="file">Open source…<input type="file" id="objectFile" accept=".s,.S"></label>
   <span id="level" class="hint">no map loaded</span>
+  <label class="check">Edit
+    <select id="mode"><option value="tiles">tiles</option><option value="objects">objects</option></select>
+  </label>
+  <label class="check" id="releaseLabel" hidden>Release <select id="release"></select></label>
   <label class="check">Zoom
     <select id="zoom"><option value="1">1x</option><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select>
   </label>
   <label class="check"><input type="checkbox" id="showTypes" checked> tile types</label>
   <label class="check"><input type="checkbox" id="showGrid"> grid</label>
   <label class="check"><input type="checkbox" id="showBroken"> broken pairs</label>
+  <label class="check"><input type="checkbox" id="showObjects" checked> objects</label>
+  <label class="check"><input type="checkbox" id="showTriggers" checked> triggers</label>
   <button id="undo" disabled>Undo</button>
   <button id="redo" disabled>Redo</button>
   <button id="save" disabled>Save map</button>
+  <button id="saveObjects" disabled>Save source</button>
 </header>
 <main>
   <div id="view">
-    <div id="stack"><canvas id="mapCanvas"></canvas><canvas id="overlayCanvas"></canvas><div id="cursor"></div></div>
-    <div id="drop">Open level1.map or level5.map (unpacked, from retail_1disk_speedlock\unpacked),<br>or drop it here.<br><br>
-      Left click or drag: paint the selected block. Right click: pick the block under the cursor.</div>
+    <div id="stack"><canvas id="mapCanvas"></canvas><canvas id="overlayCanvas"></canvas><svg id="objectLayer"></svg><div id="cursor"></div></div>
+    <div id="drop">Open level1.map or level5.map (unpacked, from retail_1disk_speedlock\unpacked),<br>
+      then level1.s or level5.s for the objects and the level's settings, or drop them here.<br><br>
+      Edit tiles: left click or drag paints the selected block, right click picks the block under the cursor.<br>
+      Edit objects: drag objects, triggers and start positions; click an empty spot to choose where new objects go.</div>
   </div>
   <aside>
-    <h2>Selected block</h2>
-    <div id="selected" class="hint">none</div>
+    <div class="tiles-only">
+      <h2>Selected block</h2>
+      <div id="selected" class="hint">none</div>
+    </div>
+    <div class="objects-only">
+      <h2>Selected object</h2>
+      <div id="objectInspector" class="hint">none</div>
+      <div class="buttons">
+        <select id="objectType"></select>
+        <button id="addObject">Add object</button>
+        <button id="addGroup">New group</button>
+        <button id="deleteObject">Delete</button>
+      </div>
+      <div class="hint">Add object puts the type above into the selected group, or as a single object when no group is selected, standing on the cell clicked, at its nearest edge. Drag moves by whole map cells; hold Shift to click or move by 2 pixels. Delete or Backspace deletes, arrow keys nudge.</div>
+    </div>
     <h2>Cursor</h2>
     <div id="info" class="hint">-</div>
     <div id="msg"></div>
-    <h2>Blocks</h2>
-    <div class="hint">Dimmed blocks have no tile for the pair they would make at the cursor.</div>
-    <div id="palette"></div>
-    <h2>Tiles</h2>
-    <table id="stats"></table>
-    <p class="hint">A tile is a pair of blocks: its own and the one to its right. Painting a block picks the tiles for the cell and its left neighbour. A pair with no tile can take over a tile no longer on the map, of the same type, if the game's sorted tile order stays the same; tile numbers the code uses directly are never taken.</p>
+    <div class="tiles-only">
+      <h2>Blocks</h2>
+      <div class="hint">Dimmed blocks have no tile for the pair they would make at the cursor.</div>
+      <div id="palette"></div>
+      <h2>Tiles</h2>
+      <table id="stats"></table>
+      <p class="hint">A tile is a pair of blocks: its own and the one to its right. Painting a block picks the tiles for the cell and its left neighbour. A pair with no tile can take over a tile no longer on the map, of the same type, if the game's sorted tile order stays the same; tile numbers the code uses directly are never taken.</p>
+    </div>
+    <div class="objects-only">
+      <h2>Objects</h2>
+      <div id="objectStats" class="hint">Open level1.s or level5.s.</div>
+      <p class="hint">A group appears all at once when its trigger point (the diamond) comes into view; a single object (dashed) appears when it comes into view itself. The game has room for 10 bad guys at a time. The middle of a marker's bottom edge is where the object stands; the small markers are objects the game does not draw (checkpoints, the level end watchers, things the code writes into the map). Moving a start position moves the view and the player together; edit score_scroll_x and the others in the fields.</p>
+    </div>
   </aside>
 </main>
 <script>
@@ -123,28 +175,88 @@ const BLOCK_SIZE = 16;              // pixels across and down
 // The two levels, told apart by their row length.  The palette is the one the level
 // code sets for the play area (palette_split in level1.s / level5.s).  The types list
 // gives, for each tile type, the first rank that is NOT that type any more.
+// spawnOffsetX is what spawn_enemy adds to an object's x (level 1 $50, level 5 8), and
+// roomNote says what limits the size of the object tables.
 const LEVELS = {
   204: {
     name: 'Level 1',
+    number: 1,
     palette: [0x000, 0x223, 0x445, 0x667, 0x024, 0x146, 0x632, 0x511,
               0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
     types: [[0x28, 'wall'], [0xe2, 'open'], [0xfa, 'floor'], [0x100, 'ladder']],
+    spawnOffsetX: 0x50,
+    roomNote: 'level1.s ends about 870 bytes before the map loads at $7400, so the tables can grow by about that much.',
   },
   92: {
     name: 'Level 5',
+    number: 5,
     palette: [0x000, 0x223, 0x445, 0x667, 0x024, 0x146, 0x632, 0x511,
               0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
     types: [[0x18, 'wall'], [0xca, 'open'], [0xcd, 'deadly'], [0xf8, 'floor'], [0x100, 'ladder']],
+    spawnOffsetX: 0x08,
+    roomNote: 'level5.s must keep its size, as the map loads straight after it: change font_filler (510 bytes, 372 in the 2 disk release) by the opposite of the change here.',
   },
 };
 
-// Ranks the level code writes into the map itself (the acid animation, the objects the
+// Ranks the level code writes into the map itself (the climb column, the objects the
 // player uses).  The tiles at these ranks must keep them, so they are never reused.
 const PROTECTED_RANKS = [0x00, 0x03, 0x09, 0x4f, 0x51, 0x52, 0x53, 0x54, 0x5e,
                          0x6a, 0x6b, 0x6c, 0xc5, 0xc6, 0xc7];
 
 const TYPE_ORDER = ['wall', 'open', 'deadly', 'floor', 'ladder'];
 const TYPE_LABEL = { wall: 'Wall', open: 'Open space', deadly: 'Deadly floor', floor: 'Floor', ladder: 'Ladder' };
+
+// The routine of each object type: enemy_type_table, the same in levels 1 and 5; null
+// is an empty entry.  The sources name each object's routine in its comment.  These are
+// the names until a source is open; then they come from its enemy_type_table.
+const OBJECT_ROUTINES = [
+  'player_idle', 'thug_fall', 'thug_walk_right', 'thug_walk_left', 'thug_shoot_left', 'thug_shoot_right',
+  'thug_pause_left', 'thug_pause_right', 'player_idle', 'player_idle', 'player_idle', 'player_idle',
+  'climb_up', 'climb_down', 'goon_walk_right', 'goon_walk_left', 'jack_wait', 'jack_shoot', 'jack_turn',
+  null, 'faller', 'attacker_right', 'attacker_left', 'goon_walk_left', 'vat_watch', 'vat_splash',
+  'object_use_start', 'object_use_anim', null, 'crawler_right', 'crawler_left', 'boss_climb', 'boss_climb_watch',
+  'level_complete', 'checkpoint_1', 'checkpoint_2', 'checkpoint_3',
+];
+
+// How the editor shows the object types the levels place: name, marker text, colour,
+// and whether the game draws a sprite for it (its type_sprite_table entry is not 0).
+// The bosses.  Type 23 is level 1's Jack Napier: goon_walk_left with sprite base $803d,
+// which sends it to jack_start.  Type 24 (vat_watch) watches him: knocked off, he falls
+// straight down, and when his y reaches VAT_DEPTH he turns into type 25, the splash drawn
+// at x VAT_SPLASH_X, and the level ends.  Type 24's own position does not matter (it sets
+// its y every frame); the vat is marked at VAT_SPLASH_X, VAT_DEPTH.  Jack's code has his
+// names in both sources.  Type 31 (boss_climb) is the boss climbing away and type 32
+// (boss_climb_watch) swings the climb column and watches him: on level 5, the Joker on
+// the rope ladder (map_climb_column).
+const OBJECT_LOOKS = {
+  2: ['Thug, walking right', 'T→', 'thug', true],
+  3: ['Thug, walking left', '←T', 'thug', true],
+  14: ['Goon, walking right', 'G→', 'goon', true],
+  15: ['Goon, walking left', '←G', 'goon', true],
+  20: ['Faller', 'F', 'special', true],
+  21: ['Attacker, right', 'A→', 'special', true],
+  22: ['Attacker, left', '←A', 'special', true],
+  23: ['Jack Napier', 'Jack', 'event', true],
+  24: ['Vat watch: Jack knocked into the vat ends the level', 'Watch', 'event', false],
+  25: ['Vat splash, then the level ends', 'Splash', 'event', false],
+  26: ['Object the player uses (drawn in the map)', 'Use', 'special', false],
+  29: ['Crawler, right', 'C→', 'special', true],
+  30: ['Crawler, left', '←C', 'special', true],
+  31: ['The Joker, climbing the rope ladder', 'Joker', 'event', true],
+  32: ['Rope ladder: swings it, watches the Joker', 'Ladder', 'event', false],
+  33: ['Level complete', 'End', 'event', false],
+  34: ['Checkpoint 1', 'CP1', 'checkpoint', false],
+  35: ['Checkpoint 2', 'CP2', 'checkpoint', false],
+  36: ['Checkpoint 3', 'CP3', 'checkpoint', false],
+};
+
+const MAX_ENEMIES = 10;             // the game's enemy slots
+const START_FIELDS = ['scroll_x', 'scroll_y', 'score_scroll_x', 'player_x', 'player_y', 'player_ref_y', 'camera_x'];
+const VIEW_WIDTH = 320, VIEW_HEIGHT = 160;   // about what the play area shows, in pixels
+const ENDING_FALL_DEPTH = 0x48;              // level_complete's boss lands this far below the view's top
+
+// The releases, by the names config.s gives them, in the order the sources' blocks use.
+const RELEASES = [['RETAIL_2DISK', '2 disk release'], ['RETAIL_1DISK', '1 disk reissue'], ['BUDGET_1DISK', 'budget release']];
 
 // ===================================================================================
 // State
@@ -153,9 +265,13 @@ const TYPE_LABEL = { wall: 'Wall', open: 'Open space', deadly: 'Deadly floor', f
 const $ = id => document.getElementById(id);
 
 let map = null;             // the loaded map file and everything worked out from it
-let undoStack = [];         // each entry: the list of changes one paint stroke made
+let objects = null;         // the loaded level source: its object tables and start positions
+let undoStack = [];         // each entry: the list of changes one edit made
 let redoStack = [];
 let stroke = null;          // the changes of the paint stroke in progress, or null
+let selection = null;       // the selected object (see selectionKey), or null
+let placePoint = null;      // { x, y } in object units: where new objects go
+let drag = null;            // the object drag in progress, or null
 
 // ===================================================================================
 // Loading a map file
@@ -206,17 +322,34 @@ function loadMap(fileName, arrayBuffer) {
   updateBlockTypes();
   map.selectedBlock = ownBlock(map.cells[0]);
 
+  // objects belong to one level, so a new map drops them
+  objects = null;
+  selection = null;
+  placePoint = null;
   undoStack = [];
   redoStack = [];
   $('drop').style.display = 'none';
-  $('level').textContent = `${level.name}: ${fileName}, ${width} x ${height} tiles, ${tileCount} tiles, ${blockCount} blocks`;
   $('save').disabled = false;
+  $('saveObjects').disabled = true;
+  updateLevelLabel();
   setUpCanvases();
   drawWholeMap();
   buildBlockPalette();
   updateTileStats();
   updateUndoButtons();
+  drawObjects();
+  updateObjectPanel();
   showMessage('Loaded.', 'ok');
+}
+
+function updateLevelLabel() {
+  if (!map) return;
+  let text = `${map.level.name}: ${map.fileName}, ${map.width} x ${map.height} tiles, ${map.tileCount} tiles, ${map.blockCount} blocks`;
+  if (objects) {
+    text += `; objects from ${objects.fileName}`;
+    if (objects.hasBlocks) text += `, showing the ${RELEASES.find(([r]) => r === objects.release)[1]}`;
+  }
+  $('level').textContent = text;
 }
 
 // An ST colour word ($0RGB, 0-7 a channel) as [r, g, b], 0-255.
@@ -302,7 +435,7 @@ function isBrokenPair(cell) {
 }
 
 // ===================================================================================
-// Drawing
+// Drawing the map
 // ===================================================================================
 
 function setUpCanvases() {
@@ -310,6 +443,7 @@ function setUpCanvases() {
     canvas.width = map.width * BLOCK_SIZE;
     canvas.height = map.height * BLOCK_SIZE;
   }
+  $('objectLayer').setAttribute('viewBox', `0 0 ${map.width * BLOCK_SIZE} ${map.height * BLOCK_SIZE}`);
   applyZoom();
 }
 
@@ -319,10 +453,11 @@ function applyZoom() {
   const zoom = +$('zoom').value;
   const width = map.width * BLOCK_SIZE * zoom + 'px';
   const height = map.height * BLOCK_SIZE * zoom + 'px';
-  for (const element of [$('mapCanvas'), $('overlayCanvas'), $('stack')]) {
+  for (const element of [$('mapCanvas'), $('overlayCanvas'), $('objectLayer'), $('stack')]) {
     element.style.width = width;
     element.style.height = height;
   }
+  drawObjects();      // so the marker text keeps its size on screen
 }
 
 function cellPosition(cell) {
@@ -445,10 +580,11 @@ function dimUnusableBlocks(cell) {
 // Painting
 // ===================================================================================
 //
-// A change is { kind: 'cell', cell, from, to } (a cell's tile number) or
-// { kind: 'tile', tile, from, to } (a tile's word in the tile table).  Painting works out
-// all its changes first, applies them only if every one is possible, and keeps them for
-// undo.
+// A change is { kind: 'cell', cell, from, to } (a cell's tile number),
+// { kind: 'tile', tile, from, to } (a tile's word in the tile table), or
+// { kind: 'objects', from, to } (all the object tables, before and after an object
+// edit).  An edit works out all its changes first, applies them only if every one is
+// possible, and keeps them for undo.
 
 // Work out painting block `block` at `cell`: the cell becomes the tile for
 // (block, right neighbour's own block), and the left neighbour the tile for
@@ -517,10 +653,14 @@ function applyChanges(changes, backwards) {
   const list = backwards ? changes.slice().reverse() : changes;
   const touchedCells = new Set();
   let tableChanged = false;
+  let objectsChanged = false;
 
   for (const change of list) {
     const value = backwards ? change.from : change.to;
-    if (change.kind === 'tile') {
+    if (change.kind === 'objects') {
+      restoreObjects(value);
+      objectsChanged = true;
+    } else if (change.kind === 'tile') {
       map.tileWords[change.tile] = value;
       tableChanged = true;
     } else {
@@ -529,6 +669,11 @@ function applyChanges(changes, backwards) {
       map.cellsUsingTile[value]++;
       touchedCells.add(change.cell);
     }
+  }
+  if (objectsChanged) {
+    drawObjects();
+    updateObjectPanel();
+    return;
   }
 
   // a new tile word can change ranks, and with them types, anywhere on the map
@@ -626,7 +771,7 @@ function updateTileStats() {
   $('stats').innerHTML = html;
 }
 
-function hex(value) { return value.toString(16).padStart(2, '0'); }
+function hex(value, digits = 2) { return value.toString(16).padStart(digits, '0'); }
 
 function showMessage(text, kind) {
   const element = $('msg');
@@ -634,18 +779,25 @@ function showMessage(text, kind) {
   element.className = kind || '';
 }
 
+// The map pixel under the mouse, or null.
+function pixelUnderMouse(event) {
+  const rect = $('mapCanvas').getBoundingClientRect();
+  const zoom = +$('zoom').value;
+  const x = (event.clientX - rect.left) / zoom;
+  const y = (event.clientY - rect.top) / zoom;
+  if (x < 0 || y < 0 || x >= map.width * BLOCK_SIZE || y >= map.height * BLOCK_SIZE) return null;
+  return { x, y };
+}
+
 // The cell under the mouse, or null.
 function cellUnderMouse(event) {
-  const rect = $('mapCanvas').getBoundingClientRect();
-  const cellSize = BLOCK_SIZE * +$('zoom').value;
-  const column = Math.floor((event.clientX - rect.left) / cellSize);
-  const row = Math.floor((event.clientY - rect.top) / cellSize);
-  if (column < 0 || row < 0 || column >= map.width || row >= map.height) return null;
-  return row * map.width + column;
+  const pixel = pixelUnderMouse(event);
+  if (!pixel) return null;
+  return Math.floor(pixel.y / BLOCK_SIZE) * map.width + Math.floor(pixel.x / BLOCK_SIZE);
 }
 
 // Show the cursor box and the cursor cell's details.
-function showCursor(cell) {
+function showCursor(cell, event) {
   const cursor = $('cursor');
   if (cell == null) {
     cursor.style.display = 'none';
@@ -662,15 +814,20 @@ function showCursor(cell) {
 
   const broken = isBrokenPair(cell)
     ? ` <span style="color:var(--bad)">(right cell is block ${ownBlock(map.cells[cell + 1])})</span>` : '';
-  $('info').innerHTML =
+  let html =
     `column ${column}, row ${row} (pixels ${column * BLOCK_SIZE}, ${row * BLOCK_SIZE})<br>` +
     `tile $${hex(tile)} in the file, $${hex(map.rankOfTile[tile])} in the game: ${TYPE_LABEL[typeOfTile(tile)]}<br>` +
     `blocks ${ownBlock(tile)} + ${rightBlock(tile)}${broken}`;
-  dimUnusableBlocks(cell);
+  if (event && objects) {
+    const position = objectUnitsAt(pixelUnderMouse(event));
+    html += `<br>object position $${hex(position.x & 0xffff, 4)}, $${hex(position.y & 0xffff, 4)}`;
+  }
+  $('info').innerHTML = html;
+  if (isTilesMode()) dimUnusableBlocks(cell);
 }
 
 // ===================================================================================
-// Saving
+// Saving the map
 // ===================================================================================
 
 // The original file with the edited map and tile table written over it; every other
@@ -682,68 +839,1044 @@ function saveMap() {
     output[map.tableOffset + 2 * tile] = word >> 8;
     output[map.tableOffset + 2 * tile + 1] = word & 0xff;
   });
+  download(new Blob([output], { type: 'application/octet-stream' }), map.fileName);
+  showMessage('Saved ' + map.fileName + '.', 'ok');
+}
+
+function download(blob, fileName) {
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([output], { type: 'application/octet-stream' }));
-  link.download = map.fileName;
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  showMessage('Saved ' + map.fileName + '.', 'ok');
+}
+
+// ===================================================================================
+// Objects: the level source
+// ===================================================================================
+//
+// The level source (level1.s, level5.s) holds the level's settings and, near its end, its
+// object tables and start positions, all in words:
+//
+//   spawn_table        groups: trigger x, trigger y, count, then count x (type, x, y)
+//   spawn_singles      single objects: type, x, y
+//   checkpoint_starts  7 words for the start, then 7 for each checkpoint's restart:
+//                      scroll_x, scroll_y, score_scroll_x, player_x, player_y,
+//                      player_ref_y, camera_x
+//
+// scroll_x follows them.  The editor rewrites the lines from spawn_table to scroll_x and
+// keeps every other line as it was.  The game marks objects that have appeared in the
+// top bit of a group's trigger x and a single's y; they must be clear in the file.
+//
+// The settings it reads (readSettings): the map size, tile type limits and time limit
+// (equ lines at the top), SPAWN_OFFSET_X, the fixed places the code names (fixedNames:
+// VAT_DEPTH, VAT_SPLASH_X, ENDING_SCROLL_X, SCROLL_Y_LIMIT, CLIMB_COLUMN_ROWS and
+// map_climb_column, or the older names some copies may have,
+// drawFixedPlaces), palette_split, enemy_type_table and
+// type_sprite_table.  The map is drawn and typed with them once the source is open.
+//
+// Lines the releases do not share are in config blocks (ifeq / ifne CONFIG-<release>
+// ... endc), as in the rest of the sources; level 5's tables have two.  The editor
+// keeps each release's tables (objects.models), shows one, and makes every edit to all
+// of them: a move moves each release's copy by the same amount, so a difference stays,
+// and a typed number sets it in each.  Saving puts the lines that differ back in blocks.
+//
+// Positions are in 2 pixel units.  The game's map lookup (map_tile_at) puts world x, y
+// in map cell ((x + 8) / 8, y / 8), and spawn_enemy places an object at world
+// (x + SPAWN_OFFSET_X, y + 8), so an object's point on the map is at pixel
+// ((x + SPAWN_OFFSET_X + 8) * 2, (y + 8) * 2): the middle of its feet, on the top edge of
+// the cell it stands on.  draw_sprite draws a sprite left of and above that point, by
+// the offsets in sprite_heights (6 to 18 pixels across, 30 to 40 up for the bad guys).
+// A trigger point is placed the same way.  A start position's player is at world
+// (scroll_x + player_x, scroll_y + player_y).
+
+function loadObjects(fileName, text) {
+  if (!map) {
+    showMessage('Open the map first, then its level source.', 'bad');
+    return;
+  }
+  const parsed = parseObjects(text);
+  if (parsed.error) {
+    showMessage(parsed.error, 'bad');
+    return;
+  }
+  const { settings } = parsed;
+  if (settings.MAP_ROW_LENGTH !== map.width || settings.MAP_ROWS !== map.height) {
+    showMessage(`${fileName} is for a ${settings.MAP_ROW_LENGTH} x ${settings.MAP_ROWS} map, but the map is ${map.width} x ${map.height}.`, 'bad');
+    return;
+  }
+  objects = { fileName, ...parsed, release: 'RETAIL_1DISK' };
+  // objects.groups, .singles and .starts are the tables of the release shown
+  for (const table of ['groups', 'singles', 'starts']) {
+    Object.defineProperty(objects, table, { get() { return this.models[this.release][table]; } });
+  }
+  objects.originalWords = tableWordCount();
+  selection = null;
+  placePoint = null;
+  undoStack = undoStack.filter(changes => changes[0].kind !== 'objects');
+  redoStack = redoStack.filter(changes => changes[0].kind !== 'objects');
+  $('saveObjects').disabled = false;
+  $('release').innerHTML = RELEASES.map(([release, name]) => `<option value="${release}">${name}</option>`).join('');
+  $('release').value = objects.release;
+  $('releaseLabel').hidden = !objects.hasBlocks;
+  useSettings(settings);
+  updateLevelLabel();
+  updateUndoButtons();
+  buildTypeChoices();
+  drawObjects();
+  updateObjectPanel();
+  showMessage(parsed.marksCleared ? 'Loaded; some objects had their "has appeared" mark set, which saving clears.' : 'Loaded the level source.', 'ok');
+}
+
+// The level's settings from the source's lines for one release: every simple equ
+// (MAP_ROW_LENGTH, TILE_OPEN, LEVEL_TIME ...), and the palette, the object routine
+// names and the sprite base of each object type.
+function readSettings(lines) {
+  const settings = {};
+  const number = text => text.startsWith('$') ? parseInt(text.slice(1), 16) : parseInt(text, 10);
+  for (const line of lines) {
+    const match = /^([A-Z_0-9]+)\s+equ\s+(\$[0-9a-fA-F]+|\d+)\s*(;|$)/.exec(line);
+    if (match) settings[match[1]] = number(match[2]);
+  }
+  // the dc.w words after a label, up to the next label
+  function table(label) {
+    const at = lines.findIndex(line => line.startsWith(label + ':'));
+    if (at < 0) return null;
+    const out = [];
+    for (const line of lines.slice(at + 1)) {
+      if (/^[A-Za-z_]\w*:/.test(line)) break;
+      const match = /^\s+dc\.w\s+([^;\s]+)/.exec(line);
+      if (match) out.push(...match[1].split(','));
+      else if (line.trim() && !line.trim().startsWith(';')) break;
+    }
+    return out;
+  }
+  const palette = table('palette_split');
+  if (palette && palette.length >= 16) settings.palette = palette.slice(0, 16).map(number);
+  const routines = table('enemy_type_table');
+  if (routines) settings.routines = routines.map(name => (name.startsWith('$') ? null : name));
+  const sprites = table('type_sprite_table');
+  if (sprites) {
+    settings.spriteBases = [];
+    for (let k = 0; k + 1 < sprites.length; k += 2) settings.spriteBases.push([number(sprites[k]), number(sprites[k + 1])]);
+  }
+  settings.columnLabel = ['map_rope_ladder', 'map_climb_column'].find(label => lines.some(line => line.startsWith(label + ':')));
+  settings.climbColumnOffset = settings.columnLabel ? labelOffset(lines, 'map_tiles', settings.columnLabel) : null;
+  Object.assign(settings, fixedNames(settings));
+  return settings;
+}
+
+// The fixed places under whichever names the level gives them: its own (level 1's vat,
+// level 5's rope ladder) or the engine's.  Each is { value, name } or null.
+function fixedNames(settings) {
+  const pick = (...names) => {
+    const name = names.find(n => Number.isInteger(settings[n]));
+    return name ? { value: settings[name], name } : null;
+  };
+  return {
+    fallDepth: pick('VAT_DEPTH', 'BOSS_FALL_DEPTH'),
+    splashX: pick('VAT_SPLASH_X', 'BOSS_SPLASH_X'),
+    columnRows: pick('ROPE_LADDER_ROWS', 'CLIMB_COLUMN_ROWS'),
+  };
+}
+
+// The bytes from one label to the next one named, counting the data lines between
+// (dc.b, dc.w, dc.l, dcb.b, dcb.w), or null.  map_rope_ladder lies in the stand-in for
+// the map that the level loads over, so its distance from map_tiles is its map cell.
+function labelOffset(lines, from, to) {
+  const start = lines.findIndex(line => line.startsWith(from + ':'));
+  const end = lines.findIndex(line => line.startsWith(to + ':'));
+  if (start < 0 || end < start) return null;
+  let bytes = 0;
+  for (const line of lines.slice(start + 1, end)) {
+    const code = line.split(';')[0];
+    let match = /^\s+dcb\.([bw])\s+(\$?[0-9a-fA-F]+)/.exec(code);
+    if (match) {
+      const count = match[2].startsWith('$') ? parseInt(match[2].slice(1), 16) : parseInt(match[2], 10);
+      bytes += count * (match[1] === 'w' ? 2 : 1);
+      continue;
+    }
+    match = /^\s+dc\.([bwl])\s+(.*)$/.exec(code);
+    if (match) bytes += match[2].split(',').length * { b: 1, w: 2, l: 4 }[match[1]];
+    else if (code.trim()) return null;
+  }
+  return bytes;
+}
+
+// Draw and type the map with the source's settings.
+function useSettings(settings) {
+  const limits = [[settings.TILE_OPEN, 'wall']];
+  if (settings.TILE_DEADLY !== undefined) limits.push([settings.TILE_DEADLY, 'open'], [settings.TILE_FLOOR, 'deadly']);
+  else limits.push([settings.TILE_FLOOR, 'open']);
+  limits.push([settings.TILE_LADDER, 'floor'], [0x100, 'ladder']);
+  const level = { ...map.level };
+  if (limits.every(([limit]) => Number.isInteger(limit))) level.types = limits;
+  if (settings.palette) level.palette = settings.palette;
+  if (Number.isInteger(settings.SPAWN_OFFSET_X)) level.spawnOffsetX = settings.SPAWN_OFFSET_X;
+  map.level = level;
+  map.rgb = level.palette.map(stColourToRgb);
+  map.blockImages = [];
+  for (let block = 0; block < map.blockCount; block++) map.blockImages.push(decodeBlock(block));
+  updateRanks();
+  updateBlockTypes();
+  drawWholeMap();
+  buildBlockPalette();
+  updateTileStats();
+}
+
+// Whether the game draws a sprite for an object type: its type_sprite_table entry (the
+// first whose limit is above the type) has a sprite base.
+function typeIsDrawn(type) {
+  const bases = objects && objects.settings.spriteBases;
+  if (!bases) return null;
+  const entry = bases.find(([limit]) => type < limit);
+  return Boolean(entry && entry[1]);
+}
+
+// The level number, the lines around the tables, each release's tables (models), and
+// the settings.
+function parseObjects(text) {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  const find = label => lines.findIndex(line => line.startsWith(label + ':'));
+  const tableLine = find('spawn_table'), singlesLine = find('spawn_singles');
+  const startsLine = find('checkpoint_starts'), afterLine = find('scroll_x');
+  if (tableLine < 0 || !(tableLine < singlesLine && singlesLine < startsLine && startsLine < afterLine)) {
+    return { error: 'Not level1.s or level5.s: it needs spawn_table, spawn_singles, checkpoint_starts and scroll_x in that order.' };
+  }
+  const settings = readSettings(linesFor(lines, 'RETAIL_1DISK'));
+  if (!settings.MAP_ROW_LENGTH || !settings.MAP_ROWS) return { error: 'The source has no MAP_ROW_LENGTH and MAP_ROWS.' };
+  const tableText = lines.slice(tableLine, afterLine);
+  const hasBlocks = tableText.some(line => /^\s+(ifeq|ifne)\s+CONFIG-/.test(line));
+  const models = {};
+  let marksCleared = false;
+  for (const [release] of RELEASES) {
+    const model = parseTables(linesFor(tableText, release));
+    if (model.error) return model;
+    marksCleared = marksCleared || model.marksCleared;
+    models[release] = { groups: model.groups, singles: model.singles, starts: model.starts };
+  }
+  // the releases are edited together, so their tables must be in step
+  const layout = model => JSON.stringify([model.groups.map(group => group.members.length), model.singles.length, model.starts.length]);
+  if (RELEASES.some(([release]) => layout(models[release]) !== layout(models[RELEASES[0][0]]))) {
+    return { error: 'The releases have different numbers of objects here; the editor needs their tables in step.' };
+  }
+  return {
+    settings, eol, marksCleared, hasBlocks, models,
+    linesBefore: lines.slice(0, tableLine),
+    labelLines: [lines[tableLine], lines[singlesLine], lines[startsLine]],
+    linesAfter: lines.slice(afterLine),
+  };
+}
+
+// The lines one release assembles: those outside config blocks, and those in the blocks
+// that are for it.
+function linesFor(lines, release) {
+  const out = [], stack = [];
+  for (const line of lines) {
+    const block = /^\s+(ifeq|ifne)\s+CONFIG-(\w+)/.exec(line);
+    if (block) {
+      stack.push((block[1] === 'ifeq') === (block[2] === release));
+      continue;
+    }
+    if (/^\s+endc\b/.test(line) && stack.length) {
+      stack.pop();
+      continue;
+    }
+    if (stack.every(Boolean)) out.push(line);
+  }
+  return out;
+}
+
+// One release's tables from its lines (spawn_table up to scroll_x), as
+// groups [{ x, y, note, members: [{ type, x, y, note }] }], singles [{ type, x, y, note }]
+// and starts [{ values: [7 words], note }].  A note is comment text after " - " that was
+// added to an entry's line; it is written back with the entry.
+function parseTables(lines) {
+  const find = label => lines.findIndex(line => line.startsWith(label + ':'));
+  const singlesLine = find('spawn_singles'), startsLine = find('checkpoint_starts');
+
+  // the words of the lines first to last, each with the note of its line on the first word
+  function words(first, last) {
+    const out = [];
+    for (const line of lines.slice(first, last)) {
+      const [code, ...comment] = line.split(';');
+      const match = /^\s+dc\.w\s+(\S+)\s*$/.exec(code);
+      if (!match) continue;
+      const commentText = comment.join(';');
+      const noteAt = commentText.indexOf(' - ');
+      const note = noteAt >= 0 ? commentText.slice(noteAt + 3).trim() : '';
+      match[1].split(',').forEach((value, k) => {
+        out.push({ value: value.startsWith('$') ? parseInt(value.slice(1), 16) : parseInt(value, 10), note: k === 0 ? note : '' });
+      });
+    }
+    return out;
+  }
+
+  let marksCleared = false;
+  const clearMark = value => {
+    if (value & 0x8000) marksCleared = true;
+    return value & 0x7fff;
+  };
+
+  const groupWords = words(1, singlesLine);
+  const groups = [];
+  for (let k = 0; k < groupWords.length;) {
+    if (k + 3 > groupWords.length) return { error: 'spawn_table ends in the middle of a group.' };
+    const count = groupWords[k + 2].value;
+    const group = { x: clearMark(groupWords[k].value), y: groupWords[k + 1].value, note: groupWords[k].note, members: [] };
+    k += 3;
+    for (let m = 0; m < count; m++, k += 3) {
+      if (k + 3 > groupWords.length) return { error: 'spawn_table ends in the middle of a group.' };
+      group.members.push({ type: groupWords[k].value, x: groupWords[k + 1].value, y: groupWords[k + 2].value, note: groupWords[k].note });
+    }
+    groups.push(group);
+  }
+
+  const singleWords = words(singlesLine + 1, startsLine);
+  if (singleWords.length % 3) return { error: 'spawn_singles is not a whole number of objects.' };
+  const singles = [];
+  for (let k = 0; k < singleWords.length; k += 3) {
+    singles.push({ type: singleWords[k].value, x: singleWords[k + 1].value, y: clearMark(singleWords[k + 2].value), note: singleWords[k].note });
+  }
+
+  const startWords = words(startsLine + 1, lines.length);
+  if (!startWords.length || startWords.length % 7) return { error: 'checkpoint_starts is not a whole number of 7 word entries.' };
+  const starts = [];
+  for (let k = 0; k < startWords.length; k += 7) {
+    starts.push({ values: startWords.slice(k, k + 7).map(w => w.value), note: startWords[k].note });
+  }
+  return { groups, singles, starts, marksCleared };
+}
+
+// The name the source's comments give an object type: its routine in enemy_type_table.
+function routineName(type) {
+  const routines = objects && objects.settings.routines || OBJECT_ROUTINES;
+  return routines[type] || `type ${type}`;
+}
+
+// One dc.w line, laid out like the generated files: the comment at column 40.
+function dcLine(values, comment) {
+  const text = '\tdc.w\t' + values.map(v => '$' + hex(v & 0xffff, 4)).join(',');
+  if (!comment) return text;
+  const width = 16 + text.length - 6;       // the two tabs take the text to column 16
+  return text + '\t'.repeat(Math.max(1, Math.floor((40 - width + 7) / 8))) + '; ' + comment;
+}
+
+function withNote(comment, note) {
+  return note ? comment + ' - ' + note : comment;
+}
+
+// One release's table lines, spawn_table up to scroll_x: an entry a line.
+function tableLines(model) {
+  const out = [objects.labelLines[0]];
+  for (const group of model.groups) {
+    const count = group.members.length;
+    out.push(dcLine([group.x, group.y, count], withNote(`group: trigger x, y, ${count} object${count === 1 ? '' : 's'}`, group.note)));
+    for (const member of group.members) {
+      out.push(dcLine([member.type, member.x, member.y], withNote('  ' + routineName(member.type), member.note)));
+    }
+  }
+  out.push(objects.labelLines[1]);
+  for (const single of model.singles) {
+    out.push(dcLine([single.type, single.x, single.y], withNote(routineName(single.type), single.note)));
+  }
+  out.push(objects.labelLines[2]);
+  model.starts.forEach((start, k) => {
+    out.push(dcLine(start.values, withNote(k === 0 ? 'start' : `after checkpoint ${k}`, start.note)));
+  });
+  return out;
+}
+
+// The block line for a group of releases out of all: ifeq for one, ifne for all but one.
+function blockLine(group, all) {
+  if (group.length === 1) return '\tifeq\tCONFIG-' + group[0];
+  return '\tifne\tCONFIG-' + all.find(release => !group.includes(release));
+}
+
+// The releases' table lines as one text: the lines they share once, and each run of
+// lines that differ in a block for each group of releases alike there, the way the
+// sources are laid out.
+function mergeReleaseLines(texts) {
+  const all = RELEASES.map(([release]) => release);
+  const same = k => texts.every(text => text[k] === texts[0][k]);
+  const out = [];
+  for (let k = 0; k < texts[0].length;) {
+    if (same(k)) {
+      out.push(texts[0][k]);
+      k++;
+      continue;
+    }
+    let end = k;
+    while (end < texts[0].length && !same(end)) end++;
+    const groups = [];
+    texts.forEach((text, r) => {
+      const run = text.slice(k, end);
+      const group = groups.find(g => g.run.join('\n') === run.join('\n'));
+      if (group) group.releases.push(all[r]);
+      else groups.push({ run, releases: [all[r]] });
+    });
+    for (const group of groups) out.push(blockLine(group.releases, all), ...group.run, '\tendc');
+    k = end;
+  }
+  return out;
+}
+
+// The source's text with the object tables written from the editor's state.
+function objectFileText() {
+  const texts = RELEASES.map(([release]) => tableLines(objects.models[release]));
+  return [...objects.linesBefore, ...mergeReleaseLines(texts), ...objects.linesAfter].join(objects.eol);
+}
+
+// The source is latin-1 text: a character a byte.
+function saveObjects() {
+  const text = objectFileText();
+  const bytes = new Uint8Array(text.length);
+  for (let k = 0; k < text.length; k++) bytes[k] = text.charCodeAt(k);
+  download(new Blob([bytes], { type: 'application/octet-stream' }), objects.fileName);
+  showMessage('Saved ' + objects.fileName + '.', 'ok');
+}
+
+// The number of words in the three tables.
+function tableWordCount() {
+  return objects.groups.reduce((sum, group) => sum + 3 + 3 * group.members.length, 0) +
+    3 * objects.singles.length + 7 * objects.starts.length;
+}
+
+// A copy of every release's tables, for undo.
+function snapshotObjects() {
+  return JSON.parse(JSON.stringify(objects.models));
+}
+
+function restoreObjects(snapshot) {
+  objects.models = JSON.parse(JSON.stringify(snapshot));
+  if (selection && !selectedItem()) selection = null;
+}
+
+// Make the same change to every release's tables.
+function forEachRelease(change) {
+  for (const [release] of RELEASES) change(objects.models[release]);
+}
+
+// Make an object edit: `edit` changes the tables, and the change goes on the undo stack.
+function editObjects(edit) {
+  const before = snapshotObjects();
+  edit();
+  const after = snapshotObjects();
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    undoStack.push([{ kind: 'objects', from: before, to: after }]);
+    redoStack = [];
+    updateUndoButtons();
+  }
+  drawObjects();
+  updateObjectPanel();
+}
+
+// ===================================================================================
+// Objects: positions and drawing
+// ===================================================================================
+
+// The map pixel of an object position (the middle of its feet).
+function objectPixel(x, y) {
+  return { x: (x + map.level.spawnOffsetX + 8) * 2, y: (y + 8) * 2 };
+}
+
+// The object position at a map pixel.
+function objectUnitsAt(pixel) {
+  return { x: Math.round(pixel.x / 2) - map.level.spawnOffsetX - 8, y: Math.round(pixel.y / 2) - 8 };
+}
+
+// The map pixel where a start position puts the player (the middle of the feet), and
+// the view's top left corner.
+function startPixels(values) {
+  const [scrollX, scrollY, , playerX, playerY] = values;
+  return {
+    player: { x: (scrollX + playerX + 8) * 2, y: (scrollY + playerY) * 2 },
+    view: { x: (scrollX + 8) * 2, y: scrollY * 2 },
+  };
+}
+
+// A selection names one thing by its index: { kind: 'group', group },
+// { kind: 'member', group, member }, { kind: 'single', single } or { kind: 'start', start }.
+// Its key is the text form the markers carry.
+function selectionKey(s) {
+  return s ? [s.kind, s.group, s.member, s.single, s.start].join(':') : '';
+}
+
+function parseKey(key) {
+  const [kind, group, member, single, start] = key.split(':').map((v, k) => (k === 0 ? v : v === '' ? undefined : +v));
+  return { kind, group, member, single, start };
+}
+
+// The thing a selection names in one release's tables.
+function itemIn(model, s) {
+  if (s.kind === 'group') return model.groups[s.group];
+  if (s.kind === 'member') return model.groups[s.group] && model.groups[s.group].members[s.member];
+  if (s.kind === 'single') return model.singles[s.single];
+  return model.starts[s.start];
+}
+
+// The selected thing in the release shown.
+function selectedItem() {
+  if (!selection || !objects) return null;
+  return itemIn(objects.models[objects.release], selection);
+}
+
+// How an object type is shown; whether it is drawn comes from type_sprite_table once a
+// source is open.
+function objectLook(type) {
+  const look = OBJECT_LOOKS[type] || [`Type ${type} (${routineName(type)})`, String(type), 'other', true];
+  const drawn = typeIsDrawn(type);
+  return drawn === null ? look : [look[0], look[1], look[2], drawn];
+}
+
+function drawObjects() {
+  const layer = $('objectLayer');
+  if (!map || !objects || !$('showObjects').checked) {
+    layer.innerHTML = '';
+    return;
+  }
+  const fontSize = 11 / +$('zoom').value;
+  const selectedKey = selectionKey(selection);
+  const showTriggers = $('showTriggers').checked;
+  const parts = [];
+  const escapeText = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // an object: a box about a sprite's size above the point it stands on, or a small one
+  // for an object the game does not draw, with its marker text over it
+  function marker(item, key, isSingle) {
+    const [, text, look, drawn] = objectLook(item.type);
+    const { x, y } = objectPixel(item.x, item.y);
+    const [width, height] = drawn ? [24, 32] : [12, 12];
+    const colour = `var(--${look})`;
+    const selected = key === selectedKey ? ' selected' : '';
+    parts.push(`<rect class="marker${selected}" data-key="${key}" x="${x - width / 2}" y="${y - height}" width="${width}" height="${height}" ` +
+      `fill="${colour}" fill-opacity="${drawn ? '.35' : '.7'}" stroke="${colour}" stroke-width="1.5"${isSingle ? ' stroke-dasharray="4 2"' : ''}/>`);
+    parts.push(`<text x="${x}" y="${y - height - 2}" text-anchor="middle" font-size="${fontSize}" fill="${colour}">${escapeText(text)}</text>`);
+  }
+
+  // groups: the trigger diamond, numbered, with lines to the group's objects
+  objects.groups.forEach((group, g) => {
+    const trigger = objectPixel(group.x, group.y);
+    const groupSelected = selection && (selection.kind === 'group' || selection.kind === 'member') && selection.group === g;
+    if (showTriggers || groupSelected) {
+      for (const member of group.members) {
+        const point = objectPixel(member.x, member.y);
+        parts.push(`<line class="link${groupSelected ? ' strong' : ''}" x1="${trigger.x}" y1="${trigger.y}" x2="${point.x}" y2="${point.y - 8}"/>`);
+      }
+      const key = selectionKey({ kind: 'group', group: g });
+      const r = 6;
+      parts.push(`<polygon class="marker${key === selectedKey ? ' selected' : ''}" data-key="${key}" ` +
+        `points="${trigger.x},${trigger.y - r} ${trigger.x + r},${trigger.y} ${trigger.x},${trigger.y + r} ${trigger.x - r},${trigger.y}" ` +
+        `fill="#fff" fill-opacity=".6" stroke="#fff" stroke-width="1.5"/>`);
+      parts.push(`<text x="${trigger.x}" y="${trigger.y - r - 2}" text-anchor="middle" font-size="${fontSize}" fill="#fff">${g + 1}</text>`);
+    }
+    group.members.forEach((member, m) => marker(member, selectionKey({ kind: 'member', group: g, member: m }), false));
+  });
+  objects.singles.forEach((single, s) => marker(single, selectionKey({ kind: 'single', single: s }), true));
+
+  drawFixedPlaces(parts, fontSize);
+
+  // start positions: the player, and the view around it when selected
+  objects.starts.forEach((start, c) => {
+    const key = selectionKey({ kind: 'start', start: c });
+    const { player, view } = startPixels(start.values);
+    const selected = key === selectedKey;
+    if (selected) {
+      parts.push(`<rect x="${view.x}" y="${view.y}" width="${VIEW_WIDTH}" height="${VIEW_HEIGHT}" fill="none" stroke="var(--start)" stroke-dasharray="6 4"/>`);
+    }
+    parts.push(`<rect class="marker${selected ? ' selected' : ''}" data-key="${key}" x="${player.x - 12}" y="${player.y - 32}" width="24" height="32" ` +
+      `fill="var(--start)" fill-opacity=".45" stroke="var(--start)" stroke-width="1.5"/>`);
+    parts.push(`<text x="${player.x}" y="${player.y - 34}" text-anchor="middle" font-size="${fontSize}" fill="var(--start)">${c ? 'Restart ' + c : 'Start'}</text>`);
+  });
+
+  // where new objects go
+  if (placePoint) {
+    const { x, y } = objectPixel(placePoint.x, placePoint.y);
+    parts.push(`<path d="M${x - 6},${y}H${x + 6}M${x},${y - 6}V${y + 6}" stroke="var(--accent)" stroke-width="2"/>`);
+  }
+  layer.innerHTML = parts.join('');
+}
+
+// The places the level code fixes, as the source names them, drawn where the level uses
+// them: level 1's vat (VAT_SPLASH_X, VAT_DEPTH) when the level places a vat watch (type
+// 24), the ending view (ENDING_SCROLL_X, when not 0), the lowest view (SCROLL_Y_LIMIT)
+// and level 5's rope ladder (map_climb_column, CLIMB_COLUMN_ROWS rows, a word: two cells
+// across).  They are drawn for reference; they change in the source, not here.
+function drawFixedPlaces(parts, fontSize) {
+  const settings = objects.settings;
+  const width = map.width * BLOCK_SIZE;
+  const style = 'fill="var(--event)" fill-opacity=".25" stroke="var(--event)" stroke-dasharray="6 3" pointer-events="none"';
+  const label = (x, y, text, anchor = 'middle') =>
+    parts.push(`<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="${fontSize}" fill="var(--event)">${text}</text>`);
+  const column = climbColumn();
+
+  if (levelPlaces(24) && settings.fallDepth && settings.splashX) {
+    const x = (settings.splashX.value + 8) * 2, y = settings.fallDepth.value * 2;
+    parts.push(`<rect x="${x - 24}" y="${y}" width="48" height="8" ${style}/>`);
+    label(x, y - 2, `Vat (${settings.splashX.name}, ${settings.fallDepth.name})`);
+  }
+  // The ending (level_complete): the Joker, knocked off, moves right as he falls, and the
+  // view pans after him until its left edge is at ENDING_SCROLL_X; he lands $48 below the
+  // view's top.  It happens at the top of the map, where the rope ladder hangs, so the
+  // view is drawn there (scroll_y 8), with an arrow from the ladder.
+  if (settings.ENDING_SCROLL_X > 0) {
+    const x = (settings.ENDING_SCROLL_X + 8) * 2, top = 8 * 2;
+    const landX = x + VIEW_WIDTH / 2, landY = (8 + ENDING_FALL_DEPTH) * 2;
+    parts.push(`<rect x="${x}" y="${top}" width="${VIEW_WIDTH}" height="${VIEW_HEIGHT}" ${style}/>`);
+    label(x + 4, top + fontSize + 2, 'Ending view (ENDING_SCROLL_X)', 'start');
+    if (column) {
+      const fromX = column.x + BLOCK_SIZE, fromY = column.y + column.height / 2;
+      parts.push(`<path d="M${fromX},${fromY} Q${landX - 40},${fromY} ${landX},${landY}" fill="none" stroke="var(--event)" stroke-dasharray="6 3" pointer-events="none"/>`);
+    }
+    parts.push(`<circle cx="${landX}" cy="${landY}" r="4" fill="var(--event)" pointer-events="none"/>`);
+    label(landX, landY + fontSize + 4, 'the Joker falls out to here');
+  }
+  if (Number.isInteger(settings.SCROLL_Y_LIMIT)) {
+    const y = (settings.SCROLL_Y_LIMIT + 8) * 2 + VIEW_HEIGHT;
+    parts.push(`<line x1="0" y1="${y}" x2="${width}" y2="${y}" ${style}/>`);
+    label(4, y - 3, 'Lowest view bottom (SCROLL_Y_LIMIT)', 'start');
+  }
+  if (column) {
+    parts.push(`<rect x="${column.x}" y="${column.y}" width="${2 * BLOCK_SIZE}" height="${column.height}" ${style}/>`);
+    label(column.x + BLOCK_SIZE, column.y + column.height + fontSize + 2, `Rope ladder (${settings.columnLabel})`);
+  }
+}
+
+// Whether the level's tables place an object of this type.
+function levelPlaces(type) {
+  return objects.groups.some(group => group.members.some(member => member.type === type)) ||
+    objects.singles.some(single => single.type === type);
+}
+
+// The rope ladder's place (the column of map tiles boss_climb_watch swings), in map
+// pixels with its height, or null.
+function climbColumn() {
+  const settings = objects.settings;
+  if (!Number.isInteger(settings.climbColumnOffset) || !settings.columnRows) return null;
+  const column = settings.climbColumnOffset % map.width, row = Math.floor(settings.climbColumnOffset / map.width);
+  return { column, row, x: column * BLOCK_SIZE, y: row * BLOCK_SIZE, height: settings.columnRows.value * BLOCK_SIZE };
+}
+
+// ===================================================================================
+// Objects: the side panel
+// ===================================================================================
+
+// The type list of Add object: the types this level's tables already use.
+function buildTypeChoices() {
+  const used = new Set();
+  for (const group of objects.groups) for (const member of group.members) used.add(member.type);
+  for (const single of objects.singles) used.add(single.type);
+  const select = $('objectType');
+  const previous = +select.value;
+  select.innerHTML = [...used].sort((a, b) => a - b)
+    .map(type => `<option value="${type}">${type}: ${objectLook(type)[0]}</option>`).join('');
+  if (used.has(previous)) select.value = previous;
+}
+
+function typeOptions(current) {
+  const types = new Set([...$('objectType').options].map(option => +option.value));
+  types.add(current);
+  return [...types].sort((a, b) => a - b)
+    .map(type => `<option value="${type}"${type === current ? ' selected' : ''}>${type}: ${objectLook(type)[0]}</option>`).join('');
+}
+
+function hexField(label, name, value) {
+  return `<label>${label}</label><input data-field="${name}" value="$${hex(value, 4)}">`;
+}
+
+// A number typed into a field: $ for hex, else decimal.
+function parseNumber(text) {
+  const t = text.trim();
+  const value = t.startsWith('$') ? parseInt(t.slice(1), 16) : parseInt(t, 10);
+  return Number.isFinite(value) && value >= 0 && value <= 0x7fff ? value : null;
+}
+
+function updateObjectPanel() {
+  const inspector = $('objectInspector');
+  const statsElement = $('objectStats');
+  if (!objects) {
+    inspector.textContent = 'none';
+    statsElement.textContent = 'Open level1.s or level5.s.';
+    return;
+  }
+
+  // the selected thing's fields
+  const item = selectedItem();
+  if (!item) {
+    inspector.innerHTML = placePoint
+      ? `Nothing selected. New objects go to $${hex(placePoint.x, 4)}, $${hex(placePoint.y, 4)}.`
+      : 'Nothing selected. Click an object, a trigger or a start, or an empty spot for new objects.';
+  } else if (selection.kind === 'start') {
+    const k = selection.start;
+    inspector.innerHTML = `<b>${k ? 'Restart after checkpoint ' + k : 'Start of the level'}</b>` +
+      '<div class="fields">' + START_FIELDS.map((name, f) => hexField(name, 'start' + f, item.values[f])).join('') + '</div>';
+  } else {
+    const group = selection.kind === 'single' ? null : objects.groups[selection.group];
+    let html = '';
+    if (group) {
+      html += `<b>Group ${selection.group + 1}</b>, ${group.members.length} object${group.members.length === 1 ? '' : 's'}` +
+        '<div class="fields">' + hexField('trigger x', 'groupX', group.x) + hexField('trigger y', 'groupY', group.y) + '</div>';
+      if (group.members.length > MAX_ENEMIES) html += `<div class="warning">More than ${MAX_ENEMIES} objects: the game has room for ${MAX_ENEMIES} at a time.</div>`;
+    }
+    if (selection.kind !== 'group') {
+      html += `<b>${selection.kind === 'single' ? 'Single object ' + (selection.single + 1) : 'Object ' + (selection.member + 1) + ' of the group'}</b>` +
+        `<div class="fields"><label>type</label><select data-field="type">${typeOptions(item.type)}</select>` +
+        hexField('x', 'x', item.x) + hexField('y', 'y', item.y) + '</div>';
+    } else {
+      html += '<div class="hint">' + group.members.map((m, k) => `${k + 1}: ${objectLook(m.type)[0]} at $${hex(m.x, 4)}, $${hex(m.y, 4)}`).join('<br>') + '</div>';
+    }
+    inspector.innerHTML = html;
+  }
+  if (item) inspector.innerHTML += releaseDifferences();
+
+  // the totals and what to look out for
+  const inGroups = objects.groups.reduce((sum, group) => sum + group.members.length, 0);
+  const words = tableWordCount();
+  const change = 2 * (words - objects.originalWords);
+  const checkpointTypes = new Set();
+  for (const group of objects.groups) for (const member of group.members) if (member.type >= 34 && member.type <= 36) checkpointTypes.add(member.type);
+  for (const single of objects.singles) if (single.type >= 34 && single.type <= 36) checkpointTypes.add(single.type);
+  const missingStarts = [...checkpointTypes].filter(type => type - 33 >= objects.starts.length);
+  let html = `<table><tr><td>Groups</td><td>${objects.groups.length}</td></tr>` +
+    `<tr><td>Objects in groups</td><td>${inGroups}</td></tr>` +
+    `<tr><td>Single objects</td><td>${objects.singles.length}</td></tr>` +
+    `<tr><td>Start positions</td><td>${objects.starts.length}</td></tr>` +
+    `<tr><td>Table size</td><td>${2 * words} bytes${change ? ` (${change > 0 ? '+' : ''}${change})` : ''}</td></tr></table>`;
+  if (change) html += `<p class="${change > 0 ? 'warning' : 'hint'}">${map.level.roomNote}</p>`;
+  if (missingStarts.length) html += `<p class="warning">Checkpoint ${missingStarts.map(t => t - 33).join(', ')} has no restart entry in checkpoint_starts.</p>`;
+  html += settingsSummary();
+  statsElement.innerHTML = html;
+}
+
+// The selected thing's numbers that differ between the releases, as a note.
+function releaseDifferences() {
+  if (!objects.hasBlocks) return '';
+  const s = selection;
+  const fields = s.kind === 'start' ? START_FIELDS.map((name, f) => [name, item => item.values[f]])
+    : s.kind === 'group' ? [['trigger x', item => item.x], ['trigger y', item => item.y]]
+    : [['type', item => item.type], ['x', item => item.x], ['y', item => item.y]];
+  const notes = [];
+  for (const [name, get] of fields) {
+    const values = RELEASES.map(([release, label]) => [label, get(itemIn(objects.models[release], s))]);
+    if (values.some(([, value]) => value !== values[0][1])) {
+      notes.push(`${name} ` + values.map(([label, value]) => `$${hex(value, 4)} on the ${label}`).join(', '));
+    }
+  }
+  if (!notes.length) return '';
+  return `<div class="warning">Differs between the releases: ${notes.join('; ')}. A typed number sets it for all of them; moving keeps the difference.</div>`;
+}
+
+// What the editor took from the source.
+function settingsSummary() {
+  const settings = objects.settings;
+  const time = Number.isInteger(settings.LEVEL_TIME) ? settings.LEVEL_TIME.toString(16).padStart(3, '0') : null;
+  const limits = map.level.types.slice(0, -1).map(([limit, type]) => `${TYPE_LABEL[type].toLowerCase()} below $${hex(limit)}`).join(', ');
+  return `<p class="hint">From ${objects.fileName}: map ${settings.MAP_ROW_LENGTH} x ${settings.MAP_ROWS}` +
+    (time ? `, time limit ${time.slice(0, -2)}:${time.slice(-2)}` : '') +
+    `, tile types ${limits}, objects appear $${hex(map.level.spawnOffsetX)} to the right of their x (SPAWN_OFFSET_X)` +
+    fixedPlacesSummary() + '.</p>';
+}
+
+// The fixed places, in words, for the summary.
+function fixedPlacesSummary() {
+  const settings = objects.settings;
+  const parts = [];
+  if (levelPlaces(24) && settings.fallDepth && settings.splashX) {
+    parts.push(`the vat at x $${hex(settings.splashX.value, 4)}, y $${hex(settings.fallDepth.value, 4)}`);
+  }
+  if (settings.ENDING_SCROLL_X > 0) parts.push(`the ending view from scroll_x $${hex(settings.ENDING_SCROLL_X, 4)}`);
+  if (Number.isInteger(settings.SCROLL_Y_LIMIT)) parts.push(`the view no lower than scroll_y $${hex(settings.SCROLL_Y_LIMIT + 8, 4)}`);
+  const column = climbColumn();
+  if (column) parts.push(`the rope ladder at column ${column.column}, row ${column.row}, ${settings.columnRows.value} rows`);
+  return parts.length ? '; fixed in the code: ' + parts.join(', ') : '';
+}
+
+// A field in the inspector changed: the number goes to every release.
+function objectFieldChanged(field, text) {
+  const value = parseNumber(text);
+  if (value === null) {
+    showMessage('Enter a number from 0 to $7fff ($ for hex).', 'bad');
+    updateObjectPanel();
+    return;
+  }
+  const s = selection;
+  editObjects(() => forEachRelease(model => {
+    const item = itemIn(model, s);
+    if (field === 'groupX') model.groups[s.group].x = value;
+    else if (field === 'groupY') model.groups[s.group].y = value;
+    else if (field.startsWith('start')) item.values[+field.slice(5)] = value;
+    else item[field] = value;
+  }));
+}
+
+// ===================================================================================
+// Objects: selecting, moving, adding and deleting
+// ===================================================================================
+
+function isTilesMode() { return $('mode').value === 'tiles'; }
+
+function setMode() {
+  const objectsMode = !isTilesMode();
+  document.body.className = objectsMode ? 'objects-mode' : 'tiles-mode';
+  $('stack').classList.toggle('objects-mode', objectsMode);
+  if (objectsMode && !objects) showMessage('Open level1.s or level5.s to edit the objects.', '');
+}
+
+function select(newSelection) {
+  selection = newSelection;
+  drawObjects();
+  updateObjectPanel();
+}
+
+// Move the selected thing in every release by dx, dy from where it was in `before` (a
+// snapshot), so a difference between the releases stays; a start position moves by its
+// scroll.
+function moveSelected(before, dx, dy) {
+  for (const [release] of RELEASES) {
+    const from = itemIn(before[release], selection);
+    const item = itemIn(objects.models[release], selection);
+    if (selection.kind === 'start') {
+      item.values[0] = Math.max(0, from.values[0] + dx);
+      item.values[1] = Math.max(0, from.values[1] + dy);
+    } else {
+      item.x = Math.max(0, from.x + dx);
+      item.y = Math.max(0, from.y + dy);
+    }
+  }
+}
+
+// A click on a marker selects it and starts a drag; a click on an empty spot chooses
+// where new objects go: on the cell clicked, at its nearest edge (the original objects
+// all stand on cell edges), or with Shift at the very spot.
+function objectMouseDown(event) {
+  if (!objects || event.button !== 0) return;
+  const pixel = pixelUnderMouse(event);
+  if (!pixel) return;
+  const target = event.target.closest('[data-key]');
+  if (!target) {
+    const spot = event.shiftKey ? pixel
+      : { x: Math.round(pixel.x / BLOCK_SIZE) * BLOCK_SIZE, y: Math.floor(pixel.y / BLOCK_SIZE) * BLOCK_SIZE };
+    const units = objectUnitsAt(spot);
+    placePoint = { x: Math.max(0, units.x), y: Math.max(0, units.y) };
+    select(null);
+    return;
+  }
+  select(parseKey(target.dataset.key));
+  drag = { start: pixel, before: snapshotObjects(), moved: false };
+}
+
+// Drags move by whole cells (8 units), or with Shift by single units; start positions
+// always by whole cells, as the game starts the scroll on them.
+function objectMouseMove(event) {
+  if (!drag || !(event.buttons & 1)) return;
+  const pixel = pixelUnderMouse(event);
+  if (!pixel) return;
+  const step = event.shiftKey && selection.kind !== 'start' ? 1 : 8;
+  const dx = Math.round((pixel.x - drag.start.x) / 2 / step) * step;
+  const dy = Math.round((pixel.y - drag.start.y) / 2 / step) * step;
+  moveSelected(drag.before, dx, dy);
+  drag.moved = drag.moved || dx !== 0 || dy !== 0;
+  drawObjects();
+}
+
+function objectMouseUp() {
+  if (!drag) return;
+  if (drag.moved) {
+    undoStack.push([{ kind: 'objects', from: drag.before, to: snapshotObjects() }]);
+    redoStack = [];
+    updateUndoButtons();
+  }
+  drag = null;
+  updateObjectPanel();
+}
+
+// Where a new object goes: the spot last clicked, or next to the selected object.
+function newObjectPosition() {
+  if (placePoint) return { ...placePoint };
+  const item = selectedItem();
+  if (item && selection.kind !== 'start') return { x: item.x + 8, y: item.y };
+  return null;
+}
+
+function addObject() {
+  if (!objects) return;
+  const type = +$('objectType').value;
+  const position = newObjectPosition();
+  if (!position) {
+    showMessage('Click an empty spot on the map first, to say where the object goes.', 'bad');
+    return;
+  }
+  const s = selection;
+  const inGroup = s && (s.kind === 'group' || s.kind === 'member');
+  placePoint = null;
+  editObjects(() => {
+    forEachRelease(model => {
+      const object = { type, x: position.x, y: position.y, note: '' };
+      if (inGroup) model.groups[s.group].members.push(object);
+      else model.singles.push(object);
+    });
+    selection = inGroup ? { kind: 'member', group: s.group, member: objects.groups[s.group].members.length - 1 }
+      : { kind: 'single', single: objects.singles.length - 1 };
+  });
+}
+
+// A new group: its trigger and one object, at the spot last clicked.
+function addGroup() {
+  if (!objects) return;
+  if (!placePoint) {
+    showMessage('Click an empty spot on the map first, to say where the group goes.', 'bad');
+    return;
+  }
+  const type = +$('objectType').value;
+  const { x, y } = placePoint;
+  placePoint = null;
+  editObjects(() => {
+    forEachRelease(model => model.groups.push({ x, y, note: '', members: [{ type, x, y, note: '' }] }));
+    selection = { kind: 'member', group: objects.groups.length - 1, member: 0 };
+  });
+}
+
+// Delete the selected object, or the whole selected group; a group left empty goes too.
+function deleteSelected() {
+  if (!objects || !selection) return;
+  if (selection.kind === 'start') {
+    showMessage('Start positions belong to the start and the checkpoints, so they stay; move them instead.', 'bad');
+    return;
+  }
+  const s = selection;
+  editObjects(() => {
+    forEachRelease(model => {
+      if (s.kind === 'single') model.singles.splice(s.single, 1);
+      else if (s.kind === 'group') model.groups.splice(s.group, 1);
+      else {
+        const group = model.groups[s.group];
+        group.members.splice(s.member, 1);
+        if (!group.members.length) model.groups.splice(s.group, 1);
+      }
+    });
+    selection = null;
+  });
+}
+
+// Arrow keys move the selected thing by one unit, or by a cell with Shift (start
+// positions always by a cell).
+function nudgeSelected(key, shift) {
+  const step = shift || selection.kind === 'start' ? 8 : 1;
+  const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key];
+  const before = snapshotObjects();
+  editObjects(() => moveSelected(before, dx, dy));
 }
 
 // ===================================================================================
 // Events
 // ===================================================================================
 
+// A .s file is a level source, read as latin-1 (a character a byte); anything else a map.
 function openFile(file) {
-  if (file) file.arrayBuffer().then(buffer => loadMap(file.name, buffer));
+  if (!file) return Promise.resolve();
+  if (/\.s$/i.test(file.name)) {
+    return file.arrayBuffer().then(buffer => {
+      const bytes = new Uint8Array(buffer);
+      let text = '';
+      for (let k = 0; k < bytes.length; k += 0x8000) text += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+      loadObjects(file.name, text);
+    });
+  }
+  return file.arrayBuffer().then(buffer => loadMap(file.name, buffer));
 }
 
 $('file').onchange = event => openFile(event.target.files[0]);
+$('objectFile').onchange = event => openFile(event.target.files[0]);
 $('view').addEventListener('dragover', event => event.preventDefault());
 $('view').addEventListener('drop', event => {
   event.preventDefault();
-  openFile(event.dataTransfer.files[0]);
+  // a map and its source dropped together: the map first
+  const files = [...event.dataTransfer.files].sort((a, b) => /\.s$/i.test(a.name) - /\.s$/i.test(b.name));
+  files.reduce((done, file) => done.then(() => openFile(file)), Promise.resolve());
 });
 
+$('mode').onchange = setMode;
+$('release').onchange = () => {
+  objects.release = $('release').value;
+  updateLevelLabel();
+  drawObjects();
+  updateObjectPanel();
+};
 $('zoom').onchange = applyZoom;
 for (const id of ['showTypes', 'showGrid', 'showBroken']) $(id).onchange = redrawOverlay;
+for (const id of ['showObjects', 'showTriggers']) $(id).onchange = drawObjects;
 $('undo').onclick = undo;
 $('redo').onclick = redo;
 $('save').onclick = saveMap;
+$('saveObjects').onclick = saveObjects;
+$('addObject').onclick = addObject;
+$('addGroup').onclick = addGroup;
+$('deleteObject').onclick = deleteSelected;
+$('objectInspector').addEventListener('change', event => {
+  const field = event.target.dataset.field;
+  if (!field) return;
+  if (field === 'type') editObjects(() => forEachRelease(model => { itemIn(model, selection).type = +event.target.value; }));
+  else objectFieldChanged(field, event.target.value);
+});
 
 const stack = $('stack');
 stack.addEventListener('contextmenu', event => event.preventDefault());
 
-// left button: start a paint stroke; right button (or Alt): pick up the block
+// Tiles: the left button starts a paint stroke, the right button (or Alt) picks up the
+// block.  Objects: the left button selects and drags, or picks the spot for new objects.
 stack.addEventListener('mousedown', event => {
   if (!map) return;
+  if (!isTilesMode()) {
+    objectMouseDown(event);
+    return;
+  }
   const cell = cellUnderMouse(event);
   if (cell == null) return;
   if (event.button === 2 || event.altKey) {
     selectBlock(ownBlock(map.cells[cell]));
-    showCursor(cell);
+    showCursor(cell, event);
     return;
   }
   if (event.button !== 0) return;
   stroke = [];
   paintCell(cell);
-  showCursor(cell);
+  showCursor(cell, event);
 });
 
-// dragging with the left button keeps painting
+// dragging with the left button keeps painting, or moves the object
 stack.addEventListener('mousemove', event => {
   if (!map) return;
   const cell = cellUnderMouse(event);
-  if (stroke && cell != null && (event.buttons & 1)) paintCell(cell);
-  showCursor(cell);
+  if (isTilesMode()) {
+    if (stroke && cell != null && (event.buttons & 1)) paintCell(cell);
+  } else {
+    objectMouseMove(event);
+  }
+  showCursor(cell, event);
 });
 
-window.addEventListener('mouseup', () => { if (stroke) endStroke(); });
+window.addEventListener('mouseup', () => {
+  if (stroke) endStroke();
+  objectMouseUp();
+});
 stack.addEventListener('mouseleave', () => showCursor(null));
 
-// Ctrl+Z undo, Ctrl+Y (or Ctrl+Shift+Z) redo, Ctrl+S save
+// Ctrl+Z undo, Ctrl+Y (or Ctrl+Shift+Z) redo, Ctrl+S save (the objects when editing
+// objects, else the map); when editing objects, Delete deletes and the arrow keys move
 window.addEventListener('keydown', event => {
-  if (!(event.ctrlKey || event.metaKey)) return;
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (!(event.ctrlKey || event.metaKey)) {
+    if (typing || isTilesMode() || !objects || !selection) return;
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      deleteSelected();
+    } else if (event.key.startsWith('Arrow')) {
+      event.preventDefault();
+      nudgeSelected(event.key, event.shiftKey);
+    }
+    return;
+  }
   if (event.key === 'z' && !event.shiftKey) {
     event.preventDefault();
     undo();
@@ -752,7 +1885,8 @@ window.addEventListener('keydown', event => {
     redo();
   } else if (event.key === 's' && map) {
     event.preventDefault();
-    saveMap();
+    if (!isTilesMode() && objects) saveObjects();
+    else saveMap();
   }
 });
 </script>

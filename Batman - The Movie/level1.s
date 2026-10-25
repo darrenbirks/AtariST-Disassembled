@@ -35,6 +35,44 @@ FLOOR_WALK_END	equ	$fc             ; floor ends here for walking (ladders $fa-$f
 FLOOR_LAND_END	equ	$fb             ; and here for landing from a fall
 LEVEL_TIME	equ	$900            ; the time limit, minutes and seconds in BCD (9:00)
 TILE_CACHE_SLOTS	equ	96      ; tiles the tile cache holds, $400 bytes each
+SPAWN_OFFSET_X	equ	$50             ; added to an object's x when it appears, and taken off scroll_x for the trigger test
+VAT_DEPTH	equ	$d4             ; Jack's y when his fall reaches the vat (vat_watch)
+VAT_SPLASH_X	equ	$5e0            ; where Jack's splash in the vat is drawn (vat_splash)
+ENDING_SCROLL_X	equ	$0              ; level_complete pans the view after a falling boss until scroll_x gets here (never run on level 1)
+CLIMB_COLUMN_ROWS	equ	10      ; map rows of the column boss_climb_watch swings (never run on level 1)
+MAP_START	equ	$7400           ; level1.map loads here: tile count, row length and rows, then the map
+map_tile_count	equ	MAP_START       ; the tile count, the row length and the rows
+map_tiles	equ	MAP_START+6     ; the map: a tile number per cell, MAP_ROW_LENGTH a row
+TILE_TABLE	equ	MAP_START+6+MAP_ROW_LENGTH*MAP_ROWS ; the tile table: a word per tile, its own block and the one to its right
+TILE_REFS	equ	TILE_TABLE+$200 ; the tile cache: a reference count per tile (work space in the map file)
+TILE_SLOTS	equ	TILE_REFS+$100  ; the tile cache: the slot of each tile
+MAP_BLOCK_COUNT	equ	82              ; the 16 x 16 graphics blocks in level1.map, $80 bytes each
+TILE_CACHE	equ	TILE_REFS+$200+MAP_BLOCK_COUNT*$80 ; the tile cache: TILE_CACHE_SLOTS tiles of $400 bytes, after the map file
+GFX_A	equ	$50000                  ; level1a.gfx loads here: its sprite set count at +2
+GFX_A_BLOCKS	equ	GFX_A+$1f4      ; level1a.gfx's block graphics, converted at level start
+GFX_A_BLOCK_COUNT	equ	$1961   ; and how many
+GFX_B	equ	$60000                  ; level1b.gfx loads here: its sprite set count at +2
+GFX_B_BLOCKS	equ	GFX_B+$19c      ; level1b.gfx's block graphics, converted at level start
+GFX_B_BLOCK_COUNT	equ	$741    ; and how many
+SPRITE_HEADERS	equ	$2427e          ; the sprite headers, 8 bytes each (x/y offset, width code, height, data)
+SPRITE_PACKED	equ	SPRITE_HEADERS+$1200 ; where pack_sprites packs the sprite data
+SPRITE_DATA	equ	$23382          ; draw_sprite adds a header's data offset to this
+SPRITE_SHIFTED	equ	$48800          ; the shifted copies of the sprites
+SCREEN_FRONT	equ	$70000          ; the screens (they swap every frame); the front one is scratch while the level starts
+SCREEN_BACK	equ	$78000          ; and the other
+STACK_TOP	equ	$6d3e8          ; the stack, below the sound driver at $6d400
+map_climb_column	equ	map_tiles+$3a ; the column boss_climb_watch swings (never run on level 1)
+SCROLL_Y_LIMIT	equ	MAP_ROWS*8-$60  ; the view scrolls down no further than scroll_y = this + 8: the map less the view
+SPRITE_HEADER_COUNT	equ	62      ; sprite headers in a set; draw_sprite keeps 8 shifted copies of them
+SPRITE_COUNT	equ	$223            ; the sprites shift_sprite_loop shifts
+JACK_SPRITE	equ	$803d           ; Jack Napier's sprite base
+SPLASH_SPRITE	equ	$30             ; the sprite base of Jack's splash in the vat
+CLIMB_SPRITE	equ	$0              ; the climbing boss's sprite base (0: level 1 has no climb)
+LANDED_SPRITE	equ	51              ; the sprite of the boss landed at the end (complete_boss_landed)
+BULLET_SPRITE	equ	$34             ; the bullet sprites start here
+LEVEL_TUNE	equ	1               ; the level's music (play_tune)
+LOADER_FRONT_END	equ	$200    ; the loader's jmp table at $200 (a jmp a long): entry 0, the front end
+NEXT_SCENE	equ	$208            ; where the level goes when it is done: level 2
 
 ; symbols in other modules
 panel_tick	equ	$6b800		; panel.s
@@ -71,14 +109,14 @@ player_state_lo	equ	$2b5a		; call_player_state+4
 	ifne	CONFIG-RETAIL_2DISK
 
 ;----------------------------------------------------------------------
-; Level entry: stack at $6d3e8, convert graphics, build sprite tables, install handlers.
+; Level entry: stack at STACK_TOP, convert graphics, build sprite tables, install handlers.
 ;----------------------------------------------------------------------
 level_start:
-	lea	$6019c,a0                       ; level1b_gfx +$19c
-	move.w	#$740,d7
+	lea	GFX_B_BLOCKS,a0
+	move.w	#GFX_B_BLOCK_COUNT-1,d7
 	bsr.w	convert_level_gfx
-	lea	$501f4,a0                       ; level1a_gfx +$1f4
-	move.w	#$1960,d7
+	lea	GFX_A_BLOCKS,a0
+	move.w	#GFX_A_BLOCK_COUNT-1,d7
 	bsr.w	convert_level_gfx
 	bsr.w	build_sprite_tables
 	endc
@@ -92,7 +130,7 @@ level_start:
 clear_palette_loop:
 	move.w	d0,(a0)+
 	dbra	d1,clear_palette_loop
-	lea	$6d3e8,sp
+	lea	STACK_TOP,sp
 	lea	vbl_handler,a0
 	move.l	a0,$70                          ; VBL vector
 	lea	mfp_vectors,a0
@@ -596,7 +634,7 @@ screen_back:	; from: draw_sprite, redraw_tiles, clear_back_screen, draw_player, 
 ;----------------------------------------------------------------------
 ; Wait for the frame count, swap screen_front / screen_back and set the video base; counts frame_toggle.
 ;----------------------------------------------------------------------
-wait_vbl_flip:	; from: level_begin, main_loop, tile_cache_free, level_exit_scroll, level_complete
+wait_vbl_flip:	; from: level_begin, main_loop, tile_cache_free, vat_splash, level_complete
 	move.w	frame_count.w,d1
 flip_wait_loop:
 	move.w	flip_request.w,d0
@@ -624,12 +662,12 @@ flip_sync_loop:
 
 
 clear_screens:	; from: level_start, level_begin
-	lea	$70000,a0
+	lea	SCREEN_FRONT,a0
 	move.w	#$17bf,d0
 clear_front_loop:
 	move.l	#$0,(a0)+
 	dbra	d0,clear_front_loop
-	lea	$78000,a0
+	lea	SCREEN_BACK,a0
 	move.w	#$17bf,d0
 clear_back_loop:
 	move.l	#$0,(a0)+
@@ -664,7 +702,7 @@ level_restart:	; from: state_dying
 	bsr.w	fade_in
 	move.w	#LEVEL_TIME,d0
 	jsr	panel_set_time
-	lea	$7406,a0                        ; level1_map +$6
+	lea	map_tiles,a0
 	movea.l	object_stack,a5
 place_objects_loop:
 	movem.w	(a5)+,d2-d5
@@ -729,7 +767,7 @@ copy_start_loop:
 	bclr	#$0,panel_flags
 	btst	#$0,game_flags
 	bne.s	main_loop
-	moveq	#1,d0
+	moveq	#LEVEL_TUNE,d0
 	jsr	play_tune
 
 ;----------------------------------------------------------------------
@@ -761,7 +799,7 @@ key_f2:
 	bra.w	frame_update
 
 music_on:
-	moveq	#1,d0
+	moveq	#LEVEL_TUNE,d0
 	jsr	play_tune
 	bra.s	frame_update
 
@@ -794,10 +832,10 @@ call_player_state:
 
 ;----------------------------------------------------------------------
 ; Sprite blitter: d0/d1 position, d2 sprite number (bit 15 = flipped), through sprite_shift_table.
-; Sprite headers at $2427e (8 bytes: x/y offset, width code, height, data), data at $23382.
+; Sprite headers at SPRITE_HEADERS (8 bytes: x/y offset, width code, height, data), data at SPRITE_DATA.
 ;----------------------------------------------------------------------
 draw_sprite:	; from: draw_enemy, draw_enemy_frame, draw_bullets, draw_player, level_complete
-	movea.l	#$2427e,a1
+	movea.l	#SPRITE_HEADERS,a1
 	clr.w	d7
 	add.w	d1,d1
 	asl.w	#3,d2
@@ -815,7 +853,7 @@ draw_sprite:	; from: draw_enemy, draw_enemy_frame, draw_bullets, draw_player, le
 	eor.w	d4,d0
 	neg.w	d4
 	addq.w	#8,d4
-	mulu.w	#$1f0,d4
+	mulu.w	#SPRITE_HEADER_COUNT*8,d4
 	adda.l	d4,a1
 	bra.s	sprite_flipped_header
 
@@ -843,7 +881,7 @@ sprite_flip_bits:
 	move.w	d4,d2
 	move.b	(a1)+,d7
 	movea.l	(a1)+,a0
-	adda.l	#$23382,a0
+	adda.l	#SPRITE_DATA,a0
 	bra.s	sprite_clip_y
 
 sprite_normal_header:
@@ -856,7 +894,7 @@ sprite_normal_header:
 	moveq	#7,d4
 	and.w	d0,d4
 	eor.w	d4,d0
-	mulu.w	#$1f0,d4
+	mulu.w	#SPRITE_HEADER_COUNT*8,d4
 	adda.l	d4,a1
 	clr.w	d2
 	move.b	(a1)+,d2
@@ -1512,17 +1550,17 @@ redraw_tiles:	; from: level_begin, main_loop, tile_cache_free
 	moveq	#7,d2
 	and.w	d0,d2
 	lsl.w	#7,d2
-	addi.l	#$c27e,d2                       ; level1_map +$4e7e
+	addi.l	#TILE_CACHE,d2
 	movea.l	d2,a4
 	lsr.w	#3,d1
 	lsr.w	#3,d0
 	mulu.w	#MAP_ROW_LENGTH,d1
 	addq.w	#1,d1
 	add.w	d0,d1
-	addi.l	#$7406,d1                       ; level1_map +$6
+	addi.l	#map_tiles,d1
 	movea.l	d1,a6
 	move.w	#$a0,d4
-	lea	$987e,a5                        ; level1_map +$247e
+	lea	TILE_SLOTS,a5
 	moveq	#7,d0
 	and.w	scroll_y.w,d0
 	beq.s	tiles_aligned
@@ -1533,7 +1571,7 @@ redraw_tiles:	; from: level_begin, main_loop, tile_cache_free
 	bsr.w	draw_partial_row
 	subi.w	#$88,d4
 	adda.w	d4,a0
-	lea	$ba(a6),a6
+	lea	MAP_ROW_LENGTH-18(a6),a6
 tiles_aligned:
 	moveq	#7,d7
 	moveq	#7,d0
@@ -1574,7 +1612,7 @@ tiles_col_loop:
 	addq.w	#8,a0
 	dbra	d6,tiles_col_loop
 	lea	$970(a0),a0
-	lea	$ba(a6),a6
+	lea	MAP_ROW_LENGTH-18(a6),a6
 	dbra	d7,tiles_row
 	clr.b	partial_row_loop-3.w
 	moveq	#7,d1
@@ -1618,7 +1656,7 @@ tile_free_ptr:	; from: init_tile_cache, tile_cache_get, tile_cache_free
 	dc.w	$0000,$0000
 
 ;----------------------------------------------------------------------
-; Reset the tile cache: free list, reference counts at $977e, cache every tile of the start window.
+; Reset the tile cache: free list, reference counts at TILE_REFS, cache every tile of the start window.
 ;----------------------------------------------------------------------
 init_tile_cache:	; from: level_begin
 	moveq	#TILE_CACHE_SLOTS-1,d7
@@ -1627,7 +1665,7 @@ init_tile_cache:	; from: level_begin
 free_list_loop:
 	move.b	d7,(a0)+
 	dbra	d7,free_list_loop
-	lea	$977e,a0                        ; level1_map +$237e
+	lea	TILE_REFS,a0
 	moveq	#TILE_CACHE_SLOTS-1,d7
 clear_refs_loop:
 	move.l	#$ffffffff,(a0)+
@@ -1640,7 +1678,7 @@ clear_refs_loop:
 	subq.w	#1,d1
 	mulu.w	#MAP_ROW_LENGTH,d1
 	add.w	d1,d0
-	addi.w	#$7406,d0
+	addi.w	#map_tiles,d0
 	movea.l	d0,a6
 	addi.w	#MAP_ROW_LENGTH+1,d0
 	move.l	d0,map_row_ptr.w
@@ -1654,7 +1692,7 @@ cache_cols_loop:
 	bsr.w	tile_cache_free
 	movem.w	(sp)+,d6-d7
 	dbra	d7,cache_cols_loop
-	lea	$b8(a6),a6
+	lea	MAP_ROW_LENGTH-20(a6),a6
 	dbra	d6,cache_rows_loop
 	moveq	#9,d7
 cache_last_row_loop:
@@ -1819,7 +1857,7 @@ down_free_loop:
 ; Release one tile reference (d0 = tile); a count reaching 0 frees its cache slot.
 ;----------------------------------------------------------------------
 tile_cache_get:	; from: scroll_left, scroll_right, scroll_up, scroll_down, object_use_start, object_use_anim
-	lea	$977e,a2                        ; level1_map +$237e
+	lea	TILE_REFS,a2
 	subq.b	#1,$0(a2,d0.w)
 	bcc.s	cache_exit
 	addi.w	#$100,d0
@@ -1835,7 +1873,7 @@ cache_exit:	; from: tile_cache_free
 ; Take a tile reference (d0 = tile); a new tile is converted into a free cache slot (8 shifts).
 ;----------------------------------------------------------------------
 tile_cache_free:	; from: init_tile_cache, scroll_left, scroll_right, scroll_up, scroll_down, object_use_start, ...
-	lea	$977e,a2                        ; level1_map +$237e
+	lea	TILE_REFS,a2
 	addq.b	#1,$0(a2,d0.w)
 	bne.s	cache_exit
 	moveq	#0,d1
@@ -1855,7 +1893,7 @@ cache_load_tile:
 	move.b	d1,$0(a2,d0.w)
 	swap	d1
 	lsr.l	#6,d1
-	addi.l	#$c27e,d1                       ; level1_map +$4e7e
+	addi.l	#TILE_CACHE,d1
 	movea.l	d1,a1
 	add.w	d0,d0
 	lea	-$300(a2),a2
@@ -2044,11 +2082,11 @@ build_tile_order:	; from: level_begin
 ; the one as far from the bottom (42 rows of $cc bytes).
 ;----------------------------------------------------------------------
 unused_flip_map:
-	lea	$7406,a0                        ; level1_map +$6
+	lea	map_tiles,a0
 	tst.b	(a0)
-	lea	$94b2,a1                        ; level1_map +$20b2
+	lea	TILE_TABLE-MAP_ROW_LENGTH,a1
 	move.w	#MAP_ROW_LENGTH,d6
-	move.w	#$14,d7
+	move.w	#MAP_ROWS/2-1,d7
 flip_map_row_loop:
 	move.w	d6,d5
 	subq.w	#1,d5
@@ -2116,17 +2154,17 @@ convert_mask_loop:
 	endc
 
 tile_order_init:	; from: build_tile_order
-	lea	$70000,a0
-	move.w	$7400,d7                        ; level1_map +$0
+	lea	SCREEN_FRONT,a0
+	move.w	map_tile_count,d7
 	subq.w	#1,d7
 	lea	$1(a0,d7.w),a0
 tile_order_fill_loop:
 	move.b	d7,-(a0)
 	dbra	d7,tile_order_fill_loop
 tile_order_sort_pass:
-	lea	$70000,a0
-	lea	$957e,a6                        ; level1_map +$217e
-	move.w	$7400,d7                        ; level1_map +$0
+	lea	SCREEN_FRONT,a0
+	lea	TILE_TABLE,a6
+	move.w	map_tile_count,d7
 	subq.w	#2,d7
 	clr.w	d1
 tile_order_compare:
@@ -2146,13 +2184,13 @@ tile_order_next:
 	bne.s	tile_order_sort_pass
 	clr.w	d0
 	move.w	#$ff,d7
-	lea	$70100,a0
+	lea	SCREEN_FRONT+$100,a0
 	movea.l	a0,a1
 tile_order_invert_loop:
 	move.b	-(a0),d0
 	move.b	d7,$0(a1,d0.w)
 	dbra	d7,tile_order_invert_loop
-	lea	$7406,a0                        ; level1_map +$6
+	lea	map_tiles,a0
 	move.w	#MAP_ROW_LENGTH*MAP_ROWS-1,d7
 tile_order_remap_loop:
 	clr.w	d0
@@ -2177,34 +2215,34 @@ unscramble_font_loop:
 	eor.b	d0,$1(a0)
 	addq.w	#5,a0
 	dbra	d7,unscramble_font_loop
-	tst.b	$50006                          ; level1a_gfx +$6
-	lea	$2427e,a1
-	lea	$60002,a0                       ; level1b_gfx +$2
+	tst.b	GFX_A+6
+	lea	SPRITE_HEADERS,a1
+	lea	GFX_B+2,a0
 	lea	sprite_heights,a2
 	bsr.w	load_sprite_sets
 	move.l	a1,-(sp)
-	lea	$50002,a0                       ; level1a_gfx +$2
+	lea	GFX_A+2,a0
 	bsr.w	load_sprite_sets
 	move.l	a1,-(sp)
-	move.w	$50002,d7                       ; level1a_gfx +$2
-	add.w	$60002,d7                       ; level1b_gfx +$2
+	move.w	GFX_A+2,d7
+	add.w	GFX_B+2,d7
 	subq.w	#1,d7
-	lea	$2547e,a0
-	lea	$2427e,a1
+	lea	SPRITE_PACKED,a0
+	lea	SPRITE_HEADERS,a1
 	bsr.w	pack_sprites
 	movea.l	a0,a6
 	movea.l	a1,a2
 	moveq	#6,d7
 sprite_set_loop:
 	movem.l	(sp)+,a0-a1
-	move.w	#$3d,d0
+	move.w	#SPRITE_HEADER_COUNT-1,d0
 copy_header_loop:
 	move.l	(a1)+,(a0)+
 	move.l	(a1)+,(a0)+
 	dbra	d0,copy_header_loop
 	movem.l	a0-a1,-(sp)
-	move.w	#$3d,d6
-	lea	$70000,a0
+	move.w	#SPRITE_HEADER_COUNT-1,d6
+	lea	SCREEN_FRONT,a0
 sprite_loop:
 	move.w	d6,-(sp)
 	clr.w	d6
@@ -2278,7 +2316,7 @@ sprite_row_cols:
 sprite_row_tail:
 	btst	#$6,$2(a1)
 	beq.s	sprite_row_tail_narrow
-	cmpa.l	#$73000,a0
+	cmpa.l	#SCREEN_FRONT+$3000,a0
 	nop
 	move.b	(a2)+,d0
 	addq.l	#1,a2
@@ -2332,14 +2370,14 @@ sprite_row_done:
 	movea.l	$4(sp),a1
 	movea.l	a6,a0
 	move.w	d7,-(sp)
-	move.w	#$3d,d7
+	move.w	#SPRITE_HEADER_COUNT-1,d7
 	bsr.w	pack_sprites
 	move.w	(sp)+,d7
 	movea.l	a0,a6
 	dbra	d7,sprite_set_loop
 	addq.l	#8,sp
 	move.w	#$ff,d7
-	lea	$70000,a3
+	lea	SCREEN_FRONT,a3
 reverse_table_loop:
 	move.w	d7,d5
 	moveq	#7,d6
@@ -2349,10 +2387,10 @@ reverse_bits_loop:
 	dbra	d6,reverse_bits_loop
 	move.b	d4,$0(a3,d7.w)
 	dbra	d7,reverse_table_loop
-	lea	$48800,a0
+	lea	SPRITE_SHIFTED,a0
 	lea	sprite_widths.w,a4
-	lea	$2427e,a1
-	move.w	#$222,d7
+	lea	SPRITE_HEADERS,a1
+	move.w	#SPRITE_COUNT-1,d7
 	clr.w	d0
 shift_sprite_loop:
 	clr.w	d6
@@ -2551,7 +2589,7 @@ sprite_header_loop:
 	add.l	a5,d2
 	move.l	d2,(a1)+
 	movea.l	d2,a4
-	lea	$70000,a3
+	lea	SCREEN_FRONT,a3
 	lsr.w	#1,d0
 	subq.w	#1,d0
 	subq.w	#1,d1
@@ -2602,7 +2640,7 @@ sprite_heights:	; from: build_sprite_tables, draw_enemy, draw_player
 	dc.w	$2006,$2004,$1507,$1506,$1504,$1506,$1507,$1504
 	dc.w	$2906,$1306,$2a07,$2904,$2efc,$2904,$25fb,$0600
 	dc.w	$0402
-enemies:	; from: level_begin, spawn_enemy, update_enemies, joker_escape, acid_pour
+enemies:	; from: level_begin, spawn_enemy, update_enemies, vat_watch, boss_climb_watch
 	dc.w	$0000,$0119,$003a,$006f
 	dcb.b	17,$00
 	dc.b	$a0,$00,$38,$00,$3d
@@ -2667,7 +2705,7 @@ score_distance_exit:
 spawn_enemies:	; from: main_loop
 	movem.w	scroll_x.w,d0-d1
 	subq.w	#8,d1
-	subi.w	#$50,d0
+	subi.w	#SPAWN_OFFSET_X,d0
 	lea	spawn_table.w,a0
 spawn_group_loop:
 	movem.w	(a0)+,d2-d3
@@ -2722,7 +2760,7 @@ spawn_single_check:
 spawn_enemy:	; from: spawn_enemies
 	movem.w	(a0)+,d2-d4
 	addq.w	#8,d4
-	addi.w	#$50,d3
+	addi.w	#SPAWN_OFFSET_X,d3
 	cmp.w	$22,d0
 	lea	enemies.w,a6
 	moveq	#9,d6
@@ -3092,7 +3130,7 @@ goon_right_jump_down:
 	cmpi.w	#$8,d2
 	bcc.s	goon_right_step
 	move.w	d2,$8(a6)
-	move.l	#$50010,$a(a6)                  ; level1a_gfx +$10
+	move.l	#$50010,$a(a6)
 	bra.s	goon_right_step
 
 goon_right_jump_up:
@@ -3143,8 +3181,8 @@ goon_walk_left:	; from: enemy_type_table
 	cmpi.b	#TILE_FLOOR,d2
 	bcc.s	goon_left_decide
 	move.w	$6(a6),d2
-	cmpi.w	#$803d,d2
-	beq.w	joker_start
+	cmpi.w	#JACK_SPRITE,d2
+	beq.w	jack_start
 goon_left_edge:
 	move.w	#$e,(a6)
 	clr.w	$8(a6)
@@ -3190,7 +3228,7 @@ goon_left_jump_up:
 	cmpi.w	#$8,d2
 	bcc.s	goon_left_step
 	move.w	d2,$8(a6)
-	move.l	#$60010,$a(a6)                  ; level1b_gfx +$10
+	move.l	#$60010,$a(a6)
 goon_left_step:	; from: thug_walk_left
 	subq.w	#1,d4
 	move.w	d4,$2(a6)
@@ -3296,37 +3334,37 @@ climb_turn:	; from: climb_up
 
 
 ;----------------------------------------------------------------------
-; Enemy types 16-18: the Joker, waits, shoots and turns.
+; Enemy types 16-18: Jack Napier (sprite base $803d): waits, shoots and turns.  A goon walking left with his sprite (type 23) becomes him at a floor edge (jack_start).
 ;----------------------------------------------------------------------
-joker_start:	; from: goon_walk_left
+jack_start:	; from: goon_walk_left
 	move.w	#$ffff,$8(a6)
 	moveq	#6,d2
 	cmp.w	player_top_y.w,d1
-	bmi.s	joker_set_type
+	bmi.s	jack_set_type
 	moveq	#1,d2
 	move.w	$12(a6),d3
 	addq.w	#4,d3
 	cmp.w	player_top_y.w,d3
-	bpl.s	joker_set_type
+	bpl.s	jack_set_type
 	addq.w	#2,d2
-joker_set_type:
+jack_set_type:
 	move.w	d2,$a(a6)
 	move.w	#$10,(a6)
 
-joker_wait:	; from: enemy_type_table
-	bsr.w	draw_joker
+jack_wait:	; from: enemy_type_table
+	bsr.w	draw_jack
 	subq.w	#1,$8(a6)
-	bpl.s	joker_exit
+	bpl.s	jack_exit
 	addq.w	#1,(a6)
 	move.w	#$3,$8(a6)
-joker_exit:	; from: joker_shoot, joker_turn
+jack_exit:	; from: jack_shoot, jack_turn
 	rts
 
 
-joker_shoot:	; from: enemy_type_table
-	bsr.w	draw_joker
+jack_shoot:	; from: enemy_type_table
+	bsr.w	draw_jack
 	btst	#$0,frame_toggle+1
-	bne.s	joker_exit
+	bne.s	jack_exit
 	bsr.w	new_bullet
 	sub.w	(a5)+,d1
 	add.w	scroll_dy.w,d1
@@ -3337,23 +3375,23 @@ joker_shoot:	; from: enemy_type_table
 	moveq	#2,d2
 	bsr.w	play_sfx_on_screen
 	subq.w	#1,$8(a6)
-	bne.s	joker_exit
+	bne.s	jack_exit
 	move.w	#$6,$8(a6)
 	addq.w	#1,(a6)
 	rts
 
 
-joker_turn:	; from: enemy_type_table
-	bsr.w	draw_joker
+jack_turn:	; from: enemy_type_table
+	bsr.w	draw_jack
 	subq.w	#1,$8(a6)
-	bne.s	joker_exit
+	bne.s	jack_exit
 	move.w	#$4,$8(a6)
 	move.w	$a(a6),d2
 	move.w	$6(a6),d3
-	cmpi.w	#$803d,d3
-	bne.s	joker_turn_store
+	cmpi.w	#JACK_SPRITE,d3
+	bne.s	jack_turn_store
 	move.w	#$1,d2
-joker_turn_store:
+jack_turn_store:
 	not.w	d2
 	andi.w	#$1,d2
 	addi.w	#$e,d2
@@ -3364,7 +3402,7 @@ sfx_exit:	; from: play_sfx_on_screen
 	rts
 
 
-play_sfx_on_screen:	; from: joker_shoot, grenade_right, attack_frame, faller
+play_sfx_on_screen:	; from: jack_shoot, grenade_right, attack_frame, faller
 	cmpi.w	#$a0,d0
 	bcc.s	sfx_exit
 	cmpi.w	#$59,d1
@@ -3385,7 +3423,7 @@ thug_shoot_left_frames:	; from: thug_shoot_left
 	dc.w	$0000,$0010,$0011,$000e
 thug_pause_left_frames:	; from: thug_pause_left
 	dc.w	$0012,$0013,$000e
-joker_frames:	; from: draw_joker
+jack_frames:	; from: draw_jack
 	dc.w	$000d,$000e,$000f,$0012,$0008,$8006,$e00d,$e00e
 	dc.w	$e00f,$0012,$fff8,$8007,$0014,$0015,$0016,$000e
 	dc.w	$0008,$8006,$e014,$e015,$e016,$000e,$fff8,$8007
@@ -3393,10 +3431,10 @@ joker_frames:	; from: draw_joker
 	dc.w	$000f,$0012,$0003,$800a,$e012,$e013,$e00f,$000c
 	dc.w	$fffb,$8009,$0012,$0013,$000f,$000c,$0005,$8008
 
-draw_joker:	; from: joker_wait, joker_shoot, joker_turn
+draw_jack:	; from: jack_wait, jack_shoot, jack_turn
 	move.w	$a(a6),d2
 	mulu.w	#$c,d2
-	lea	joker_frames(pc,d2.w),a5
+	lea	jack_frames(pc,d2.w),a5
 
 draw_enemy_set:	; from: thug_shoot_right, thug_pause_right, thug_shoot_left, thug_pause_left, thug_fall
 	move.w	(a5)+,d2
@@ -3408,7 +3446,7 @@ draw_enemy_set:	; from: thug_shoot_right, thug_pause_right, thug_shoot_left, thu
 	rts
 
 
-draw_enemy:	; from: goon_walk_right, goon_walk_left, climb_up, draw_enemy_set, vat_countdown
+draw_enemy:	; from: goon_walk_right, goon_walk_left, climb_up, draw_enemy_set, boss_climb
 	add.w	$6(a6),d2
 	move.w	d2,d3
 	andi.w	#$1fff,d3
@@ -3427,7 +3465,7 @@ draw_enemy:	; from: goon_walk_right, goon_walk_left, climb_up, draw_enemy_set, v
 	rts
 
 
-draw_enemy_frame:	; from: goon_walk_right, goon_walk_left, climb_up, draw_enemy_set, level_exit_scroll, attacker_right, ...
+draw_enemy_frame:	; from: goon_walk_right, goon_walk_left, climb_up, draw_enemy_set, vat_splash, attacker_right, ...
 	add.w	$6(a6),d2
 	movem.w	d0-d1/a5-a6,-(sp)
 	bsr.w	draw_sprite
@@ -3456,7 +3494,7 @@ thug_fall_move:
 
 
 ;----------------------------------------------------------------------
-; Draw the 20 bullets (sprite 52 + type).
+; Draw the 20 bullets (sprite BULLET_SPRITE + type).
 ;----------------------------------------------------------------------
 draw_bullets:	; from: main_loop
 	lea	bullet_table.w,a5
@@ -3478,7 +3516,7 @@ bullet_sprite:
 	bpl.s	bullet_sprite_offset
 	ori.w	#$e000,d2
 bullet_sprite_offset:
-	addi.w	#$34,d2
+	addi.w	#BULLET_SPRITE,d2
 	bsr.w	draw_sprite
 	move.w	(sp)+,d7
 	movea.l	(sp)+,a6
@@ -3488,7 +3526,7 @@ bullets_draw_next:
 	rts
 
 
-new_bullet:	; from: aim_shot, joker_shoot, throw_batarang, fire_rope_up
+new_bullet:	; from: aim_shot, jack_shoot, throw_batarang, fire_rope_up
 	lea	bullets.w,a0
 	moveq	#19,d7
 bullet_slot_loop:
@@ -3823,10 +3861,10 @@ scroll_clamp:
 	subq.w	#8,d1
 	move.w	d1,d3
 	add.w	d0,d1
-	cmpi.w	#$f1,d1
+	cmpi.w	#SCROLL_Y_LIMIT+1,d1
 	bcs.s	scroll_vertical
 	bmi.s	scroll_top
-	move.w	#$f0,d2
+	move.w	#SCROLL_Y_LIMIT,d2
 	sub.w	d2,d1
 	sub.w	d1,d0
 	move.w	d2,d1
@@ -4056,7 +4094,7 @@ dying_dissolve:
 leave_level:	; from: main_loop
 	jsr	snd_stop
 	bsr.w	fade_out
-	bra.w	$200
+	bra.w	LOADER_FRONT_END
 
 game_over_text:	; from: state_dying
 	dc.w	$570f
@@ -4521,7 +4559,7 @@ walk_right_frame:
 	move.w	d0,(a0)+
 	move.w	#$1,(a0)
 
-player_idle:	; from: player_input_table, walk_right, walk_left, enemy_type_table, joker_escape, acid_pour
+player_idle:	; from: player_input_table, walk_right, walk_left, enemy_type_table, vat_watch, boss_climb_watch
 	rts
 
 
@@ -4835,7 +4873,7 @@ landed_dead_exit:
 
 
 ;----------------------------------------------------------------------
-; Return in d2 the map tile at player relative position d0/d1 (level1_map $7406, $cc per row).
+; Return in d2 the map tile at player relative position d0/d1 (map_tiles, MAP_ROW_LENGTH bytes a row).
 ;----------------------------------------------------------------------
 map_tile_at:	; from: thug_walk_left, thug_walk_right, goon_walk_right, goon_walk_left, climb_down, climb_up, ...
 	movem.w	scroll_x.w,d2-d3
@@ -4846,7 +4884,7 @@ map_tile_at:	; from: thug_walk_left, thug_walk_right, goon_walk_right, goon_walk
 	lsr.w	#3,d3
 	mulu.w	#MAP_ROW_LENGTH,d3
 	add.w	d2,d3
-	lea	$7406,a0                        ; level1_map +$6
+	lea	map_tiles,a0
 	clr.w	d2
 	move.b	$0(a0,d3.w),d2
 	rts
@@ -4861,7 +4899,7 @@ rope_pattern_right:	; from: draw_player
 	btst	#$0,d0
 	beq.s	rope_right_exit
 	move.l	#$3fff3fff,d5
-	move.l	#$c000,d6                       ; level1_map +$4c00
+	move.l	#$c000,d6
 	addq.l	#8,a0
 rope_right_exit:
 	rts
@@ -4892,7 +4930,7 @@ draw_player:	; from: level_begin, main_loop, state_knocked_wait
 	bmi.s	rope_mask
 	addq.w	#7,d0
 rope_mask:
-	move.l	#$c000,d6                       ; level1_map +$4c00
+	move.l	#$c000,d6
 	moveq	#7,d2
 	and.w	d0,d2
 	eor.w	d2,d0
@@ -4986,23 +5024,23 @@ enemy_type_table:	; from: update_enemies, goon_walk_left
 	dc.w	climb_down
 	dc.w	goon_walk_right
 	dc.w	goon_walk_left
-	dc.w	joker_wait
-	dc.w	joker_shoot
-	dc.w	joker_turn
+	dc.w	jack_wait
+	dc.w	jack_shoot
+	dc.w	jack_turn
 	dc.w	$0000
 	dc.w	faller
 	dc.w	attacker_right
 	dc.w	attacker_left
 	dc.w	goon_walk_left
-	dc.w	joker_escape
-	dc.w	level_exit_scroll
+	dc.w	vat_watch
+	dc.w	vat_splash
 	dc.w	object_use_start
 	dc.w	object_use_anim
 	dc.w	$0000
 	dc.w	crawler_right
 	dc.w	crawler_left
-	dc.w	vat_countdown
-	dc.w	acid_pour
+	dc.w	boss_climb
+	dc.w	boss_climb_watch
 	dc.w	level_complete
 	dc.w	checkpoint_1
 	dc.w	checkpoint_2
@@ -5016,14 +5054,14 @@ checkpoint_1:	; from: enemy_type_table
 
 
 checkpoint_2:	; from: enemy_type_table
-	moveq	#2,d0
+	moveq	#2,d0                           ; never run on level 1: no level 1 object has type 35
 	cmp.w	checkpoint.w,d0
 	bcs.s	checkpoint_done
 	bra.s	checkpoint_set
 
 
 checkpoint_3:	; from: enemy_type_table
-	moveq	#3,d0
+	moveq	#3,d0                           ; never run on level 1: no level 1 object has type 36
 	cmp.w	checkpoint.w,d0
 checkpoint_set:	; from: checkpoint_1, checkpoint_2
 	move.w	d0,checkpoint.w
@@ -5033,22 +5071,22 @@ checkpoint_done:	; from: checkpoint_1, checkpoint_2
 
 
 ;----------------------------------------------------------------------
-; Enemy type 25: the end of level exit, scrolls and draws the two door sprites.
+; Enemy type 25: Jack's splash in the vat: two mirrored halves of sprite $30 drawn at x VAT_SPLASH_X, then the level ends.
 ;----------------------------------------------------------------------
-level_exit_scroll:	; from: enemy_type_table
-	move.w	#$5e0,d0
+vat_splash:	; from: enemy_type_table
+	move.w	#VAT_SPLASH_X,d0
 	sub.w	scroll_x.w,d0
 	addq.w	#2,$a(a6)
 	movea.l	$8(a6),a5
 	move.w	(a5),d2
-	bmi.s	exit_scroll_done
+	bmi.s	vat_splash_done
 	move.w	d2,-(sp)
 	bsr.w	draw_enemy_frame
 	move.w	(sp)+,d2
 	addi.w	#$e000,d2
 	bra.w	draw_enemy_frame
 
-exit_scroll_done:
+vat_splash_done:
 	bsr.w	wait_vbl_flip
 	moveq	#30,d0
 	bsr.w	wait_frames
@@ -5059,55 +5097,55 @@ exit_scroll_done:
 	dc.w	$0001,$0001,$0001,$0001,$ffff
 
 ;----------------------------------------------------------------------
-; Enemy type 24: the Joker escapes, the level ends when his countdown finishes.
+; Enemy type 24: watches Jack Napier (sprite base $803d).  Knocked off (type 1), the music stops and the view follows his fall; at y VAT_DEPTH he is in the vat and becomes type 25, the splash.  Gone, his group can appear again.
 ;----------------------------------------------------------------------
-joker_escape:	; from: enemy_type_table
+vat_watch:	; from: enemy_type_table
 	move.w	#$98,$4(a6)
 	lea	enemies.w,a5
-	move.w	#$803d,d2
+	move.w	#JACK_SPRITE,d2
 	moveq	#9,d7
-find_joker_loop:
+find_jack_loop:
 	cmp.w	$6(a5),d2
-	beq.s	joker_found
+	beq.s	jack_found
 	lea	$16(a5),a5
-	dbra	d7,find_joker_loop
-	bra.s	joker_gone
+	dbra	d7,find_jack_loop
+	bra.s	jack_gone
 
-joker_found:
+jack_found:
 	move.w	(a5),d2
-	bne.s	joker_countdown
-joker_gone:
+	bne.s	jack_knocked_check
+jack_gone:
 	bclr	#$7,spawn_table+732
 	clr.w	(a6)
-joker_escape_exit:
+vat_watch_exit:
 	rts
 
-joker_countdown:
+jack_knocked_check:
 	subq.w	#1,d2
-	bne.s	joker_escape_exit
+	bne.s	vat_watch_exit
 	jsr	snd_stop_music
 	bset	#$0,panel_flags
 	move.w	#player_idle,player_state_lo.w
 	clr.w	on_ground.w
 	clr.w	rope_length.w
 	move.w	$4(a5),d0
-	cmpi.w	#$d4,d0
-	bcs.s	joker_scroll_follow
-	move.w	#$30,$6(a5)
-	move.l	#exit_scroll_done+12,$8(a5)
+	cmpi.w	#VAT_DEPTH,d0
+	bcs.s	jack_fall_follow
+	move.w	#SPLASH_SPRITE,$6(a5)
+	move.l	#vat_splash_done+12,$8(a5)
 	move.w	#$19,(a5)
 	clr.w	(a6)
 	moveq	#7,d0
 	jmp	play_sfx
 
-joker_scroll_follow:
+jack_fall_follow:
 	tst.w	player_y.w
-	bpl.s	joker_scroll_y
+	bpl.s	jack_fall_scroll_y
 	moveq	#7,d1
 	and.w	scroll_x.w,d1
-	beq.s	joker_scroll_y
+	beq.s	jack_fall_scroll_y
 	subq.w	#1,camera_x.w
-joker_scroll_y:
+jack_fall_scroll_y:
 	subi.w	#$18,d0
 	sub.w	scroll_y.w,d0
 	neg.w	d0
@@ -5242,22 +5280,22 @@ faller_hit_player:
 	bsr.w	player_damage
 	bra.s	faller_land
 
-vat_exit:	; from: vat_countdown, acid_pour
+boss_climb_exit:	; from: boss_climb, boss_climb_watch
 	rts
 
 
 ;----------------------------------------------------------------------
-; Enemy type 31: the vat countdown, the player dies when it reaches zero.
+; Enemy type 31: a boss climbing away, 2 units up every 4 frames; at the top he escapes and the player takes 90 damage.  Never run on level 1: no level 1 object has type 31.
 ;----------------------------------------------------------------------
-vat_countdown:	; from: enemy_type_table
+boss_climb:	; from: enemy_type_table
 	move.w	$4(a6),d2
 	not.w	d2
 	andi.w	#$6,d2
 	lsr.w	#1,d2
 	bclr	#$1,d2
-	beq.s	vat_draw
+	beq.s	boss_climb_draw
 	addi.w	#$e000,d2
-vat_draw:
+boss_climb_draw:
 	move.w	d2,-(sp)
 	addq.w	#2,d2
 	bsr.w	draw_enemy_frame
@@ -5267,23 +5305,23 @@ vat_draw:
 	bsr.w	draw_enemy
 	moveq	#3,d2
 	and.b	frame_toggle+1.w,d2
-	bne.s	vat_exit
+	bne.s	boss_climb_exit
 	subq.w	#2,$4(a6)
-	bmi.s	acid_kill
+	bmi.s	boss_escapes
 	rts
 
 
 ;----------------------------------------------------------------------
-; Enemy type 32: pouring acid, animates a column of map tiles.
+; Enemy type 32: watches a climbing boss (sprite $6a), with sound 10 and a column of map tiles swinging (CLIMB_COLUMN_ROWS rows from map_climb_column); knocked off (type 1) completes the level, gone costs the player 90 damage.  Never run on level 1: no level 1 object has type 32.
 ;----------------------------------------------------------------------
-acid_pour:	; from: enemy_type_table
+boss_climb_watch:	; from: enemy_type_table
 	btst	#$0,frame_toggle+1.w
-	beq.s	acid_animate
+	beq.s	climb_column_animate
 	movem.l	d0-d1/a6,-(sp)
 	moveq	#10,d0
 	jsr	play_sfx
 	movem.l	(sp)+,d0-d1/a6
-acid_animate:
+climb_column_animate:
 	move.w	frame_toggle.w,d2
 	lsr.w	#2,d2
 	andi.w	#$7,d2
@@ -5295,33 +5333,33 @@ acid_animate:
 	move.w	#$6bc6,d3
 	move.w	#$6ac5,d2
 	endc
-	moveq	#9,d7
-	lea	$7440.w,a0                      ; level1_map +$40
+	moveq	#CLIMB_COLUMN_ROWS-1,d7
+	lea	map_climb_column.w,a0
 	btst	#$3,frame_toggle+1.w
-	beq.s	acid_row_loop
+	beq.s	climb_column_row_loop
 	exg	d2,d3
-acid_row_loop:
+climb_column_row_loop:
 	move.w	d2,(a0)
 	exg	d2,d3
-	lea	$cc(a0),a0
-	dbra	d7,acid_row_loop
+	lea	MAP_ROW_LENGTH(a0),a0
+	dbra	d7,climb_column_row_loop
 	lea	enemies.w,a5
-	move.w	#$0,d2
+	move.w	#CLIMB_SPRITE,d2
 	moveq	#9,d7
-acid_find_loop:
+find_climbing_boss:
 	cmp.w	$6(a5),d2
-	beq.s	acid_check_timer
+	beq.s	climbing_boss_check
 	lea	$16(a5),a5
-	dbra	d7,acid_find_loop
-acid_kill:	; from: vat_countdown
+	dbra	d7,find_climbing_boss
+boss_escapes:	; from: boss_climb
 	moveq	#90,d6
 	bra.w	player_damage
 
-acid_check_timer:
+climbing_boss_check:
 	move.w	(a5),d2
-	beq.s	acid_kill
+	beq.s	boss_escapes
 	subq.w	#1,d2
-	bne.w	vat_exit
+	bne.w	boss_climb_exit
 	move.w	#player_idle,player_state_lo.w
 	move.w	#$21,(a5)
 	clr.w	rope_length.w
@@ -5331,21 +5369,21 @@ acid_check_timer:
 
 
 ;----------------------------------------------------------------------
-; Level complete: "JACK IS DEAD" / "THE JOKER LIVES..." texts, jump to loader vector 2.
+; Enemy type 33, level complete: the knocked-off boss falls while the view pans after him until scroll_x reaches ENDING_SCROLL_X; landed, the level ends (end_sequence).  Never run on level 1: only type 32 makes an object type 33.
 ;----------------------------------------------------------------------
 level_complete:	; from: enemy_type_table
 	move.w	scroll_x.w,d2
-	cmpi.w	#$0,d2
-	bcc.s	complete_joker_rise
+	cmpi.w	#ENDING_SCROLL_X,d2
+	bcc.s	complete_boss_fall
 	tst.w	player_y.w
-	bmi.s	complete_scroll_joker
+	bmi.s	complete_scroll_follow
 	tst.w	player_x.w
-	bmi.s	complete_scroll_joker
+	bmi.s	complete_scroll_follow
 	addq.w	#6,$2(a6)
 	subq.w	#8,camera_x.w
-	bra.s	complete_joker_rise
+	bra.s	complete_boss_fall
 
-complete_scroll_joker:
+complete_scroll_follow:
 	addq.w	#2,$2(a6)
 	moveq	#104,d2
 	sub.w	d0,d2
@@ -5354,15 +5392,15 @@ complete_scroll_joker:
 	moveq	#-2,d2
 complete_scroll_store:
 	add.w	d2,camera_x.w
-complete_joker_rise:
+complete_boss_fall:
 	cmpi.w	#$48,d1
-	bcc.s	complete_jack_dead
+	bcc.s	complete_boss_landed
 	move.w	$a(a6),d3
 	cmpi.w	#$e,d3
-	bpl.s	complete_joker_move
+	bpl.s	complete_boss_move
 	addq.w	#1,d3
 	move.w	d3,$a(a6)
-complete_joker_move:
+complete_boss_move:
 	asr.w	#1,d3
 	add.w	d3,$4(a6)
 	moveq	#24,d2
@@ -5375,14 +5413,14 @@ complete_joker_move:
 	move.l	#$210,d0
 	jmp	panel_add_score
 
-complete_jack_dead:
+complete_boss_landed:
 	moveq	#72,d1
 	andi.w	#$f8,d0
-	moveq	#51,d2
+	moveq	#LANDED_SPRITE,d2
 	bsr.w	draw_sprite
 	bsr.w	wait_vbl_flip
 	bset	#$6,game_flags
-end_sequence:	; from: main_loop, level_exit_scroll
+end_sequence:	; from: main_loop, vat_splash
 	jsr	snd_stop
 	btst	#$2,panel_flags
 	beq.s	end_no_life
@@ -5410,10 +5448,10 @@ end_no_life:
 	bsr.w	wait_frames
 	bsr.w	clear_and_dissolve
 	bsr.w	fade_out
-	bra.w	$208
+	bra.w	NEXT_SCENE
 
 
-wait_frames:	; from: state_dying, level_exit_scroll, level_complete
+wait_frames:	; from: state_dying, vat_splash, level_complete
 	add.w	flip_request.w,d0
 wait_frames_loop:
 	cmp.w	flip_request.w,d0
@@ -5437,7 +5475,7 @@ at_object_exit:	; from: object_use_start, object_use_anim
 
 ;----------------------------------------------------------------------
 ; Enemy types 26/27: an object the player uses (crouch in front of it): tiles are swapped
-; with an animation from use_anim_tiles.
+; with an animation from use_anim_tiles.  Never run on level 1: no level 1 object has type 26.
 ;----------------------------------------------------------------------
 object_use_start:	; from: enemy_type_table
 	bsr.s	player_at_object
@@ -5483,7 +5521,7 @@ use_tile_below:
 	movem.w	d2-d5,-(a5)
 	move.l	a5,object_stack.w
 	adda.w	d3,a0
-	move.w	#$e2,d6
+	move.w	#TILE_FLOOR,d6
 	tst.w	$6(a6)
 	beq.s	use_replace_tiles
 	addq.w	#5,d6
@@ -5515,9 +5553,9 @@ object_use_anim:	; from: enemy_type_table
 	lea	$1(a5),a2
 	move.l	d2,(a2)
 	subq.w	#1,a2
-	lea	$957e,a1                        ; level1_map +$217e
+	lea	TILE_TABLE,a1
 	move.w	$a(a6),d3
-	lea	$7406.w,a0                      ; level1_map +$6
+	lea	map_tiles.w,a0
 	clr.w	d0
 	move.b	$0(a0,d3.l),d0
 	adda.w	d0,a1
@@ -5529,7 +5567,7 @@ use_copy_tiles_loop:
 	dbra	d7,use_copy_tiles_loop
 	moveq	#4,d7
 use_refresh_loop:
-	lea	$977e,a2                        ; level1_map +$237e
+	lea	TILE_REFS,a2
 	tst.b	$0(a2,d0.l)
 	bmi.s	use_refresh_next
 	movem.w	d0/d7,-(sp)
@@ -5551,12 +5589,12 @@ use_anim_tiles:	; from: object_use_anim
 	dc.b	'OOOOTOOOSTOTRSTSQRSR^QRQ^^Q^'
 object_use_end:
 	movem.w	d0-d1,-(sp)
-	lea	$7406.w,a0                      ; level1_map +$6
+	lea	map_tiles.w,a0
 	move.w	$a(a6),d3
 	clr.w	d0
 	move.b	$0(a0,d3.w),d0
 	moveq	#4,d7
-	lea	$977e,a2                        ; level1_map +$237e
+	lea	TILE_REFS,a2
 end_get_loop:
 	tst.b	$0(a2,d0.w)
 	bmi.s	end_get_next
@@ -5566,14 +5604,14 @@ end_get_loop:
 end_get_next:
 	addq.w	#1,d0
 	dbra	d7,end_get_loop
-	lea	$7406.w,a0                      ; level1_map +$6
+	lea	map_tiles.w,a0
 	move.w	$a(a6),d3
 	move.b	-$1(a0,d3.w),d1
 	moveq	#6,d0
-	cmpi.b	#$28,d1
+	cmpi.b	#TILE_OPEN,d1
 	bcs.s	end_tile_store
 	moveq	#47,d0
-	cmpi.b	#$e2,d1
+	cmpi.b	#TILE_FLOOR,d1
 	bcs.s	end_tile_store
 	move.w	#$f1,d0
 end_tile_store:
@@ -5584,7 +5622,7 @@ end_tile_store:
 	move.b	#$c8,$3(a0,d3.w)
 	move.b	$5(a0,d3.w),d1
 	move.w	#$c7,d0
-	cmpi.b	#$e2,d1
+	cmpi.b	#TILE_FLOOR,d1
 	bcs.s	end_tile_below
 	addq.b	#2,d0
 end_tile_below:
@@ -5612,7 +5650,7 @@ object_stack:	; from: level_begin, object_use_start
 	dcb.b	108,$00
 
 ;----------------------------------------------------------------------
-; Enemy types 29/30: crawlers moving right / left along the floor.
+; Enemy types 29/30: crawlers moving right / left along the floor.  Never run on level 1: no level 1 object has type 29 or 30.
 ;----------------------------------------------------------------------
 crawler_right:	; from: enemy_type_table
 	cmpi.w	#$c0,d0
@@ -5688,7 +5726,7 @@ player_frame_body:	; from: draw_player
 	dc.w	$0002
 player_frame_legs:	; from: level_begin, rope_hook, throw_batarang, fire_rope_right, fire_rope_left, fire_rope_up, ...
 	dc.w	$0001
-player_top_y:	; from: update_enemies, aim_shot, goon_walk_left, joker_start, bullet_move, grenade_right, ...
+player_top_y:	; from: update_enemies, aim_shot, goon_walk_left, jack_start, bullet_move, grenade_right, ...
 	dc.w	$0000
 state_timer:	; from: player_knockback, state_rope_swing, throw_batarang, start_fall, state_landed
 	dc.w	$0000
@@ -5700,7 +5738,7 @@ fall_dy:	; from: state_rope_swing, start_fall
 	dc.w	$0000
 fall_distance:	; from: start_fall, state_landed
 	dc.w	$0000
-on_ground:	; from: update_enemies, update_scroll, start_fall, joker_escape, acid_pour
+on_ground:	; from: update_enemies, update_scroll, start_fall, vat_watch, boss_climb_watch
 	dc.w	$0001
 checkpoint:	; from: level_begin, checkpoint_1, checkpoint_2, checkpoint_3
 	dc.w	$0000,$0001,$0000,$0000,$0000
@@ -5710,9 +5748,9 @@ joy_state:	; from: read_joystick, player_input, state_rope_hit, state_rope_swing
 	dc.b	$00
 fire_latch:	; from: read_joystick
 	dc.b	$00
-scroll_dx:	; from: joker_shoot, update_bullets, update_scroll, state_rope_swing, start_fall
+scroll_dx:	; from: jack_shoot, update_bullets, update_scroll, state_rope_swing, start_fall
 	dc.w	$0000
-scroll_dy:	; from: joker_shoot, update_bullets, update_scroll
+scroll_dy:	; from: jack_shoot, update_bullets, update_scroll
 	dc.w	$0000,$0000
 rope_angle:	; from: state_rope_swing, fire_rope_up, state_rope_retract
 	dc.w	$0000,$0000
@@ -5726,7 +5764,7 @@ anim_script:	; from: state_knocked_wait, state_dying, state_rope_swing, throw_ba
 	dc.w	$0000
 rope_anchor:	; from: state_rope_swing, fire_rope_up
 	dc.w	$0000,$0000
-frame_toggle:	; from: wait_vbl_flip, state_rope_swing, acid_pour
+frame_toggle:	; from: wait_vbl_flip, state_rope_swing, boss_climb_watch
 	dc.w	$0000,$2221,$201f,$1e1d,$1c1b,$1a19,$1817,$1615
 	dc.w	$1413,$1211,$100f,$0e0d,$0c0b,$0a09,$0807,$0605
 	dc.w	$0403,$0201,$0003,$0609,$0d10,$1316,$191c
@@ -5754,67 +5792,178 @@ anim_crouched:	; from: crouch
 anim_rope_hang:	; from: fire_rope_up
 	dc.w	$2401,$0127,$0101,$2a01,$fe2c,$fdd7,$2d01,$0100
 	dc.w	$1301,$0116,$0101,$00e4
+
+;----------------------------------------------------------------------
+; The bad guys and other objects of the level, and where the player starts.  The code
+; finds each table's end by the label after it, so a table can grow or shrink; keep
+; spawn_table, spawn_singles and checkpoint_starts in this order, with scroll_x to
+; camera_x straight after them, as a start copies its 7 words there.
+;
+; Positions are map positions in 2 pixel units: 8 units make one 16 pixel map cell.
+;
+; spawn_table: groups.  A group is its trigger x and y, the number of objects, then each
+;   object's type, x and y.  The whole group appears when the trigger point comes into view.
+; spawn_singles: single objects, type, x and y, each appearing when it comes into view.
+;   The game marks what has appeared in the top bit of a group's trigger x and of a single's
+;   y, and clears the marks at the level's start and at each restart; keep them clear here.
+; checkpoint_starts: where the player starts, then where a restart puts the player after
+;   each checkpoint: scroll_x, scroll_y, score_scroll_x, player_x, player_y, player_ref_y
+;   and camera_x.
+;
+; An object's type picks its routine in enemy_type_table.
+;----------------------------------------------------------------------
 spawn_table:	; from: level_begin, spawn_enemies
-	dc.w	$02c1,$0081,$0001,$0022,$0240,$00c0,$0040,$00f0
-	dc.w	$0002,$0003,$00c0,$0118,$000f,$00a0,$0118,$0040
-	dc.w	$00e2,$0001,$0002,$0008,$00d8,$00a8,$00f0,$0003
-	dc.w	$000e,$0010,$0118,$000f,$00c8,$0118,$000f,$00c8
-	dc.w	$0138,$00e0,$00f0,$0001,$000f,$00f0,$00d8,$00e0
-	dc.w	$00a7,$0001,$0003,$0080,$0098,$0038,$0078,$0001
-	dc.w	$000e,$0008,$0098,$0024,$0078,$0001,$000f,$00c8
-	dc.w	$0098,$0040,$001f,$0001,$0003,$00b0,$0018,$00a8
-	dc.w	$0010,$0003,$000e,$0008,$0018,$000f,$00d0,$0018
-	dc.w	$000f,$00d0,$0038,$00d8,$0040,$0003,$000e,$0008
-	dc.w	$0018,$000f,$00f0,$0018,$000f,$00f0,$0058,$0128
-	dc.w	$0040,$0002,$000e,$0140,$0078,$000e,$0088,$0018
-	dc.w	$0178,$0040,$0002,$0003,$0190,$0038,$000f,$01b0
-	dc.w	$0018,$01bc,$0011,$0002,$000f,$01d0,$0018,$000f
-	dc.w	$01b0,$0078,$0168,$00b0,$0002,$000f,$0160,$00f8
-	dc.w	$0003,$0150,$0118,$0190,$0111,$0002,$000e,$0138
-	dc.w	$0138,$000f,$0178,$0138,$01e8,$0100,$0004,$000f
-	dc.w	$0150,$0118,$000f,$0140,$0138,$000e,$0200,$0138
-	dc.w	$0003,$0220,$0118,$0220,$00ef,$0002,$000f,$0188
-	dc.w	$00b8,$000f,$0200,$00d8,$0240,$003b,$0001,$000f
-	dc.w	$0250,$0038,$0280,$007b,$0001,$000e,$0250,$0098
-	dc.w	$02b0,$0071,$0001,$000f,$02d0,$00b8,$02f0,$0071
-	dc.w	$0002,$000e,$0258,$0098,$000f,$0300,$0078,$02e0
-	dc.w	$00c2,$0003,$000e,$0250,$00d8,$000f,$0250,$00f8
-	dc.w	$000f,$0300,$00d8,$025c,$00cf,$0003,$000f,$0300
-	dc.w	$00d8,$000f,$02e8,$0118,$000f,$0230,$00d8,$02f8
-	dc.w	$0120,$0003,$000e,$0250,$0118,$000e,$0250,$0138
-	dc.w	$000f,$0320,$0138,$0318,$0120,$0003,$000e,$0340
-	dc.w	$0138,$0003,$0260,$0118,$000f,$0260,$0138,$0360
-	dc.w	$0118,$0002,$000f,$0378,$00f8,$000f,$0378,$0118
-	dc.w	$02f0,$0048,$0003,$000f,$0288,$0038,$000e,$0310
-	dc.w	$0038,$000f,$0288,$0018,$0360,$0038,$0001,$0003
-	dc.w	$0370,$0018,$03b0,$00b0,$0002,$0003,$03c0,$00b8
-	dc.w	$000f,$03e0,$00d8,$03f0,$0102,$0001,$000e,$03c0
-	dc.w	$0138,$0450,$00f2,$0003,$000e,$03b8,$0138,$000f
-	dc.w	$0460,$0138,$0003,$0470,$00f8,$0468,$00c6,$0001
-	dc.w	$0003,$0470,$00b8,$0468,$00a6,$0001,$000e,$0400
-	dc.w	$0078,$03a0,$0050,$0001,$000f,$0440,$0098,$03d0
-	dc.w	$0020,$0001,$000f,$0420,$0018,$0430,$0001,$0002
-	dc.w	$000f,$0450,$0018,$000f,$0440,$0038,$0480,$0012
-	dc.w	$0002,$0003,$0490,$0058,$000e,$03e0,$0018,$04b8
-	dc.w	$0093,$0001,$0002,$04a4,$00b8,$04d8,$0110,$0002
-	dc.w	$000e,$04a4,$0138,$000f,$0500,$0118,$0530,$00f0
-	dc.w	$0001,$0003,$0580,$00f0,$05b0,$00c8,$0002,$000f
-	dc.w	$0540,$00b8,$000f,$0580,$00b8,$0580,$0090,$0002
-	dc.w	$000e,$0568,$0078,$000f,$0568,$0078,$0574,$0030
-	dc.w	$0003,$0018,$0520,$0018,$0017,$05a0,$0018,$0002
-	dc.w	$0530,$0018
+	dc.w	$02c1,$0081,$0001	; group: trigger x, y, 1 object
+	dc.w	$0022,$0240,$00c0	;   checkpoint_1
+	dc.w	$0040,$00f0,$0002	; group: trigger x, y, 2 objects
+	dc.w	$0003,$00c0,$0118	;   thug_walk_left
+	dc.w	$000f,$00a0,$0118	;   goon_walk_left
+	dc.w	$0040,$00e2,$0001	; group: trigger x, y, 1 object
+	dc.w	$0002,$0008,$00d8	;   thug_walk_right
+	dc.w	$00a8,$00f0,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0010,$0118	;   goon_walk_right
+	dc.w	$000f,$00c8,$0118	;   goon_walk_left
+	dc.w	$000f,$00c8,$0138	;   goon_walk_left
+	dc.w	$00e0,$00f0,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$00f0,$00d8	;   goon_walk_left
+	dc.w	$00e0,$00a7,$0001	; group: trigger x, y, 1 object
+	dc.w	$0003,$0080,$0098	;   thug_walk_left
+	dc.w	$0038,$0078,$0001	; group: trigger x, y, 1 object
+	dc.w	$000e,$0008,$0098	;   goon_walk_right
+	dc.w	$0024,$0078,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$00c8,$0098	;   goon_walk_left
+	dc.w	$0040,$001f,$0001	; group: trigger x, y, 1 object
+	dc.w	$0003,$00b0,$0018	;   thug_walk_left
+	dc.w	$00a8,$0010,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0008,$0018	;   goon_walk_right
+	dc.w	$000f,$00d0,$0018	;   goon_walk_left
+	dc.w	$000f,$00d0,$0038	;   goon_walk_left
+	dc.w	$00d8,$0040,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0008,$0018	;   goon_walk_right
+	dc.w	$000f,$00f0,$0018	;   goon_walk_left
+	dc.w	$000f,$00f0,$0058	;   goon_walk_left
+	dc.w	$0128,$0040,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000e,$0140,$0078	;   goon_walk_right
+	dc.w	$000e,$0088,$0018	;   goon_walk_right
+	dc.w	$0178,$0040,$0002	; group: trigger x, y, 2 objects
+	dc.w	$0003,$0190,$0038	;   thug_walk_left
+	dc.w	$000f,$01b0,$0018	;   goon_walk_left
+	dc.w	$01bc,$0011,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$01d0,$0018	;   goon_walk_left
+	dc.w	$000f,$01b0,$0078	;   goon_walk_left
+	dc.w	$0168,$00b0,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$0160,$00f8	;   goon_walk_left
+	dc.w	$0003,$0150,$0118	;   thug_walk_left
+	dc.w	$0190,$0111,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000e,$0138,$0138	;   goon_walk_right
+	dc.w	$000f,$0178,$0138	;   goon_walk_left
+	dc.w	$01e8,$0100,$0004	; group: trigger x, y, 4 objects
+	dc.w	$000f,$0150,$0118	;   goon_walk_left
+	dc.w	$000f,$0140,$0138	;   goon_walk_left
+	dc.w	$000e,$0200,$0138	;   goon_walk_right
+	dc.w	$0003,$0220,$0118	;   thug_walk_left
+	dc.w	$0220,$00ef,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$0188,$00b8	;   goon_walk_left
+	dc.w	$000f,$0200,$00d8	;   goon_walk_left
+	dc.w	$0240,$003b,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$0250,$0038	;   goon_walk_left
+	dc.w	$0280,$007b,$0001	; group: trigger x, y, 1 object
+	dc.w	$000e,$0250,$0098	;   goon_walk_right
+	dc.w	$02b0,$0071,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$02d0,$00b8	;   goon_walk_left
+	dc.w	$02f0,$0071,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000e,$0258,$0098	;   goon_walk_right
+	dc.w	$000f,$0300,$0078	;   goon_walk_left
+	dc.w	$02e0,$00c2,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0250,$00d8	;   goon_walk_right
+	dc.w	$000f,$0250,$00f8	;   goon_walk_left
+	dc.w	$000f,$0300,$00d8	;   goon_walk_left
+	dc.w	$025c,$00cf,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000f,$0300,$00d8	;   goon_walk_left
+	dc.w	$000f,$02e8,$0118	;   goon_walk_left
+	dc.w	$000f,$0230,$00d8	;   goon_walk_left
+	dc.w	$02f8,$0120,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0250,$0118	;   goon_walk_right
+	dc.w	$000e,$0250,$0138	;   goon_walk_right
+	dc.w	$000f,$0320,$0138	;   goon_walk_left
+	dc.w	$0318,$0120,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$0340,$0138	;   goon_walk_right
+	dc.w	$0003,$0260,$0118	;   thug_walk_left
+	dc.w	$000f,$0260,$0138	;   goon_walk_left
+	dc.w	$0360,$0118,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$0378,$00f8	;   goon_walk_left
+	dc.w	$000f,$0378,$0118	;   goon_walk_left
+	dc.w	$02f0,$0048,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000f,$0288,$0038	;   goon_walk_left
+	dc.w	$000e,$0310,$0038	;   goon_walk_right
+	dc.w	$000f,$0288,$0018	;   goon_walk_left
+	dc.w	$0360,$0038,$0001	; group: trigger x, y, 1 object
+	dc.w	$0003,$0370,$0018	;   thug_walk_left
+	dc.w	$03b0,$00b0,$0002	; group: trigger x, y, 2 objects
+	dc.w	$0003,$03c0,$00b8	;   thug_walk_left
+	dc.w	$000f,$03e0,$00d8	;   goon_walk_left
+	dc.w	$03f0,$0102,$0001	; group: trigger x, y, 1 object
+	dc.w	$000e,$03c0,$0138	;   goon_walk_right
+	dc.w	$0450,$00f2,$0003	; group: trigger x, y, 3 objects
+	dc.w	$000e,$03b8,$0138	;   goon_walk_right
+	dc.w	$000f,$0460,$0138	;   goon_walk_left
+	dc.w	$0003,$0470,$00f8	;   thug_walk_left
+	dc.w	$0468,$00c6,$0001	; group: trigger x, y, 1 object
+	dc.w	$0003,$0470,$00b8	;   thug_walk_left
+	dc.w	$0468,$00a6,$0001	; group: trigger x, y, 1 object
+	dc.w	$000e,$0400,$0078	;   goon_walk_right
+	dc.w	$03a0,$0050,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$0440,$0098	;   goon_walk_left
+	dc.w	$03d0,$0020,$0001	; group: trigger x, y, 1 object
+	dc.w	$000f,$0420,$0018	;   goon_walk_left
+	dc.w	$0430,$0001,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$0450,$0018	;   goon_walk_left
+	dc.w	$000f,$0440,$0038	;   goon_walk_left
+	dc.w	$0480,$0012,$0002	; group: trigger x, y, 2 objects
+	dc.w	$0003,$0490,$0058	;   thug_walk_left
+	dc.w	$000e,$03e0,$0018	;   goon_walk_right
+	dc.w	$04b8,$0093,$0001	; group: trigger x, y, 1 object
+	dc.w	$0002,$04a4,$00b8	;   thug_walk_right
+	dc.w	$04d8,$0110,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000e,$04a4,$0138	;   goon_walk_right
+	dc.w	$000f,$0500,$0118	;   goon_walk_left
+	dc.w	$0530,$00f0,$0001	; group: trigger x, y, 1 object
+	dc.w	$0003,$0580,$00f0	;   thug_walk_left
+	dc.w	$05b0,$00c8,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000f,$0540,$00b8	;   goon_walk_left
+	dc.w	$000f,$0580,$00b8	;   goon_walk_left
+	dc.w	$0580,$0090,$0002	; group: trigger x, y, 2 objects
+	dc.w	$000e,$0568,$0078	;   goon_walk_right
+	dc.w	$000f,$0568,$0078	;   goon_walk_left
+	dc.w	$0574,$0030,$0003	; group: trigger x, y, 3 objects
+	dc.w	$0018,$0520,$0018	;   vat_watch
+	dc.w	$0017,$05a0,$0018	;   goon_walk_left
+	dc.w	$0002,$0530,$0018	;   thug_walk_right
 spawn_singles:
-	dc.w	$0014,$0118,$0038,$0015,$00c8,$0028,$0014,$0070
-	dc.w	$0068,$0014,$01b0,$0110,$0014,$01f0,$0038,$0015
-	dc.w	$01ef,$0078,$0015,$0217,$0028,$0014,$0270,$0060
-	dc.w	$0016,$0298,$0090,$0014,$0310,$0120,$0016,$0372
-	dc.w	$0038,$0014,$0378,$0098,$0014,$0398,$0090,$0015
-	dc.w	$0400,$0130,$0014,$0458,$0078,$0016,$04ec,$0044
-	dc.w	$0014,$03d0,$0030,$0014,$03e0,$0030,$0014,$0510
-	dc.w	$0100,$0014,$0570,$00d8,$0014,$0580,$0108
+	dc.w	$0014,$0118,$0038	; faller
+	dc.w	$0015,$00c8,$0028	; attacker_right
+	dc.w	$0014,$0070,$0068	; faller
+	dc.w	$0014,$01b0,$0110	; faller
+	dc.w	$0014,$01f0,$0038	; faller
+	dc.w	$0015,$01ef,$0078	; attacker_right
+	dc.w	$0015,$0217,$0028	; attacker_right
+	dc.w	$0014,$0270,$0060	; faller
+	dc.w	$0016,$0298,$0090	; attacker_left
+	dc.w	$0014,$0310,$0120	; faller
+	dc.w	$0016,$0372,$0038	; attacker_left
+	dc.w	$0014,$0378,$0098	; faller
+	dc.w	$0014,$0398,$0090	; faller
+	dc.w	$0015,$0400,$0130	; attacker_right
+	dc.w	$0014,$0458,$0078	; faller
+	dc.w	$0016,$04ec,$0044	; attacker_left
+	dc.w	$0014,$03d0,$0030	; faller
+	dc.w	$0014,$03e0,$0030	; faller
+	dc.w	$0014,$0510,$0100	; faller
+	dc.w	$0014,$0570,$00d8	; faller
+	dc.w	$0014,$0580,$0108	; faller
 checkpoint_starts:	; from: level_begin
-	dc.w	$0020,$00f8,$0020,$0048,$0048,$0048,$0048,$0258
-	dc.w	$0008,$0258,$0048,$0038,$0038,$0048
+	dc.w	$0020,$00f8,$0020,$0048,$0048,$0048,$0048	; start
+	dc.w	$0258,$0008,$0258,$0048,$0038,$0038,$0048	; after checkpoint 1
 scroll_x:	; from: level_begin, redraw_tiles, init_tile_cache, scroll_left, scroll_right, scroll_up, ...
 	dc.w	$0008
 scroll_y:	; from: redraw_tiles, scroll_left, scroll_right, scroll_up, scroll_down, update_scroll, ...
@@ -5827,7 +5976,7 @@ player_y:	; from: update_enemies, check_jump_ladder, bullet_move, grenade_right,
 	dc.w	$0048
 player_ref_y:	; from: state_rope_swing, fire_rope_up, ladder_below, ladder_above, state_ladder, start_fall, ...
 	dc.w	$0048
-camera_x:	; from: update_scroll, joker_escape, level_complete
+camera_x:	; from: update_scroll, vat_watch, level_complete
 	dc.w	$0048
 
 play_tune:	; from: level_begin, main_loop, state_knocked_wait, level_complete

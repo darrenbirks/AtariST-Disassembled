@@ -69,8 +69,8 @@ Found by comparing the files in `retail_2disk_speedlock/disk1` and `disk2` with 
 #### Other changes
 
 - **Graphics packing, levels 1 and 5.** The reissue keeps the tile and sprite graphics as 4 bits per pixel, with colour 15 for transparent, and turns them into the drawing format at level start: `level_start` calls `convert_level_gfx` twice (level 1: `$6019c` x `$741` and `$501f4` x `$1961` blocks; level 5: `$601b4` x `$801` and `$501e4` x `$1961`), which turns each 8 byte block into a mask word and 4 plane words. The 2 disk release stores them already in that form, as one level1.gfx / level5.gfx from `$50000`. Running the reissue's conversion on its files gives the 2 disk data except for the level 1 blocks above and 52 level 5 blocks (masks as well, around `$53a84`, `$5f000` and `$64000`: small changes to the pictures). `build_sprite_tables` moved from `level_begin` to `level_start`, after the conversion.
-- **acid_animate, levels 1 and 5:** the acid surface alternates map words `$6bc6`/`$6cc7` on the 2 disk release and `$6bc6`/`$6ac5` on the reissue (the map file is the same). The frame counter computed into d2 is overwritten in both.
-- **Level 5 spawn_table:** the type 31 object (`vat_countdown`) at x 460 is at y 56 on the 2 disk release, y 64 on the reissue.
+- **climb_column_animate (in levels 1 and 5, run by level 5's rope ladder):** the swinging rope ladder alternates map words `$6bc6`/`$6cc7` on the 2 disk release and `$6bc6`/`$6ac5` on the reissue (the map file is the same). The frame counter computed into d2 is overwritten in both.
+- **Level 5 spawn_table:** the type 31 object (`boss_climb`, the Joker on the rope ladder) at x 460 is at y 56 on the 2 disk release, y 64 on the reissue.
 
 #### Files that are the same
 
@@ -122,6 +122,21 @@ Every source assembles, for every config, to the version's extracted file byte f
 ```
 vasmm68k_mot -devpac -m68000 -Fbin -o level1.bin level1.s
 ```
+
+vasm is in [tools/vasm](tools/vasm/README.txt), and the scripts in this folder use it:
+
+| Script | Builds |
+|---|---|
+| [build.cmd](build.cmd) | the 2 MB file version (build-2mb.cmd): the quickest way to try an edited source or map, as nothing is packed |
+| [build.cmd](build.cmd) `RETAIL_2DISK` | one release (`RETAIL_2DISK`, `RETAIL_1DISK` or `BUDGET_1DISK`) |
+| [build-all.cmd](build-all.cmd) | all three releases |
+| [build-2mb.cmd](build-2mb.cmd) | the 2 MB file version: `2mb-file-version/files`, loader.bin and batman.prg |
+| [build-512.cmd](build-512.cmd) | the 512K file version: `512-file-version/files` packed with Pack-Ice 2.40 (`tools/icepack/icepack.py`, Python 3; about half a minute), loader.bin and batman.prg |
+| [build-files.cmd](build-files.cmd) | used by both: the reissue's 24 game files, unpacked, in `build/file-version` |
+
+Each release is built in `build/<release>/`: a copy of the sources and `data/`, a config.s that selects the release (the one here is left as it is), and `<source>.bin` for each of the nine sources, the file as the game loads it after its 4 byte load address (sound.bin is the text and data of sound.prg).
+
+The file versions are made from the reissue's build: the code files get their 4 byte load address back (the `org` of their source), sound.bin becomes SOUND.PRG again (its 28 byte header, the code and an empty relocation table), loader.bin is loadstub.bin followed by loader.bin, and the pictures, graphics and maps come from `retail_1disk_speedlock/unpacked`. Built from the sources as they are, every file comes out as it is in the two folders. The floppy images (batman.st) are not rebuilt.
 
 One instruction is written as `dc.w`: frontend.s `cmpi.b #$ff,d0`, whose original encoding has `$ffff` as its immediate word, which an assembler writes as `$00ff`.
 
@@ -217,20 +232,22 @@ As the tiles are sorted by their own block, each type is a run of blocks:
 | Floor | 24 tiles, blocks 72-77 | 43 tiles, blocks 81-95 |
 | Ladder | 3 tiles, blocks 78-80 | 7 tiles, blocks 96-99 |
 
-The type limits are fixed tile numbers in the code, so an edited map has to keep the number of tiles of each type: tiles that exist can go anywhere, but a new pair of blocks can only replace an unused pair of the same type, or every tile after it moves across a limit. There are at most 256 tiles.
+The type limits are fixed tile numbers in the code (`TILE_OPEN` and so on at the top of level1.s and level5.s), so an edited map has to keep the number of tiles of each type: tiles that exist can go anywhere, but a new pair of blocks can only replace an unused pair of the same type, or every tile after it moves across a limit. There are at most 256 tiles.
 
-Not in the map file: the enemies and objects (`spawn_table`) and the restart points (`checkpoint_starts`) are in the level code. `acid_animate` changes a few map words while the level plays to move the acid surface.
+Not in the map file: the enemies and objects (`spawn_table`) and the restart points (`checkpoint_starts`) are in the level code. On level 5, `climb_column_animate` changes a few map words while the level plays to swing the rope ladder.
 
 ## Map editor
 
-Folder `tools/map-editor`. [map-editor.html](tools/map-editor/map-editor.html) is a map editor for levels 1 and 5 that runs in a web browser: open it, then open (or drop on it) an unpacked level1.map or level5.map (`retail_1disk_speedlock/unpacked`). Nothing is sent anywhere; **Save map** gives the edited file back to save.
+Folder `tools/map-editor`. [map-editor.html](tools/map-editor/map-editor.html) is a map editor for levels 1 and 5 that runs in a web browser: open it, then open (or drop on it) an unpacked level1.map or level5.map (`retail_1disk_speedlock/unpacked`), and for the objects the level's source, [level1.s](level1.s) or [level5.s](level5.s). Nothing is sent anywhere; **Save map** and **Save source** give the edited files back to save.
 
 - The map is drawn with its own blocks, in the level's colours. The tile types can be shown over it, and so can a grid and the broken pairs (cells whose right hand block is not the one their tile expects; there are a few in the original maps too).
 - The blocks are listed by type. Left click or drag paints the selected block; right click (or Alt and click) picks the block under the cursor. Blocks with no tile for the pair they would make at the cursor are dimmed.
 - Painting a block sets the tiles of the cell and of its left neighbour to the pairs they now make. A pair with no tile can take over a tile that is no longer on the map, of the same type, as long as the game's sorted order of the tiles on the map stays the same; the tile numbers the code uses itself (0, 3, 9, `$4f`, `$51`-`$54`, `$5e`, `$6a`-`$6c`, `$c5`-`$c7`) are never taken. Otherwise the paint is refused with a message.
-- Undo and redo (Ctrl+Z, Ctrl+Y), zoom, **Save map** (Ctrl+S). Only the map and the tile table change; the rest of the file is kept as it was.
+- The level's source gives the editor its settings: the map size (it must match the map), the tile type limits, the palette, the time limit, `SPAWN_OFFSET_X`, the object routines (`enemy_type_table`) and which object types the game draws (`type_sprite_table`). The places the code fixes (level 1's vat, level 5's ending view, lowest view and rope ladder) are drawn on the map, for reference; they are changed in the source.
+- **Edit objects** shows the bad guys and other objects, each group's trigger point (the group appears when it comes into view) with lines to its objects, the single objects, and the start and restart positions with the view they start in. Drag them to move them (by map cells, Shift for 2 pixels), or type their numbers in. Click an empty spot, then **Add object** (into the selected group, or as a single object), **New group**, or **Delete** (also the Delete key); the arrow keys nudge. The list of types is the types the level already uses. Where the releases differ (two values on level 5), a **Release** list picks the release shown; every edit goes to all of them, a move keeping the difference and a typed number setting the same value, and saving writes the config blocks back. The table size is shown with what limits it: level 1 has about 870 bytes before the map, and level 5 must change `font_filler` in level5.s by the opposite amount. The game has room for 10 bad guys at a time.
+- Undo and redo (Ctrl+Z, Ctrl+Y) for both, zoom, **Save map** and **Save source** (Ctrl+S). Only the map and the tile table change in the map file, and only `spawn_table`, `spawn_singles` and `checkpoint_starts` in the source; the rest is kept as it was.
 
-To play an edited map, put it in place of the unpacked file and pack or copy it for the file versions (`python-pack.cmd` or `go-pack.cmd` for the 512K version).
+To play an edited map or source, put the map in place of the unpacked file (`retail_1disk_speedlock/unpacked`) and the source in place of level1.s or level5.s, run [build.cmd](build.cmd), and run `2mb-file-version/batman.prg` (or [build-512.cmd](build-512.cmd) for the 512K version).
 
 ## Picture converter
 
@@ -294,7 +311,18 @@ The top of loader.s carries a scene by scene map of the 512 K for each version (
 
 ## Reading the sources
 
-Every routine, branch target and variable is named for what it does or holds, and `unused_` marks code that nothing calls. A few level 2/4 tables still carry their address (`tab_` table, `dat_` data) because their use is not known yet. `; from:` lists the routines or modules that refer to a label. Symbols of other modules in the same scene are equ'd at the top of each file. level1.s and level5.s also name their level's numbers there and use the names in the code: `MAP_ROW_LENGTH` and `MAP_ROWS`, the tile types (`TILE_OPEN`, `TILE_FLOOR`, `TILE_LADDER`, and level 5's `TILE_DEADLY`), the floor ranges, `LEVEL_TIME` (`$900` = 9:00 on level 1, `$1200` = 12:00 on level 5, in BCD) and `TILE_CACHE_SLOTS`; `spawn_singles` marks where `spawn_table`'s single objects start after its groups. level24.s names what levels 2 and 4 start with (`LEVEL2_DISTANCE` 999 in 5:00, `LEVEL4_BALLOONS` 100 in 3:20, and the half way restarts) and the vehicles' speeds (`BATMOBILE_TOP_SPEED`, `BATWING_TOP_SPEED`, `BATWING_MIN_SPEED` and their steps); loader.s names the game track format (`TRACK_BYTES`, `TRACK_SYNC`, `ESCAPE_BYTE`, and the 2 disk release's `CHECKSUM_SET` and `CHECKSUM_MASK`), the decryption keys (`DECRYPT_KEY0`, `DECRYPT_KEY1`) and `PICTURE_SCREEN`, and writes the FORM HUFF chunk names as `'CODE'`, `'SIZE'`, `'TREE'` and `'HUFF'`.
+Every routine, branch target and variable is named for what it does or holds, and `unused_` marks code that nothing calls. A few level 2/4 tables still carry their address (`tab_` table, `dat_` data) because their use is not known yet. `; from:` lists the routines or modules that refer to a label. Symbols of other modules in the same scene are equ'd at the top of each file. level1.s and level5.s also name their level's numbers there and use the names in the code:
+
+- the map: `MAP_ROW_LENGTH` and `MAP_ROWS`, the tile types (`TILE_OPEN`, `TILE_FLOOR`, `TILE_LADDER`, and level 5's `TILE_DEADLY`), the floor ranges and `TILE_CACHE_SLOTS`;
+- `LEVEL_TIME` (`$900` = 9:00 on level 1, `$1200` = 12:00 on level 5, in BCD) and `LEVEL_TUNE`, the level's music;
+- `SPAWN_OFFSET_X`, what an object's x gets when it appears (`$50` on level 1, 8 on level 5);
+- the places the code fixes: the vat at x `VAT_SPLASH_X` (`$5e0`, where Jack's splash is drawn) and y `VAT_DEPTH` (`$d4`, where his fall ends); `CLIMB_COLUMN_ROWS` (10 map rows from `map_climb_column`, column 58 of row 0: level 5's rope ladder); `ENDING_SCROLL_X` (level 5's ending pans the view until scroll_x gets to `$240`; 0 on level 1); `SCROLL_Y_LIMIT`, the lowest the view scrolls, worked out from `MAP_ROWS`;
+- the addresses the code uses outside itself: the map file's parts (`MAP_START`, `map_tiles`, `TILE_TABLE`, `TILE_REFS` and `TILE_SLOTS` in its work space, `TILE_CACHE` after its `MAP_BLOCK_COUNT` blocks), the graphics files (`GFX_A`, `GFX_B` and their block graphics), the sprite tables (`SPRITE_HEADERS`, `SPRITE_PACKED`, `SPRITE_DATA`, `SPRITE_SHIFTED`), the screens (`SCREEN_FRONT`, `SCREEN_BACK`), `STACK_TOP`, and the loader's entries (`LOADER_FRONT_END`, and `NEXT_SCENE`, the one the level ends in: level 2 after level 1, the front end after level 5);
+- the other numbers the two levels differ in: the map row strides (`MAP_ROW_LENGTH-18` and so on), the sprite counts (`SPRITE_HEADER_COUNT`, `SPRITE_COUNT`) and sprite bases (`JACK_SPRITE`, `SPLASH_SPRITE`, `CLIMB_SPRITE`, `LANDED_SPRITE`, `BULLET_SPRITE`).
+
+The code of the two levels then differs only where the levels really do something else, such as level 5's goons checking the floor every 4 units when they walk left. Levels 1 and 5 run the same engine and each file holds all of its routines. Code that is Jack Napier's, run by level 1 only, has his names in both (`jack_start`, `jack_wait`, `vat_watch`, `vat_splash` ...); the boss climb code, run by level 5 for the Joker, is named for a boss in both (`boss_climb`, `boss_climb_watch`, `climb_column_animate`). A routine a level never runs says "Never run on level N" in its comment. The end texts are each level's own: `jack_dead_text` and `joker_lives_text` on level 1, `end_text` and `end_blank_text` on level 5. The objects (`spawn_table`, `spawn_singles`) and where the player starts (`checkpoint_starts`) are one group or object a line, with each object's routine named and a comment above them that describes the tables.
+
+level24.s names what levels 2 and 4 start with (`LEVEL2_DISTANCE` 999 in 5:00, `LEVEL4_BALLOONS` 100 in 3:20, and the half way restarts) and the vehicles' speeds (`BATMOBILE_TOP_SPEED`, `BATWING_TOP_SPEED`, `BATWING_MIN_SPEED` and their steps); loader.s names the game track format (`TRACK_BYTES`, `TRACK_SYNC`, `ESCAPE_BYTE`, and the 2 disk release's `CHECKSUM_SET` and `CHECKSUM_MASK`), the decryption keys (`DECRYPT_KEY0`, `DECRYPT_KEY1`) and `PICTURE_SCREEN`, and writes the FORM HUFF chunk names as `'CODE'`, `'SIZE'`, `'TREE'` and `'HUFF'`.
 
 Long runs of data are incbin'd from `data/` (8.3 names: two letter module code ld lo pn sn fe l1 l2 l3 l5, then what it holds, e.g. pn_ebar.bin, l3_items.bin; the label above each incbin line describes it). font.bin is the font every module has, one file for all of them. `data/` holds the blocks all versions have; `data/2disk_rt` holds those only the 2 disk release has, and `data/1disk_rt` and `data/1disk_bu` would hold those only the reissue or only the budget release has (there are none now).
 
@@ -306,9 +334,11 @@ Folder `512-file-version`. **Ocean never released this.** I made it as an exampl
 |---|---|
 | [batman.s](512-file-version/batman.s) | The program (Devpac source). |
 | `batman.prg` | batman.s assembled. |
-| `loader.bin` | The reissue's decrypted game loader, incbin'd by batman.s. |
+| `loader.bin` | The reissue's decrypted game loader, incbin'd by batman.s (loadstub.s and loader.s built). |
 | `files/` | The reissue's 24 game files, packed with Pack-Ice 2.40 by `tools/icepack`. |
-| `batman.st` | A 720K floppy image with batman.prg (in the root and in AUTO) and the files. |
+| `batman.st` | A 720K floppy image with batman.prg (in the root and in AUTO) and the files, as they were made from the original files. |
+
+[build-512.cmd](build-512.cmd) in the top folder remakes loader.bin, `files/` and batman.prg from the sources; it does not remake batman.st.
 
 **Why it needs its own reader:** the game overwrites TOS's memory, so GEMDOS cannot load files once the game runs. batman.prg finds the files while TOS still runs and gives the game a reader that uses the floppy controller itself.
 
@@ -344,11 +374,11 @@ Folder `2mb-file-version`. Like the file version on a floppy, **Ocean never rele
 |---|---|
 | [batman.s](2mb-file-version/batman.s) | The program (Devpac source). |
 | `batman.prg` | batman.s assembled. |
-| `loader.bin` | The reissue's decrypted game loader, incbin'd by batman.s. |
-| `files/` | The reissue's 24 game files, unpacked (`retail_1disk_speedlock/unpacked`). |
-| `batman.st` | An 800K floppy image (80 tracks, 2 sides, 10 sectors a track) with batman.prg (in the root and in AUTO) and the files in FILES. |
+| `loader.bin` | The reissue's decrypted game loader, incbin'd by batman.s (loadstub.s and loader.s built). |
+| `files/` | The reissue's 24 game files, unpacked: the code files built from the sources, the rest from `retail_1disk_speedlock/unpacked`. |
+| `batman.st` | An 800K floppy image (80 tracks, 2 sides, 10 sectors a track) with batman.prg (in the root and in AUTO) and the files in FILES, as they were made from the original files. |
 
-The files are not packed, so together they take 778754 bytes: more than a 720K floppy holds, but an 800K one (10 sectors a track) takes them with 5 KB to spare. On a hard disk or an emulator's GEMDOS drive, copy the folder (batman.prg with `files/` beside it) and run batman.prg from there.
+The files are not packed, so together they take 778754 bytes: more than a 720K floppy holds, but an 800K one (10 sectors a track) takes them with 5 KB to spare. On a hard disk or an emulator's GEMDOS drive, copy the folder (batman.prg with `files/` beside it) and run batman.prg from there. [build.cmd](build.cmd) (or [build-2mb.cmd](build-2mb.cmd)) remakes the files, loader.bin and batman.prg from the sources (not batman.st), which makes this the version to test edits with.
 
 **Why it works:** the game never uses the second megabyte (`$100000` on). Levels 2 and 4 use `$80000`-`$e9491` when they find more than 512K, and a 2 MB ST keeps its screen at `$1f8000`. So all the files fit between, loaded with GEMDOS before the game starts.
 
@@ -387,6 +417,8 @@ Folder `tools/icepack`. My own packer, written so that the files can be packed o
 | [icepack.py](tools/icepack/icepack.py) | The packer in Python 3: `python icepack.py [-2.31] source target`. |
 | [icepack.go](tools/icepack/icepack.go) | The same in Go (1.21 or later): `go run icepack.go [-2.31] source target`. |
 | [python-pack.cmd](tools/icepack/python-pack.cmd), [go-pack.cmd](tools/icepack/go-pack.cmd) | Pack the reissue's 24 files (`retail_1disk_speedlock/unpacked`) into `512-file-version/files` with icepack.py or icepack.go. |
+
+[build-512.cmd](build-512.cmd) in the top folder packs the files built from the sources instead.
 
 With `-2.31`, given the budget release's unpacked files (`budget_1disk/unpacked`), it writes the budget release's packed files (`budget_1disk/packed`) back byte for byte. Those differ from the reissue's files only after the data: each has the 31 bytes its loader clears, and a few files end in other unused bytes.
 
