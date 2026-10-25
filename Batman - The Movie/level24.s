@@ -719,7 +719,8 @@ clear_screens_loop:
 	dbra	d7,clear_screens_loop
 	rts
 
-	dc.w	$4e75
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Probe $88888 (bus error on a 512K machine) to decide where the extra graphics go; Z set = 1 MB.
@@ -8004,7 +8005,7 @@ roadside_row_steps:	; from: build_roadside_positions
 
 ; Font, 40 bytes per character.
 font:	; from: print_text
-	incbin	"data/l2_font.bin"		; $640 bytes of data
+	incbin	"data/font.bin"		; $640 bytes of data
 
 ; Sprite headers, 16 bytes each (x offset, width, height, lines, relative graphic pointer);
 ; update_distance draws entry turn_ahead (0 left, 1 straight, 2 right) as the turn arrow.

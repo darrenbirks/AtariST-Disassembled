@@ -49,7 +49,8 @@
 ;
 ; RETAIL_2DISK: 16 bytes per file: track, length on disk, length to decrypt,
 ; destination; a picture's destination field holds its length again.  The files are
-; in retail_2disk_speedlock\disk1 and disk2.
+; in retail_2disk_speedlock\disk1 and disk2, except level24.bin and level4.gfx, the
+; same as the reissue's, in retail_1disk_speedlock\unpacked.
 ;
 ; file  disk  tracks  length  decrypt  dest     name          contents
 ; ----  ----  ------  ------  -------  ------   ------------  --------
@@ -112,9 +113,9 @@
 ; 25    75-79   $14ac   $05e7e  $073fc   $7400   level5.map    level 5 map
 ;
 ; BUDGET_1DISK: the reissue's 20 byte entries; d1 is the first sector, counted on
-; side 0 as track x 10 + sector - 1, d2 the number of sectors; d0 and d3 keep the
-; reissue's values and are not used.  The files are in budget_1disk\packed and
-; unpacked.
+; side 0 as track x 10 + sector - 1, d2 the number of sectors, both read as words (the
+; high words are 0); d0 and d3 keep the reissue's values and are not used.  The files are
+; in budget_1disk\packed and unpacked.
 ;
 ; file  sectors   track/sector  sectors  dest     name          (budget_1disk\packed)
 ; ----  -------   ------------  -------  ------   ------------
@@ -173,14 +174,19 @@
 ;   level1
 ;   002200-00747b  level1.bin (level 1 code)
 ;   007400-00f37b  level1.map (level 1 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table (inside / after the map file)
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($cc), rows (42)
+;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00977e-00987d  tile reference counts
+;   00987e-00997d  cache slot of each tile
+;   00997e-00c27d  tile graphics the cache is filled from
+;   00c27e-02427d  tile graphics cache: 96 slots of $400 bytes, 8 shifted copies of a tile
+;   02427e-025395  sprite headers (pack_sprites at level start)
+;   02547e-047fff  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23382)
+;   048800-06afff  pre-shifted sprites (build_sprite_tables at level start), over level1.gfx
 ;   050000-064a7b  level1.gfx (level 1 graphics)
 ;   06d3e8          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $64a7c-$6b7ff
+;   free: none
 ;   level1.map is loaded over the tail of level1.bin from $7400.
 ;
 ;   level2
@@ -215,14 +221,19 @@
 ;   level5
 ;   002200-0075fb  level5.bin (level 5 code)
 ;   007400-00f3fb  level5.map (level 5 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($5c), rows (204)
+;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00bf56-00c055  tile reference counts
+;   00c056-00c155  cache slot of each tile
+;   00c156-00f355  tile graphics the cache is filled from
+;   00f356-021355  tile graphics cache: 72 slots of $400 bytes, 8 shifted copies of a tile
+;   021356-022405  sprite headers (pack_sprites at level start)
+;   022556-045497  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23eaa)
+;   046400-06933b  pre-shifted sprites (build_sprite_tables at level start), over level5.gfx
 ;   050000-064ffb  level5.gfx (level 5 graphics)
 ;   06d3e0          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $64ffc-$6b7ff
+;   free: $6933c-$6b7ff
 ;   level5.map is loaded over the tail of level5.bin from $7400.
 ;
 ; ----------------------------------------------------------------------
@@ -248,15 +259,20 @@
 ;   level1
 ;   002200-007074  level1.bin (level 1 code)
 ;   007400-00c27e  level1.map (level 1 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table (inside / after the map file)
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($cc), rows (42)
+;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00977e-00987d  tile reference counts
+;   00987e-00997d  cache slot of each tile
+;   00997e-00c27d  tile graphics the cache is filled from
+;   00c27e-02427d  tile graphics cache: 96 slots of $400 bytes, 8 shifted copies of a tile
+;   02427e-025395  sprite headers (pack_sprites at level start)
+;   02547e-047fff  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23382)
+;   048800-06afff  pre-shifted sprites (build_sprite_tables at level start), over level1a.gfx and level1b.gfx
 ;   050000-05ccfc  level1a.gfx (level 1 graphics)
 ;   060000-063ca4  level1b.gfx (level 1 graphics)
 ;   06d3e8          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $5ccfd-$5ffff, $63ca5-$6b7ff
+;   free: none
 ;
 ;   level2
 ;   002200-00a5fb  level24.bin (level 2/4 code)
@@ -290,15 +306,20 @@
 ;   level5
 ;   002200-0075fb  level5.bin (level 5 code)
 ;   007400-00f356  level5.map (level 5 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($5c), rows (204)
+;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00bf56-00c055  tile reference counts
+;   00c056-00c155  cache slot of each tile
+;   00c156-00f355  tile graphics the cache is filled from
+;   00f356-021355  tile graphics cache: 72 slots of $400 bytes, 8 shifted copies of a tile
+;   021356-022405  sprite headers (pack_sprites at level start)
+;   022556-0454c3  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23eaa)
+;   046400-069367  pre-shifted sprites (build_sprite_tables at level start), over level5a.gfx and level5b.gfx
 ;   050000-05cce4  level5a.gfx (level 5 graphics)
 ;   060000-063fb8  level5b.gfx (level 5 graphics)
 ;   06d3e8          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $5cce5-$5ffff, $63fb9-$6b7ff
+;   free: $69368-$6b7ff
 ;   level5.map is loaded over the tail of level5.bin from $7400.
 ;
 ; ----------------------------------------------------------------------
@@ -337,15 +358,20 @@
 ;   level1
 ;   002200-007093  level1.bin (level 1 code)
 ;   007400-00c29d  level1.map (level 1 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table (inside / after the map file)
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($cc), rows (42)
+;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00977e-00987d  tile reference counts
+;   00987e-00997d  cache slot of each tile
+;   00997e-00c27d  tile graphics the cache is filled from
+;   00c27e-02427d  tile graphics cache: 96 slots of $400 bytes, 8 shifted copies of a tile
+;   02427e-025395  sprite headers (pack_sprites at level start)
+;   02547e-047fff  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23382)
+;   048800-06afff  pre-shifted sprites (build_sprite_tables at level start), over level1a.gfx and level1b.gfx
 ;   050000-05cd1b  level1a.gfx (level 1 graphics)
 ;   060000-063cc3  level1b.gfx (level 1 graphics)
 ;   06d3e8          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $5cd1c-$5ffff, $63cc4-$6b7ff
+;   free: none
 ;
 ;   level2
 ;   002200-00a61d  level24.bin (level 2/4 code)
@@ -381,15 +407,20 @@
 ;   level5
 ;   002200-00761a  level5.bin (level 5 code)
 ;   007400-00f375  level5.map (level 5 map)
-;   00977e-00987d  tile reference counts (inside the map file area)
-;   00987e-00c27d  tile cache slot table
-;   00c27e-01c27d  tile graphics cache, 8 shifted copies per cached tile (size depends on the level)
-;   023382-02427d  shifted sprite data (built at level start)
-;   02427e-02ffff  sprite headers and more shifted sprite data (built at level start)
+;   007400-007405  map header: tile count, row length ($5c), rows (204)
+;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
+;   00bf56-00c055  tile reference counts
+;   00c056-00c155  cache slot of each tile
+;   00c156-00f355  tile graphics the cache is filled from
+;   00f356-021355  tile graphics cache: 72 slots of $400 bytes, 8 shifted copies of a tile
+;   021356-022405  sprite headers (pack_sprites at level start)
+;   022556-0454c3  packed sprites (pack_sprites at level start; draw_sprite adds their offsets to $23eaa)
+;   046400-069367  pre-shifted sprites (build_sprite_tables at level start), over level5a.gfx and level5b.gfx
 ;   050000-05cd03  level5a.gfx (level 5 graphics)
 ;   060000-063fd7  level5b.gfx (level 5 graphics)
 ;   06d3e8          stack top, grows down below the sound driver
-;   free: $1c27e-$23381, $30000-$4ffff, $5cd04-$5ffff, $63fd8-$6b7ff
+;   free: $69368-$6b7ff
 ;   level5.map is loaded over the tail of level5.bin from $7400.
 ;
 ; Labels are named for what they do or hold; unused_ marks code that nothing
@@ -1503,31 +1534,21 @@ wait_fdc_done:
 	bne.s	wait_fdc_done
 	rts
 
-	ifne	CONFIG-RETAIL_2DISK
-	dc.w	$0000,$0000
-	endc
 
-; Current file: +2 track, +4 decrypt length, +8 length, +$c destination, +$10 offset.
 	ifeq	CONFIG-RETAIL_2DISK
+; Variables and tables.
 loader_spare:
 	dc.w	$0000,$0000
 
 ; Current file: +2 track, +4 length to decrypt, +8 length on disc, +$c destination.
-	endc
-file_vars:	; from: show_picture, unpack_file, load_file
-	ifeq	CONFIG-RETAIL_2DISK
+file_vars:	; from: load_file
 	dc.w	$0000                           ; spare
 	dc.w	$0000                           ; track
 	dc.l	$00000000                       ; length to decrypt
 	dc.l	$00000000                       ; length on disc
 	dc.l	$00000000                       ; destination
-	endc
-	ifne	CONFIG-RETAIL_2DISK
-	dcb.b	18,$00
-	endc
 
-; Load table: 20 bytes per file, see the file list at the top.
-	ifeq	CONFIG-RETAIL_2DISK
+; Picture palettes, 16 colours each, set by load_picture.
 level1_palette:	; from: start_level1
 	dc.w	$0000,$0444,$0222,$0777,$0023,$0411,$0333,$0223
 	dc.w	$0555,$0421,$0212,$0760,$0532,$0643,$0754,$0004
@@ -1545,15 +1566,173 @@ level5_palette:	; from: start_level5
 	dc.w	$0303,$0404,$0525,$0004,$0225,$0045,$0771,$0750
 
 ; Load table: 16 bytes per file, see the file list at the top.
+load_table:	; from: loader_start
+; file 0: panel.gfx, disc 1, tracks 2-3, panel bitmap (resident)
+	dc.l	2                               ; start track
+	dc.l	$2000                           ; length on disc
+	dc.l	$1e80                           ; length to decrypt
+	dc.l	$75efc                          ; destination
+file_panel_bin:	; from: loader_start
+; file 1: panel.bin, disc 1, tracks 4-5, panel / score code (resident)
+	dc.l	4                               ; start track
+	dc.l	$1a00                           ; length on disc
+	dc.l	$1880                           ; length to decrypt
+	dc.l	$6b7fc                          ; destination
+file_sound_prg:	; from: loader_start
+; file 2: sound.prg, disc 1, tracks 6-7, sound driver PRG (resident)
+	dc.l	6                               ; start track
+	dc.l	$2700                           ; length on disc
+	dc.l	$2580                           ; length to decrypt
+	dc.l	$6d3e4                          ; destination
+file_frontend_bin:	; from: loader_start, after_level
+; file 3: frontend.bin, disc 1, tracks 8-9, front end code
+	dc.l	8                               ; start track
+	dc.l	$2600                           ; length on disc
+	dc.l	$2400                           ; length to decrypt
+	dc.l	$1fffc                          ; destination
+file_frontend_gfx:	; from: loader_start, after_level
+; file 4: frontend.gfx, disc 1, tracks 10-17, front end pictures and big font
+	dc.l	10                              ; start track
+	dc.l	$af00                           ; length on disc
+	dc.l	$a900                           ; length to decrypt
+	dc.l	$3f236                          ; destination
+file_level1_pic:	; from: start_level1
+; file 5: level1.pic, disc 1, tracks 18-20, level 1 picture
+	dc.l	18                              ; start track
+	dc.l	$4300                           ; length on disc
+	dc.l	$4046                           ; length to decrypt
+	dc.l	$4300                           ; length again (read to $7fd00 - length)
+file_level1_bin:	; from: start_level1
+; file 6: level1.bin, disc 1, tracks 21-24, level 1 code
+	dc.l	21                              ; start track
+	dc.l	$5600                           ; length on disc
+	dc.l	$5280                           ; length to decrypt
+	dc.l	$21fc                           ; destination
+file_level1_gfx:	; from: start_level1
+; file 7: level1.gfx, disc 1, tracks 25-39, level 1 graphics ($50000 on, one file for the reissue's two)
+	dc.l	25                              ; start track
+	dc.l	$15600                          ; length on disc
+	dc.l	$14a80                          ; length to decrypt
+	dc.l	$4fffc                          ; destination
+file_level1_map:	; from: start_level1
+; file 8: level1.map, disc 1, tracks 40-45, level 1 map
+	dc.l	40                              ; start track
+	dc.l	$8400                           ; length on disc
+	dc.l	$7f80                           ; length to decrypt
+	dc.l	$73fc                           ; destination
+file_level2_pic:	; from: start_level2
+; file 9: level2.pic, disc 2, tracks 1-3, level 2 picture
+	dc.l	1                               ; start track
+	dc.l	$4300                           ; length on disc
+	dc.l	$403d                           ; length to decrypt
+	dc.l	$4300                           ; length again (read to $7fd00 - length)
+file_level24_bin:	; from: start_level2
+; file 10: level24.bin, disc 2, tracks 4-9, level 2/4 code
+	dc.l	4                               ; start track
+	dc.l	$8900                           ; length on disc
+	dc.l	$8400                           ; length to decrypt
+	dc.l	$21fc                           ; destination
+file_level24_gfx:	; from: start_level2
+; file 11: level24.gfx, disc 2, tracks 10-13, level 2/4 graphics
+	dc.l	10                              ; start track
+	dc.l	$4c00                           ; length on disc
+	dc.l	$4880                           ; length to decrypt
+	dc.l	$bbfc                           ; destination
+file_level2_gfx:	; from: start_level2
+; file 12: level2.gfx, disc 2, tracks 14-36, level 2 graphics
+	dc.l	14                              ; start track
+	dc.l	$21400                          ; length on disc
+	dc.l	$20280                          ; length to decrypt
+	dc.l	$10434                          ; destination
+file_level3_pic:	; from: start_level3
+; file 13: level3.pic, disc 2, tracks 37-39, level 3 picture
+	dc.l	37                              ; start track
+	dc.l	$3d00                           ; length on disc
+	dc.l	$3a26                           ; length to decrypt
+	dc.l	$3d00                           ; length again (read to $7fd00 - length)
+file_level3_bin:	; from: start_level3
+; file 14: level3.bin, disc 2, tracks 40-49, level 3
+	dc.l	40                              ; start track
+	dc.l	$dd00                           ; length on disc
+	dc.l	$d580                           ; length to decrypt
+	dc.l	$1fffc                          ; destination
+file_level4_pic:	; from: start_level4
+; file 15: level4.pic, disc 2, tracks 50-52, level 4 picture
+	dc.l	50                              ; start track
+	dc.l	$3b00                           ; length on disc
+	dc.l	$38cd                           ; length to decrypt
+	dc.l	$3b00                           ; length again (read to $7fd00 - length)
+file_level24_bin_l4:	; from: start_level4
+; file 16: level24.bin, disc 2, tracks 4-9, level 2/4 code (as for level 2)
+	dc.l	4                               ; start track
+	dc.l	$8900                           ; length on disc
+	dc.l	$8400                           ; length to decrypt
+	dc.l	$21fc                           ; destination
+file_level24_gfx_l4:	; from: start_level4
+; file 17: level24.gfx, disc 2, tracks 10-13, level 2/4 graphics (as for level 2)
+	dc.l	10                              ; start track
+	dc.l	$4c00                           ; length on disc
+	dc.l	$4880                           ; length to decrypt
+	dc.l	$bbfc                           ; destination
+file_level4_gfx:	; from: start_level4
+; file 18: level4.gfx, disc 2, tracks 53-79, level 4 graphics
+	dc.l	53                              ; start track
+	dc.l	$28600                          ; length on disc
+	dc.l	$27080                          ; length to decrypt
+	dc.l	$10434                          ; destination
+file_level5_pic:	; from: start_level5
+; file 19: level5.pic, disc 1, tracks 46-49, level 5 picture
+	dc.l	46                              ; start track
+	dc.l	$4a00                           ; length on disc
+	dc.l	$474f                           ; length to decrypt
+	dc.l	$4a00                           ; length again (read to $7fd00 - length)
+file_level5_bin:	; from: start_level5
+; file 20: level5.bin, disc 1, tracks 50-53, level 5 code
+	dc.l	50                              ; start track
+	dc.l	$5700                           ; length on disc
+	dc.l	$5400                           ; length to decrypt
+	dc.l	$21fc                           ; destination
+file_level5_gfx:	; from: start_level5
+; file 21: level5.gfx, disc 1, tracks 54-68, level 5 graphics ($50000 on, one file for the reissue's two)
+	dc.l	54                              ; start track
+	dc.l	$15b00                          ; length on disc
+	dc.l	$15000                          ; length to decrypt
+	dc.l	$4fffc                          ; destination
+file_level5_map:	; from: start_level5
+; file 22: level5.map, disc 1, tracks 69-74, level 5 map
+	dc.l	69                              ; start track
+	dc.l	$8500                           ; length on disc
+	dc.l	$8000                           ; length to decrypt
+	dc.l	$73fc                           ; destination
+
+; INSERT OTHER DISC, 208 words of plane 0 drawn by insert_other_disc.
+insert_disc_gfx:	; from: insert_other_disc
+	incbin	"data/2disk_rt/lo_disc.bin"		; $1a0 bytes of data
+
+; Zeros up to the leftover tool.
+loader_padding:
+	dcb.b	798,$00
 	endc
+
+	ifeq	CONFIG-RETAIL_1DISK
+; Variables and tables.
+loader_spare:
+	dc.w	$0000,$0000
+
+; Current file: +2 track, +4 length to decrypt, +8 length on disc, +$c destination,
+; +$10 offset into the track.
+file_vars:	; from: show_picture, unpack_file, load_file
+	dc.w	$0000                           ; spare
+	dc.w	$0000                           ; track
+	dc.l	$00000000                       ; length to decrypt
+	dc.l	$00000000                       ; length on disc
+	dc.l	$00000000                       ; destination
+	dc.w	$0000                           ; offset into the track
+
+; Load table: 20 bytes per file, see the file list at the top.
 load_table:	; from: loader_start
 ; file 0: title.pic, tracks 2-5, title picture
 	dc.l	2                               ; start track
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	$2000                           ; length on disc
-	dc.l	$1e80                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	$0                              ; offset into the track
 	dc.l	$4a83                           ; length on disc
 	dc.l	$4826                           ; length to decrypt
@@ -1564,153 +1743,51 @@ file_panel_gfx:	; from: loader_start
 	dc.l	$284                            ; offset into the track
 	dc.l	$17cc                           ; length on disc
 	dc.l	$16fa                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	10                              ; first sector: track 1 sector 1, side 0
-	dc.l	37                              ; sectors
-	dc.l	$4826                           ; length to decrypt
-	dc.l	$3f23a                          ; destination (picture)
-file_panel_gfx:	; from: loader_start
-; file 1: panel.gfx, tracks 5-6, panel bitmap (resident)
-	dc.l	5                               ; start track
-	dc.l	47                              ; first sector: track 4 sector 8, side 0
-	dc.l	9                               ; sectors
-	dc.l	$16fa                           ; length to decrypt
-	endc
 	dc.l	$75efc                          ; destination, unpacked to $75f00
 file_panel_bin:	; from: loader_start
 ; file 2: panel.bin, tracks 6-7, panel / score code (resident)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	4                               ; start track
-	dc.l	$1a00                           ; length on disc
-	dc.l	$1880                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	6                               ; start track
 	dc.l	$252                            ; offset into the track
 	dc.l	$1634                           ; length on disc
 	dc.l	$156c                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	6                               ; start track
-	dc.l	56                              ; first sector: track 5 sector 7, side 0
-	dc.l	8                               ; sectors
-	dc.l	$156c                           ; length to decrypt
-	endc
 	dc.l	$6b7fc                          ; destination, unpacked to $6b800
 file_sound_prg:	; from: loader_start
 ; file 3: sound.prg, tracks 7-8, sound driver PRG (resident)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	6                               ; start track
-	dc.l	$2700                           ; length on disc
-	dc.l	$2580                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	7                               ; start track
 	dc.l	$88                             ; offset into the track
 	dc.l	$2299                           ; length on disc
 	dc.l	$2160                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	7                               ; start track
-	dc.l	64                              ; first sector: track 6 sector 5, side 0
-	dc.l	11                              ; sectors
-	dc.l	$2160                           ; length to decrypt
-	endc
 	dc.l	$6d3e4                          ; destination, unpacked to $6d3e4
 file_frontend_bin:	; from: loader_start, after_level
 ; file 4: frontend.bin, tracks 8-9, front end code
 	dc.l	8                               ; start track
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	$2600                           ; length on disc
-	dc.l	$2400                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	$b22                            ; offset into the track
 	dc.l	$1cb6                           ; length on disc
 	dc.l	$1bc6                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	75                              ; first sector: track 7 sector 6, side 0
-	dc.l	9                               ; sectors
-	dc.l	$1bc6                           ; length to decrypt
-	endc
 	dc.l	$1fffc                          ; destination, unpacked to $20000
 file_frontend_gfx:	; from: loader_start, after_level
 ; file 5: frontend.gfx, tracks 9-15, front end pictures and big font
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	10                              ; start track
-	dc.l	$af00                           ; length on disc
-	dc.l	$a900                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	9                               ; start track
 	dc.l	$fe2                            ; offset into the track
 	dc.l	$8262                           ; length on disc
 	dc.l	$7e34                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	9                               ; start track
-	dc.l	84                              ; first sector: track 8 sector 5, side 0
-	dc.l	54                              ; sectors
-	dc.l	$7e34                           ; length to decrypt
-	endc
 	dc.l	$3f236                          ; destination, unpacked to $3f23a
 file_level1_pic:	; from: start_level1
 ; file 6: level1.pic, tracks 15-16, level 1 loading picture
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	18                              ; start track
-	dc.l	$4300                           ; length on disc
-	dc.l	$4046                           ; length to decrypt
-	dc.l	$4300                           ; length again (read to $7fd00 - length)
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	15                              ; start track
 	dc.l	$246                            ; offset into the track
 	dc.l	$1868                           ; length on disc
 	dc.l	$1788                           ; length to decrypt
 	dc.l	$78000                          ; destination (picture)
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	15                              ; start track
-	dc.l	138                             ; first sector: track 13 sector 9, side 0
-	dc.l	10                              ; sectors
-	dc.l	$1788                           ; length to decrypt
-	dc.l	$78000                          ; destination (picture)
-	endc
 file_level1_bin:	; from: start_level1
 ; file 7: level1.bin, tracks 16-19, level 1 code (platform engine)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	21                              ; start track
-	dc.l	$5600                           ; length on disc
-	dc.l	$5280                           ; length to decrypt
-	dc.l	$21fc                           ; destination
-file_level1_gfx:	; from: start_level1
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	16                              ; start track
 	dc.l	$2b0                            ; offset into the track
 	dc.l	$4671                           ; length on disc
 	dc.l	$4400                           ; length to decrypt
 	dc.l	$21fc                           ; destination, unpacked to $2200
 file_level1a_gfx:	; from: start_level1
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	16                              ; start track
-	dc.l	148                             ; first sector: track 14 sector 9, side 0
-	dc.l	24                              ; sectors
-	dc.l	$4400                           ; length to decrypt
-	dc.l	$21fc                           ; destination, unpacked to $2200
-file_level1a_gfx:	; from: start_level1
-	endc
 ; file 8: level1a.gfx, tracks 19-23, level 1 graphics
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	25                              ; start track
-	dc.l	$15600                          ; length on disc
-	dc.l	$14a80                          ; length to decrypt
-	dc.l	$4fffc                          ; destination
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	19                              ; start track
 	dc.l	$122                            ; offset into the track
 	dc.l	$74a1                           ; length on disc
@@ -1723,300 +1800,99 @@ file_level1b_gfx:	; from: start_level1
 	dc.l	$1d7a                           ; length on disc
 	dc.l	$1c70                           ; length to decrypt
 	dc.l	$5fffc                          ; destination, unpacked to $60000
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	19                              ; start track
-	dc.l	172                             ; first sector: track 17 sector 3, side 0
-	dc.l	47                              ; sectors
-	dc.l	$70de                           ; length to decrypt
-	dc.l	$4fffc                          ; destination, unpacked to $50000
-file_level1b_gfx:	; from: start_level1
-; file 9: level1b.gfx, tracks 23-25, level 1 graphics
-	dc.l	0                               ; not used (the reissue's start track)
-	dc.l	219                             ; first sector: track 21 sector 10, side 0
-	dc.l	13                              ; sectors
-	dc.l	$1c70                           ; length to decrypt
-	dc.l	$5fffc                          ; destination, unpacked to $60000
-	endc
 file_level1_map:	; from: start_level1
 ; file 10: level1.map, tracks 25-27, level 1 map
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	40                              ; start track
-	dc.l	$8400                           ; length on disc
-	dc.l	$7f80                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	25                              ; start track
 	dc.l	$340                            ; offset into the track
 	dc.l	$4128                           ; length on disc
 	dc.l	$3f0c                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	25                              ; start track
-	dc.l	232                             ; first sector: track 23 sector 3, side 0
-	dc.l	20                              ; sectors
-	dc.l	$3f0c                           ; length to decrypt
-	endc
 	dc.l	$73fc                           ; destination, unpacked to $7400
 file_level2_pic:	; from: start_level2
 ; file 11: level2.pic, tracks 27-29, level 2 loading picture
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	1                               ; start track
-	dc.l	$4300                           ; length on disc
-	dc.l	$403d                           ; length to decrypt
-	dc.l	$4300                           ; length again (read to $7fd00 - length)
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	27                              ; start track
 	dc.l	$146a                           ; offset into the track
 	dc.l	$22df                           ; length on disc
 	dc.l	$21a4                           ; length to decrypt
 	dc.l	$78000                          ; destination (picture)
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	27                              ; start track
-	dc.l	252                             ; first sector: track 25 sector 3, side 0
-	dc.l	16                              ; sectors
-	dc.l	$21a4                           ; length to decrypt
-	dc.l	$78000                          ; destination (picture)
-	endc
 file_level24_bin:	; from: start_level2
 ; file 12: level24.bin, tracks 29-33, level 2/4 code (driving engine)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	4                               ; start track
-	dc.l	$8900                           ; length on disc
-	dc.l	$8400                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	29                              ; start track
 	dc.l	$74a                            ; offset into the track
 	dc.l	$633a                           ; length on disc
 	dc.l	$6006                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	29                              ; start track
-	dc.l	268                             ; first sector: track 26 sector 9, side 0
-	dc.l	32                              ; sectors
-	dc.l	$6006                           ; length to decrypt
-	endc
 	dc.l	$21fc                           ; destination, unpacked to $2200
 file_level24_gfx:	; from: start_level2
 ; file 13: level24.gfx, tracks 33-35, level 2/4 graphics
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	10                              ; start track
-	dc.l	$4c00                           ; length on disc
-	dc.l	$4880                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	33                              ; start track
 	dc.l	$a86                            ; offset into the track
 	dc.l	$2ab0                           ; length on disc
 	dc.l	$2926                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	33                              ; start track
-	dc.l	300                             ; first sector: track 30 sector 1, side 0
-	dc.l	13                              ; sectors
-	dc.l	$2926                           ; length to decrypt
-	endc
 	dc.l	$bbfc                           ; destination, unpacked to $bc00
 file_level2_gfx:	; from: start_level2
 ; file 14: level2.gfx, tracks 35-46, level 2 graphics
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	14                              ; start track
-	dc.l	$21400                          ; length on disc
-	dc.l	$20280                          ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	35                              ; start track
 	dc.l	$538                            ; offset into the track
 	dc.l	$103ad                          ; length on disc
 	dc.l	$fb74                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	35                              ; start track
-	dc.l	313                             ; first sector: track 31 sector 4, side 0
-	dc.l	112                             ; sectors
-	dc.l	$fb74                           ; length to decrypt
-	endc
 	dc.l	$10434                          ; destination, unpacked to $10438
 file_level3_pic:	; from: start_level3
 ; file 15: level3.pic, tracks 46-47, level 3 loading picture
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	37                              ; start track
-	dc.l	$3d00                           ; length on disc
-	dc.l	$3a26                           ; length to decrypt
-	dc.l	$3d00                           ; length again (read to $7fd00 - length)
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	46                              ; start track
 	dc.l	$e6                             ; offset into the track
 	dc.l	$299b                           ; length on disc
 	dc.l	$2848                           ; length to decrypt
 	dc.l	$78000                          ; destination (picture)
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	46                              ; start track
-	dc.l	425                             ; first sector: track 42 sector 6, side 0
-	dc.l	17                              ; sectors
-	dc.l	$2848                           ; length to decrypt
-	dc.l	$78000                          ; destination (picture)
-	endc
 file_level3_bin:	; from: start_level3
 ; file 16: level3.bin, tracks 47-51, level 3 picture and code
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	40                              ; start track
-	dc.l	$dd00                           ; length on disc
-	dc.l	$d580                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	47                              ; start track
 	dc.l	$1282                           ; offset into the track
 	dc.l	$613d                           ; length on disc
 	dc.l	$5e4c                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	47                              ; start track
-	dc.l	442                             ; first sector: track 44 sector 3, side 0
-	dc.l	32                              ; sectors
-	dc.l	$5e4c                           ; length to decrypt
-	endc
 	dc.l	$1fffc                          ; destination, unpacked to $20000
 file_level4_pic:	; from: start_level4
 ; file 17: level4.pic, tracks 51-53, level 4 loading picture
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	50                              ; start track
-	dc.l	$3b00                           ; length on disc
-	dc.l	$38cd                           ; length to decrypt
-	dc.l	$3b00                           ; length again (read to $7fd00 - length)
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	51                              ; start track
 	dc.l	$13c0                           ; offset into the track
 	dc.l	$25a7                           ; length on disc
 	dc.l	$245c                           ; length to decrypt
 	dc.l	$78000                          ; destination (picture)
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	51                              ; start track
-	dc.l	474                             ; first sector: track 47 sector 5, side 0
-	dc.l	16                              ; sectors
-	dc.l	$245c                           ; length to decrypt
-	dc.l	$78000                          ; destination (picture)
-	endc
 file_level24_bin_l4:	; from: start_level4
 ; file 18: level24.bin, tracks 29-33, level 2/4 code (same file as 12)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	4                               ; start track
-	dc.l	$8900                           ; length on disc
-	dc.l	$8400                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	29                              ; start track
 	dc.l	$74a                            ; offset into the track
 	dc.l	$633a                           ; length on disc
 	dc.l	$6006                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	29                              ; start track
-	dc.l	490                             ; first sector: track 49 sector 1, side 0
-	dc.l	32                              ; sectors
-	dc.l	$6006                           ; length to decrypt
-	endc
 	dc.l	$21fc                           ; destination, unpacked to $2200
 file_level24_gfx_l4:	; from: start_level4
 ; file 19: level24.gfx, tracks 33-35, level 2/4 graphics (same file as 13)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	10                              ; start track
-	dc.l	$4c00                           ; length on disc
-	dc.l	$4880                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	33                              ; start track
 	dc.l	$a86                            ; offset into the track
 	dc.l	$2ab0                           ; length on disc
 	dc.l	$2926                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	33                              ; start track
-	dc.l	522                             ; first sector: track 52 sector 3, side 0
-	dc.l	13                              ; sectors
-	dc.l	$2926                           ; length to decrypt
-	endc
 	dc.l	$bbfc                           ; destination, unpacked to $bc00
 file_level4_gfx:	; from: start_level4
 ; file 20: level4.gfx, tracks 53-65, level 4 graphics
 	dc.l	53                              ; start track
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	$28600                          ; length on disc
-	dc.l	$27080                          ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	$968                            ; offset into the track
 	dc.l	$122b7                          ; length on disc
 	dc.l	$119a6                          ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	535                             ; first sector: track 53 sector 6, side 0
-	dc.l	122                             ; sectors
-	dc.l	$119a6                          ; length to decrypt
-	endc
 	dc.l	$10434                          ; destination, unpacked to $10438
 file_level5_pic:	; from: start_level5
 ; file 21: level5.pic, tracks 65-67, level 5 loading picture
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	46                              ; start track
-	dc.l	$4a00                           ; length on disc
-	dc.l	$474f                           ; length to decrypt
-	dc.l	$4a00                           ; length again (read to $7fd00 - length)
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	65                              ; start track
 	dc.l	$c20                            ; offset into the track
 	dc.l	$281c                           ; length on disc
 	dc.l	$26b4                           ; length to decrypt
 	dc.l	$78000                          ; destination (picture)
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	65                              ; start track
-	dc.l	657                             ; first sector: track 65 sector 8, side 0
-	dc.l	18                              ; sectors
-	dc.l	$26b4                           ; length to decrypt
-	dc.l	$78000                          ; destination (picture)
-	endc
 file_level5_bin:	; from: start_level5
 ; file 22: level5.bin, tracks 67-70, level 5 code (platform engine)
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	50                              ; start track
-	dc.l	$5700                           ; length on disc
-	dc.l	$5400                           ; length to decrypt
-	dc.l	$21fc                           ; destination
-file_level5_gfx:	; from: start_level5
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	67                              ; start track
 	dc.l	$43e                            ; offset into the track
 	dc.l	$4a36                           ; length on disc
 	dc.l	$47c4                           ; length to decrypt
 	dc.l	$21fc                           ; destination, unpacked to $2200
 file_level5a_gfx:	; from: start_level5
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	67                              ; start track
-	dc.l	675                             ; first sector: track 67 sector 6, side 0
-	dc.l	25                              ; sectors
-	dc.l	$47c4                           ; length to decrypt
-	dc.l	$21fc                           ; destination, unpacked to $2200
-file_level5a_gfx:	; from: start_level5
-	endc
 ; file 23: level5a.gfx, tracks 70-74, level 5 graphics
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	54                              ; start track
-	dc.l	$15b00                          ; length on disc
-	dc.l	$15000                          ; length to decrypt
-	dc.l	$4fffc                          ; destination
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	70                              ; start track
 	dc.l	$676                            ; offset into the track
 	dc.l	$690b                           ; length on disc
@@ -2029,52 +1905,279 @@ file_level5b_gfx:	; from: start_level5
 	dc.l	$1d29                           ; length on disc
 	dc.l	$1c38                           ; length to decrypt
 	dc.l	$5fffc                          ; destination, unpacked to $60000
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	70                              ; start track
-	dc.l	700                             ; first sector: track 70 sector 1, side 0
-	dc.l	44                              ; sectors
-	dc.l	$6568                           ; length to decrypt
-	dc.l	$4fffc                          ; destination, unpacked to $50000
-file_level5b_gfx:	; from: start_level5
-; file 24: level5b.gfx, tracks 74-75, level 5 graphics
-	dc.l	74                              ; start track
-	dc.l	744                             ; first sector: track 74 sector 5, side 0
-	dc.l	13                              ; sectors
-	dc.l	$1c38                           ; length to decrypt
-	dc.l	$5fffc                          ; destination, unpacked to $60000
-	endc
 file_level5_map:	; from: start_level5
 ; file 25: level5.map, tracks 75-79, level 5 map
-	ifeq	CONFIG-RETAIL_2DISK
-	dc.l	69                              ; start track
-	dc.l	$8500                           ; length on disc
-	dc.l	$8000                           ; length to decrypt
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 	dc.l	75                              ; start track
 	dc.l	$14ac                           ; offset into the track
 	dc.l	$5e7e                           ; length on disc
 	dc.l	$5b86                           ; length to decrypt
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-	dc.l	75                              ; start track
-	dc.l	757                             ; first sector: track 75 sector 8, side 0
-	dc.l	27                              ; sectors
-	dc.l	$5b86                           ; length to decrypt
-	endc
 	dc.l	$73fc                           ; destination, unpacked to $7400
 
 ; Palette of the picture being shown.
-	ifeq	CONFIG-RETAIL_2DISK
-insert_disc_gfx:	; from: insert_other_disc
-	incbin	"data/2disk_rt/lo_disc.bin"		; $1a0 bytes of data
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
 picture_palette:	; from: show_picture
 	dcb.b	36,$00
+
+; Work area: the Huffman tree of the file being unpacked ($400 bytes copied from its TREE chunk).
+huff_tree:	; from: unpack_file, huff_chunk
+	dcb.b	1024,$ff
+
+; Zero padding: with the $4c byte stub in front, the loader fills track 0 sectors 2-9 (4096 bytes).
+sector_padding:
+	dcb.b	672,$00
 	endc
+
 	ifeq	CONFIG-BUDGET_1DISK
+; Variables and tables.
+loader_spare:
+	dc.w	$0000,$0000
+
+; Current file: +2 track, +4 length to decrypt, +8 length on disc, +$c destination,
+; +$10 offset into the track.
+file_vars:	; from: show_picture
+	dc.w	$0000                           ; spare
+	dc.w	$0000                           ; track
+	dc.l	$00000000                       ; length to decrypt
+	dc.l	$00000000                       ; length on disc
+	dc.l	$00000000                       ; destination
+	dc.w	$0000                           ; offset into the track
+
+; Load table: 20 bytes per file, see the file list at the top.
+load_table:	; from: loader_start
+; file 0: title.pic, sectors 10-46
+	dc.l	2                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	10                              ; first sector: track 1 x 10 + sector 1 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	37                              ; sectors
+	dc.l	$4826                           ; not used (the reissue's decrypt length)
+	dc.l	$3f23a                          ; destination: read and unpacked here
+file_panel_gfx:	; from: loader_start
+; file 1: panel.gfx, sectors 47-55
+	dc.l	5                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	47                              ; first sector: track 4 x 10 + sector 8 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	9                               ; sectors
+	dc.l	$16fa                           ; not used (the reissue's decrypt length)
+	dc.l	$75efc                          ; destination: read and unpacked here
+file_panel_bin:	; from: loader_start
+; file 2: panel.bin, sectors 56-63
+	dc.l	6                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	56                              ; first sector: track 5 x 10 + sector 7 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	8                               ; sectors
+	dc.l	$156c                           ; not used (the reissue's decrypt length)
+	dc.l	$6b7fc                          ; destination: read and unpacked here
+file_sound_prg:	; from: loader_start
+; file 3: sound.prg, sectors 64-74
+	dc.l	7                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	64                              ; first sector: track 6 x 10 + sector 5 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	11                              ; sectors
+	dc.l	$2160                           ; not used (the reissue's decrypt length)
+	dc.l	$6d3e4                          ; destination: read and unpacked here
+file_frontend_bin:	; from: loader_start, after_level
+; file 4: frontend.bin, sectors 75-83
+	dc.l	8                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	75                              ; first sector: track 7 x 10 + sector 6 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	9                               ; sectors
+	dc.l	$1bc6                           ; not used (the reissue's decrypt length)
+	dc.l	$1fffc                          ; destination: read and unpacked here
+file_frontend_gfx:	; from: loader_start, after_level
+; file 5: frontend.gfx, sectors 84-137
+	dc.l	9                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	84                              ; first sector: track 8 x 10 + sector 5 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	54                              ; sectors
+	dc.l	$7e34                           ; not used (the reissue's decrypt length)
+	dc.l	$3f236                          ; destination: read and unpacked here
+file_level1_pic:	; from: start_level1
+; file 6: level1.pic, sectors 138-147
+	dc.l	15                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	138                             ; first sector: track 13 x 10 + sector 9 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	10                              ; sectors
+	dc.l	$1788                           ; not used (the reissue's decrypt length)
+	dc.l	$78000                          ; destination: read and unpacked here
+file_level1_bin:	; from: start_level1
+; file 7: level1.bin, sectors 148-171
+	dc.l	16                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	148                             ; first sector: track 14 x 10 + sector 9 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	24                              ; sectors
+	dc.l	$4400                           ; not used (the reissue's decrypt length)
+	dc.l	$21fc                           ; destination: read and unpacked here
+file_level1a_gfx:	; from: start_level1
+; file 8: level1a.gfx, sectors 172-218
+	dc.l	19                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	172                             ; first sector: track 17 x 10 + sector 3 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	47                              ; sectors
+	dc.l	$70de                           ; not used (the reissue's decrypt length)
+	dc.l	$4fffc                          ; destination: read and unpacked here
+file_level1b_gfx:	; from: start_level1
+; file 9: level1b.gfx, sectors 219-231
+	dc.l	0                               ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	219                             ; first sector: track 21 x 10 + sector 10 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	13                              ; sectors
+	dc.l	$1c70                           ; not used (the reissue's decrypt length)
+	dc.l	$5fffc                          ; destination: read and unpacked here
+file_level1_map:	; from: start_level1
+; file 10: level1.map, sectors 232-251
+	dc.l	25                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	232                             ; first sector: track 23 x 10 + sector 3 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	20                              ; sectors
+	dc.l	$3f0c                           ; not used (the reissue's decrypt length)
+	dc.l	$73fc                           ; destination: read and unpacked here
+file_level2_pic:	; from: start_level2
+; file 11: level2.pic, sectors 252-267
+	dc.l	27                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	252                             ; first sector: track 25 x 10 + sector 3 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	16                              ; sectors
+	dc.l	$21a4                           ; not used (the reissue's decrypt length)
+	dc.l	$78000                          ; destination: read and unpacked here
+file_level24_bin:	; from: start_level2
+; file 12: level24.bin, sectors 268-299
+	dc.l	29                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	268                             ; first sector: track 26 x 10 + sector 9 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	32                              ; sectors
+	dc.l	$6006                           ; not used (the reissue's decrypt length)
+	dc.l	$21fc                           ; destination: read and unpacked here
+file_level24_gfx:	; from: start_level2
+; file 13: level24.gfx, sectors 300-312
+	dc.l	33                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	300                             ; first sector: track 30 x 10 + sector 1 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	13                              ; sectors
+	dc.l	$2926                           ; not used (the reissue's decrypt length)
+	dc.l	$bbfc                           ; destination: read and unpacked here
+file_level2_gfx:	; from: start_level2
+; file 14: level2.gfx, sectors 313-424
+	dc.l	35                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	313                             ; first sector: track 31 x 10 + sector 4 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	112                             ; sectors
+	dc.l	$fb74                           ; not used (the reissue's decrypt length)
+	dc.l	$10434                          ; destination: read and unpacked here
+file_level3_pic:	; from: start_level3
+; file 15: level3.pic, sectors 425-441
+	dc.l	46                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	425                             ; first sector: track 42 x 10 + sector 6 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	17                              ; sectors
+	dc.l	$2848                           ; not used (the reissue's decrypt length)
+	dc.l	$78000                          ; destination: read and unpacked here
+file_level3_bin:	; from: start_level3
+; file 16: level3.bin, sectors 442-473
+	dc.l	47                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	442                             ; first sector: track 44 x 10 + sector 3 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	32                              ; sectors
+	dc.l	$5e4c                           ; not used (the reissue's decrypt length)
+	dc.l	$1fffc                          ; destination: read and unpacked here
+file_level4_pic:	; from: start_level4
+; file 17: level4.pic, sectors 474-489
+	dc.l	51                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	474                             ; first sector: track 47 x 10 + sector 5 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	16                              ; sectors
+	dc.l	$245c                           ; not used (the reissue's decrypt length)
+	dc.l	$78000                          ; destination: read and unpacked here
+file_level24_bin_l4:	; from: start_level4
+; file 18: lev24_l4.bin, sectors 490-521
+	dc.l	29                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	490                             ; first sector: track 49 x 10 + sector 1 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	32                              ; sectors
+	dc.l	$6006                           ; not used (the reissue's decrypt length)
+	dc.l	$21fc                           ; destination: read and unpacked here
+file_level24_gfx_l4:	; from: start_level4
+; file 19: lev24_l4.gfx, sectors 522-534
+	dc.l	33                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	522                             ; first sector: track 52 x 10 + sector 3 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	13                              ; sectors
+	dc.l	$2926                           ; not used (the reissue's decrypt length)
+	dc.l	$bbfc                           ; destination: read and unpacked here
+file_level4_gfx:	; from: start_level4
+; file 20: level4.gfx, sectors 535-656
+	dc.l	53                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	535                             ; first sector: track 53 x 10 + sector 6 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	122                             ; sectors
+	dc.l	$119a6                          ; not used (the reissue's decrypt length)
+	dc.l	$10434                          ; destination: read and unpacked here
+file_level5_pic:	; from: start_level5
+; file 21: level5.pic, sectors 657-674
+	dc.l	65                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	657                             ; first sector: track 65 x 10 + sector 8 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	18                              ; sectors
+	dc.l	$26b4                           ; not used (the reissue's decrypt length)
+	dc.l	$78000                          ; destination: read and unpacked here
+file_level5_bin:	; from: start_level5
+; file 22: level5.bin, sectors 675-699
+	dc.l	67                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	675                             ; first sector: track 67 x 10 + sector 6 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	25                              ; sectors
+	dc.l	$47c4                           ; not used (the reissue's decrypt length)
+	dc.l	$21fc                           ; destination: read and unpacked here
+file_level5a_gfx:	; from: start_level5
+; file 23: level5a.gfx, sectors 700-743
+	dc.l	70                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	700                             ; first sector: track 70 x 10 + sector 1 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	44                              ; sectors
+	dc.l	$6568                           ; not used (the reissue's decrypt length)
+	dc.l	$4fffc                          ; destination: read and unpacked here
+file_level5b_gfx:	; from: start_level5
+; file 24: level5b.gfx, sectors 744-756
+	dc.l	74                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	744                             ; first sector: track 74 x 10 + sector 5 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	13                              ; sectors
+	dc.l	$1c38                           ; not used (the reissue's decrypt length)
+	dc.l	$5fffc                          ; destination: read and unpacked here
+file_level5_map:	; from: start_level5
+; file 25: level5.map, sectors 757-783
+	dc.l	75                              ; not used (the reissue's start track)
+	dc.w	0                               ; not used: the sector loader reads d1.w
+	dc.w	757                             ; first sector: track 75 x 10 + sector 8 - 1, side 0
+	dc.w	0                               ; not used: the sector loader reads d2.w
+	dc.w	27                              ; sectors
+	dc.l	$5b86                           ; not used (the reissue's decrypt length)
+	dc.l	$73fc                           ; destination: read and unpacked here
+
+; Palette of the picture being shown.
 picture_palette:	; from: show_picture
 	dc.b	$00
 
@@ -2082,19 +2185,9 @@ picture_palette:	; from: show_picture
 ; boot sector read is still there.
 dat_018f1:
 	dcb.b	35,$00
-	endc
 
 ; Work area: the Huffman tree of the file being unpacked ($400 bytes copied from its TREE chunk).
-	ifeq	CONFIG-RETAIL_2DISK
-loader_padding:
-	dcb.b	798,$00
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
-huff_tree:	; from: unpack_file, huff_chunk
-	dcb.b	1024,$ff
-	endc
-	ifeq	CONFIG-BUDGET_1DISK
-huff_tree:	; from: unpack_file, huff_chunk
+huff_tree:	; from: unused_unpack_rest, huff_chunk
 	dcb.b	486,$00
 	dc.w	$4963,$6521,$0000,$4880,$0000,$5b2e,$1001,$0005
 	dc.w	$2006,$03dc,$e6ac,$3007,$4007,$7007,$4301,$1102
@@ -2174,10 +2267,9 @@ huff_tree:	; from: unpack_file, huff_chunk
 	dc.w	$6248,$490e,$836c,$8111,$23fa
 	endc
 
-	ifne	CONFIG-BUDGET_1DISK
-; Zero padding: with the $4c byte stub in front, the loader fills track 0 sectors 2-9 (4096 bytes).
 	ifeq	CONFIG-RETAIL_2DISK
-
+; Leftover of the tool that wrote the game tracks, never run by the loader: the end of its
+; data, then its code.
 tool_leftover:
 	dc.w	$0000
 tool_file_name:
@@ -2572,11 +2664,6 @@ tool_read_file:	; from: tool_load_file
 	pea	(a0)
 	move.l	#$c0000,-(sp)
 	dc.w	$3f39
-	endc
-	ifeq	CONFIG-RETAIL_1DISK
-sector_padding:
-	dcb.b	672,$00
-	endc
 
 	endc
 	end

@@ -911,7 +911,7 @@ print_exit:
 	rts
 
 font:	; from: print_text
-	incbin	"data/fe_font.bin"		; $640 bytes of data
+	incbin	"data/font.bin"		; $640 bytes of data
 no_key:	; from: check_keys
 	clr.w	key_down_flag
 	rts
@@ -1018,7 +1018,16 @@ text_row:	; from: run_credits, draw_entry_char
 text_row_start:	; from: run_credits
 	dc.b	$00
 script_start:	; from: run_credits, draw_entry_char
-	dc.w	$0000,$0000,$0647,$0001,$33c7,$00ff,$8240,$4e75
+	dc.w	$0000,$0000
+
+;----------------------------------------------------------------------
+; Not called by anything: add 1 to d7 and show it as colour 0.
+;----------------------------------------------------------------------
+unused_colour0_step:
+	addi.w	#$1,d7
+	move.w	d7,$ff8240                      ; palette 0
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Credits script interpreter (a6): $ff end, $0d newline, $0a line feed, 1 clear, 2 wait, 3 high score
@@ -1045,7 +1054,7 @@ script_position:	; from: draw_entry_char
 	lea	$0(a2,d0.w),a2
 script_same_line:
 	movea.l	a2,a3
-script_next:	; from: draw_entry_char
+script_next:	; from: unused_script_next, draw_entry_char
 	tst.w	wait_count
 	bne.w	wait_loop
 	move.b	(a6)+,d0
@@ -1113,7 +1122,15 @@ advance_big_column:
 	addi.w	#$1,text_col
 	bra.w	script_position
 
-	dc.w	$6000,$ff20,$4e75
+
+;----------------------------------------------------------------------
+; Not reached: an alternative end of the character loop.
+;----------------------------------------------------------------------
+unused_script_next:
+	bra.w	script_next
+
+	rts
+
 entry_col:	; from: draw_entry_char, hiscore_entry, entry_show_char
 	dc.w	$0000
 entry_row:	; from: draw_entry_char, hiscore_entry
@@ -1558,7 +1575,8 @@ unused_sprite_buffer:	; from: unused_sprite_clip
 	dc.w	$0000
 	dcb.b	680,$ff
 	dcb.b	680,$00
-	dc.w	$4e75
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Not called by anything: copy 32 words from a0 to every other word at a1.
@@ -1701,7 +1719,8 @@ copy_top_loop:
 	movem.l	(sp)+,d0/a0-a1
 	rts
 
-	dc.w	$4e75
+	rts
+
 
 ;----------------------------------------------------------------------
 ; After a level: bit5 abort -> restart; bit6 complete -> picture frontend_gfx+$7202 and tune 3;

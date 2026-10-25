@@ -2,19 +2,21 @@
 ; Module level5: level5.bin, loaded at $2200, in scenes level5.
 ; Size: RETAIL_2DISK 21500 bytes, RETAIL_1DISK 21500 bytes, BUDGET_1DISK 21531 bytes.
 ;
-; Platform level engine (level 5 variant of level1).  Entry at $2200: converts the level graphics
-; (level1b_gfx/level1a_gfx) to screen planes, builds the sprite tables, installs the
-; interrupt handlers and starts the level at level_begin.  main_loop runs once
-; per frame: joystick, player state, scrolling, enemies, bullets, redraw, flip.
+; Platform level engine, level 5's copy of level1's (names as in level1.s).  Entry at
+; $2200: converts the level graphics (level5b_gfx/level5a_gfx) to screen planes, builds
+; the sprite tables, installs the interrupt handlers and starts the level at level_begin.
+; main_loop runs once per frame: joystick, player state, scrolling, enemies, bullets,
+; redraw, flip.
 ;
-; The player is a state machine: jsr player_state at $2b56 is self modifying,
+; The player is a state machine: the jsr at call_player_state is self modifying,
 ; player_state_lo (the low word of its operand) is written with the address of
 ; the current state routine (state_* labels).  player_input dispatches the idle
 ; state on the joystick bits of joy_state (0 right, 1 left, 2 down, 3 up,
 ; 4 fire) through player_input_table.  Enemies are 10 records of $16 bytes in
 ; enemies, updated through enemy_type_table (indexed by type).  Map tiles are
-; in level1_map at $7406, $cc bytes per row; tile >= $28 is solid, >= $e2 a slope,
-; >= $fa a ladder.
+; in level5_map at $7406, 204 rows of $5c bytes (the words at $7400 hold the tile
+; count, the row length and the rows); a tile is 8 x 8 pixels; tile >= $18 is solid,
+; >= $cd a slope, >= $f8 a ladder.  The tile cache has 72 slots (level 1: 96).
 ; The map data of level5_map is loaded over the tail of this module at $7400, so
 ; everything from $7400 on is overwritten before the level runs.
 ;
@@ -786,7 +788,7 @@ call_player_state:
 
 ;----------------------------------------------------------------------
 ; Sprite blitter: d0/d1 position, d2 sprite number (bit 15 = flipped), through sprite_shift_table.
-; Sprite headers at $2427e (8 bytes: x/y offset, width code, height, data), data at $23382.
+; Sprite headers at $21356 (8 bytes: x/y offset, width code, height, data), data at $23eaa.
 ;----------------------------------------------------------------------
 draw_sprite:	; from: draw_enemy, draw_enemy_sprite, draw_bullets, draw_player, level_complete
 	movea.l	#$21356,a1
@@ -1610,7 +1612,7 @@ tile_free_ptr:	; from: init_tile_cache, tile_cache_get, tile_cache_free
 	dc.w	$0000,$0000
 
 ;----------------------------------------------------------------------
-; Reset the tile cache: free list, reference counts at $977e, cache every tile of the start window.
+; Reset the tile cache: free list, reference counts at $bf56, cache every tile of the start window.
 ;----------------------------------------------------------------------
 init_tile_cache:	; from: level_begin
 	moveq	#71,d7
@@ -2030,10 +2032,32 @@ hscroll_redraw_table:	; from: scroll_left, scroll_right
 build_tile_order:	; from: level_begin
 	bra.w	tile_order_init
 
-	dc.w	$41f9,$0000,$7406,$4a10,$43f9,$0000,$bcfa,$3c3c
-	dc.w	$005c,$3e3c,$0065,$3a06,$5345,$1010,$1091,$12c0
-	dc.w	$5248,$51cd,$fff6,$92c6,$92c6,$51cf,$ffea,$4e75
+
+;----------------------------------------------------------------------
+; Not called by anything: turn the map upside down, swapping each of the top 102 rows
+; with the one as far from the bottom (204 rows of $5c bytes).
+;----------------------------------------------------------------------
+unused_flip_map:
+	lea	map_tiles,a0
+	tst.b	(a0)
+	lea	$bcfa,a1                        ; level5_map +$48fa
+	move.w	#$5c,d6
+	move.w	#$65,d7
+flip_map_row_loop:
+	move.w	d6,d5
+	subq.w	#1,d5
+flip_map_byte_loop:
+	move.b	(a0),d0
+	move.b	(a1),(a0)
+	move.b	d0,(a1)+
+	addq.w	#1,a0
+	dbra	d5,flip_map_byte_loop
+	suba.w	d6,a1
+	suba.w	d6,a1
+	dbra	d7,flip_map_row_loop
+	rts
 	ifne	CONFIG-RETAIL_2DISK
+
 
 ;----------------------------------------------------------------------
 ; Convert the level graphics from 4 bitplanes to the 4 plane + mask format of the blitter.
@@ -2083,8 +2107,8 @@ convert_mask_loop:
 	subq.l	#8,a0
 	dbra	d7,convert_mask_loop
 	rts
-
 	endc
+
 tile_order_init:	; from: build_tile_order
 	lea	$70000,a0
 	move.w	map_tile_count,d7
@@ -3790,7 +3814,7 @@ scroll_dy_last:	; from: update_scroll
 	dc.w	$0000
 
 ;----------------------------------------------------------------------
-; Scroll the map to keep the player in view (scroll_x/scroll_y, tile cache at $977e).
+; Scroll the map to keep the player in view (scroll_x/scroll_y), keeping the tile cache in step.
 ;----------------------------------------------------------------------
 update_scroll:	; from: main_loop
 	movem.w	player_y.w,d1-d2
@@ -4859,10 +4883,21 @@ map_tile_at:	; from: thug_walk_left, thug_walk_right, goon_walk_right, goon_walk
 	move.b	$0(a0,d3.w),d2
 	rts
 
-rope_pattern:	; from: draw_player
-	dc.w	$e29e,$e29d,$6522,$3005,$2a3c,$fffe,$fffe,$0286
-	dc.w	$0001,$0001,$0800,$0000,$670e,$2a3c,$3fff,$3fff
-	dc.w	$2c3c,$0000,$c000,$5088,$4e75
+rope_pattern_right:	; from: draw_player
+	ror.l	#1,d6
+	ror.l	#1,d5
+	bcs.s	rope_right_exit
+	move.w	d5,d0
+	move.l	#$fffefffe,d5
+	andi.l	#$10001,d6
+	btst	#$0,d0
+	beq.s	rope_right_exit
+	move.l	#$3fff3fff,d5
+	move.l	#$c000,d6                       ; level5_map +$4c00
+	addq.l	#8,a0
+rope_right_exit:
+	rts
+
 rope_pattern_left:	; from: draw_player
 	add.l	d6,d6
 	rol.l	#1,d5
@@ -4901,7 +4936,7 @@ rope_setup:
 	swap	d5
 	move.w	d6,d5
 	not.l	d5
-	lea	rope_pattern.w,a1
+	lea	rope_pattern_right.w,a1
 	movem.w	rope_end.w,d3-d4
 	tst.w	d3
 	bpl.s	rope_height
@@ -6150,7 +6185,7 @@ print_exit:
 
 ; Font, 40 bytes per character (the same font is in every module).
 font:	; from: build_sprite_tables, print_text
-	incbin	"data/l5_font.bin"		; $640 bytes of data
+	incbin	"data/font.bin"		; $640 bytes of data
 
 ; Filler after the 40 characters of the font, up to the map.
 font_filler:
@@ -6170,7 +6205,7 @@ map_tile_count:	; from: convert_level_gfx
 	ifne	CONFIG-RETAIL_2DISK
 	dc.w	$1a1a,$1a1a,$1a1a
 	endc
-map_tiles:	; from: level_begin, convert_level_gfx, map_tile_at, object_use_anim
+map_tiles:	; from: level_begin, unused_flip_map, convert_level_gfx, map_tile_at, object_use_anim
 	ifeq	CONFIG-RETAIL_2DISK
 	dcb.b	58,$00
 	endc

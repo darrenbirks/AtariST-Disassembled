@@ -7,14 +7,15 @@
 ; interrupt handlers and starts the level at level_begin.  main_loop runs once
 ; per frame: joystick, player state, scrolling, enemies, bullets, redraw, flip.
 ;
-; The player is a state machine: jsr player_state at $2b56 is self modifying,
+; The player is a state machine: the jsr at call_player_state is self modifying,
 ; player_state_lo (the low word of its operand) is written with the address of
 ; the current state routine (state_* labels).  player_input dispatches the idle
 ; state on the joystick bits of joy_state (0 right, 1 left, 2 down, 3 up,
 ; 4 fire) through player_input_table.  Enemies are 10 records of $16 bytes in
 ; enemies, updated through enemy_type_table (indexed by type).  Map tiles are
-; in level1_map at $7406, $cc bytes per row; tile >= $28 is solid, >= $e2 a slope,
-; >= $fa a ladder.
+; in level1_map at $7406, 42 rows of $cc bytes (the words at $7400 hold the tile
+; count, the row length and the rows); a tile is 8 x 8 pixels; tile >= $28 is solid,
+; >= $e2 a slope, >= $fa a ladder.
 ;
 ; Labels are named for what they do or hold; unused_ marks code that nothing
 ; calls.  A label still ending in its address (tab_ table, dat_ data) is one
@@ -2025,10 +2026,32 @@ hscroll_redraw_table:	; from: scroll_left, scroll_right
 build_tile_order:	; from: level_begin
 	bra.w	tile_order_init
 
-	dc.w	$41f9,$0000,$7406,$4a10,$43f9,$0000,$94b2,$3c3c
-	dc.w	$00cc,$3e3c,$0014,$3a06,$5345,$1010,$1091,$12c0
-	dc.w	$5248,$51cd,$fff6,$92c6,$92c6,$51cf,$ffea,$4e75
+
+;----------------------------------------------------------------------
+; Not called by anything: turn the map upside down, swapping each of the top 21 rows with
+; the one as far from the bottom (42 rows of $cc bytes).
+;----------------------------------------------------------------------
+unused_flip_map:
+	lea	$7406,a0                        ; level1_map +$6
+	tst.b	(a0)
+	lea	$94b2,a1                        ; level1_map +$20b2
+	move.w	#$cc,d6
+	move.w	#$14,d7
+flip_map_row_loop:
+	move.w	d6,d5
+	subq.w	#1,d5
+flip_map_byte_loop:
+	move.b	(a0),d0
+	move.b	(a1),(a0)
+	move.b	d0,(a1)+
+	addq.w	#1,a0
+	dbra	d5,flip_map_byte_loop
+	suba.w	d6,a1
+	suba.w	d6,a1
+	dbra	d7,flip_map_row_loop
+	rts
 	ifne	CONFIG-RETAIL_2DISK
+
 
 ;----------------------------------------------------------------------
 ; Convert the level graphics from 4 bitplanes to the 4 plane + mask format of the blitter.
@@ -2078,8 +2101,8 @@ convert_mask_loop:
 	subq.l	#8,a0
 	dbra	d7,convert_mask_loop
 	rts
-
 	endc
+
 tile_order_init:	; from: build_tile_order
 	lea	$70000,a0
 	move.w	$7400,d7                        ; level1_map +$0
@@ -3748,7 +3771,7 @@ scroll_dy_last:	; from: update_scroll
 	dc.w	$0000
 
 ;----------------------------------------------------------------------
-; Scroll the map to keep the player in view (scroll_x/scroll_y, tile cache at $977e).
+; Scroll the map to keep the player in view (scroll_x/scroll_y), keeping the tile cache in step.
 ;----------------------------------------------------------------------
 update_scroll:	; from: main_loop
 	movem.w	player_y.w,d1-d2
@@ -4816,10 +4839,21 @@ map_tile_at:	; from: thug_walk_left, thug_walk_right, goon_walk_right, goon_walk
 	move.b	$0(a0,d3.w),d2
 	rts
 
-rope_pattern:	; from: draw_player
-	dc.w	$e29e,$e29d,$6522,$3005,$2a3c,$fffe,$fffe,$0286
-	dc.w	$0001,$0001,$0800,$0000,$670e,$2a3c,$3fff,$3fff
-	dc.w	$2c3c,$0000,$c000,$5088,$4e75
+rope_pattern_right:	; from: draw_player
+	ror.l	#1,d6
+	ror.l	#1,d5
+	bcs.s	rope_right_exit
+	move.w	d5,d0
+	move.l	#$fffefffe,d5
+	andi.l	#$10001,d6
+	btst	#$0,d0
+	beq.s	rope_right_exit
+	move.l	#$3fff3fff,d5
+	move.l	#$c000,d6                       ; level1_map +$4c00
+	addq.l	#8,a0
+rope_right_exit:
+	rts
+
 rope_pattern_left:	; from: draw_player
 	add.l	d6,d6
 	rol.l	#1,d5
@@ -4858,7 +4892,7 @@ rope_setup:
 	swap	d5
 	move.w	d6,d5
 	not.l	d5
-	lea	rope_pattern.w,a1
+	lea	rope_pattern_right.w,a1
 	movem.w	rope_end.w,d3-d4
 	tst.w	d3
 	bpl.s	rope_height
@@ -6052,7 +6086,11 @@ print_exit:
 
 ; Font, 40 bytes per character (the same font is in every module).
 font:	; from: build_sprite_tables, print_text
-	incbin	"data/l1_font.bin"		; $641 bytes of data
+	incbin	"data/font.bin"		; $640 bytes of data
+
+; One byte after the 40 characters of the font.
+font_filler:
+	dc.b	$e7
 	ifne	CONFIG-RETAIL_1DISK
 file_padding:
 	ifeq	CONFIG-RETAIL_2DISK

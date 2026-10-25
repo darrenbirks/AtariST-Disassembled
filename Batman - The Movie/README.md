@@ -15,7 +15,7 @@ Folder `retail_2disk_speedlock`. The first release. Its SpeedLock stages (on dis
 | Path | Contents |
 |---|---|
 | `loader.bin` | The decrypted game loader (loadstub.s, loader.s). |
-| `disk1/`, `disk2/` | The game files of each disk, as loaded. They are not packed, so there is no `packed/` and `unpacked/` (pictures are run length packed, decoded by `load_picture` in loader.s). |
+| `disk1/`, `disk2/` | The game files of each disk, as loaded. They are not packed, so there is no `packed/` and `unpacked/` (pictures are run length packed, decoded by `load_picture` in loader.s). Disk 2's level24.bin and level4.gfx are the same as the reissue's, so they are kept only in `retail_1disk_speedlock/unpacked`. |
 | `speedlock/` | The boot stages up to the game loader, as Devpac sources: `bootsect.s` (track 0 sector 1), `protect.s` (track 1 sectors 5-7, decryptor and timing check), `layer3.s` (track 1 sectors 8-10, third layer, loads and decrypts loader.bin). `.bin` = sectors as on the disk, `.dec` = decrypted, what each source assembles to. `pseudo_c.txt` = C pseudocode of all of it. |
 
 ### 1 disk retail reissue (SpeedLock)
@@ -25,7 +25,7 @@ Folder `retail_1disk_speedlock`. The reissue on 1 disk, after the 2 disk release
 | Path | Contents |
 |---|---|
 | `loader.bin` | The decrypted game loader: the stub at `$21000` and the code that runs at `$1000` (loadstub.s, loader.s). |
-| `packed/`, `unpacked/` | The 26 files as on the disk (FORM HUFF) and unpacked. The file table (tracks, lengths, load addresses, names) is at the top of loader.s. |
+| `packed/`, `unpacked/` | The 24 files as on the disk (FORM HUFF) and unpacked. Level 4 loads level24.bin and level24.gfx again, so the load table has 26 entries. The file table (tracks, lengths, load addresses, names) is at the top of loader.s. |
 | `speedlock/` | As above, for this version. |
 
 ### 1 disk budget release (The Hit Squad)
@@ -35,7 +35,7 @@ Folder `budget_1disk`. No protection, a standard 10 x 512 byte sector disk of wh
 | Path | Contents |
 |---|---|
 | `loader.bin` | The 4 KB game loader stage 3 copies to `$21000`: the reissue's, with `load_file` calling the sector loader at `$6f950` (loadstub.s, loader.s). |
-| `packed/`, `unpacked/` | The 26 files as on the disk and unpacked: the reissue's unpacked files, each with 31 bytes more (only the tails differ). |
+| `packed/`, `unpacked/` | The 26 files as on the disk and unpacked: the reissue's unpacked files, each with 31 bytes more (only the tails differ), and level 4's own copies: lev24_l4.bin (level24.bin 3 bytes shorter) and lev24_l4.gfx (the same as level24.gfx). |
 | `boot/` | The boot stages, as Devpac sources that assemble to the `.bin` files: `bootsect.s` (track 0 sector 1, reads tracks 0-1 to `$fe00`), `stage2.s` (track 0 sectors 2-8 at `$10000`: unpacks `stage3.ice`), `stage3.s` (unpacked stage 3: fade, sector loader and Pack-Ice depacker for `$6f950`, reset handler for `$300`, and the game loader, incbin `gameload.bin`). |
 
 ## Differences between the versions
@@ -144,7 +144,7 @@ Assemble each with Devpac, `opt o-`, org = load address. What each assembles to 
 
 ### Data files
 
-The data files are left as they are: `retail_1disk_speedlock/unpacked` and `budget_1disk/unpacked`, and for the 2 disk release `retail_2disk_speedlock/disk1` and `disk2`, with one level1.gfx / level5.gfx from `$50000` each.
+The data files are left as they are: `retail_1disk_speedlock/unpacked` and `budget_1disk/unpacked`, and for the 2 disk release `retail_2disk_speedlock/disk1` and `disk2`, with one level1.gfx / level5.gfx from `$50000` each, and level4.gfx from the reissue's folder.
 
 | File | Load | Contents |
 |---|---|---|
@@ -209,4 +209,57 @@ The top of loader.s carries a scene by scene map of the 512 K for each version (
 
 Every routine, branch target and variable is named for what it does or holds, and `unused_` marks code that nothing calls. A few level 2/4 tables still carry their address (`tab_` table, `dat_` data) because their use is not known yet. `; from:` lists the routines or modules that refer to a label. Symbols of other modules in the same scene are equ'd at the top of each file.
 
-Long runs of data are incbin'd from `data/` (8.3 names: two letter module code ld lo pn sn fe l1 l2 l3 l5, then what it holds, e.g. fe_font.bin, pn_ebar.bin, l3_items.bin; the label above each incbin line describes it). `data/` holds the blocks all versions have; `data/2disk_rt` holds those only the 2 disk release has, and `data/1disk_rt` and `data/1disk_bu` would hold those only the reissue or only the budget release has (there are none now).
+Long runs of data are incbin'd from `data/` (8.3 names: two letter module code ld lo pn sn fe l1 l2 l3 l5, then what it holds, e.g. pn_ebar.bin, l3_items.bin; the label above each incbin line describes it). font.bin is the font every module has, one file for all of them. `data/` holds the blocks all versions have; `data/2disk_rt` holds those only the 2 disk release has, and `data/1disk_rt` and `data/1disk_bu` would hold those only the reissue or only the budget release has (there are none now).
+
+## File version on a floppy (not an official release)
+
+Folder `512-file-version`. **Ocean never released this.** I made it as an example of a file loader: the 1 disk retail reissue run from its files on a normal TOS floppy instead of its SpeedLock disk, on any ST with 512K or more. The game's code and files are the reissue's; only its loader is changed, in memory, when it starts.
+
+| File | Contents |
+|---|---|
+| [batman.s](512-file-version/batman.s) | The program (Devpac source). |
+| `batman.prg` | batman.s assembled. |
+| `loader.bin` | The reissue's decrypted game loader, incbin'd by batman.s. |
+| `files/` | The reissue's 24 game files, packed with Pack-Ice 2.40. |
+| `icepack/` | My packer, which packs them (see [Pack-Ice packer](#pack-ice-packer)). |
+| `batman.st` | A 720K floppy image with batman.prg (in the root and in AUTO) and the files. |
+
+**Why it needs its own reader:** the game overwrites TOS's memory, so GEMDOS cannot load files once the game runs. batman.prg finds the files while TOS still runs and gives the game a reader that uses the floppy controller itself.
+
+### What batman.s does, in order
+
+1. Shows its title: the screen fades to black with the text in white, it waits for a key, and the text fades out.
+2. Reads the boot sector, FAT and root directory of drive A with BIOS Rwabs. It finds the 24 files and follows each one's clusters through the FAT, so it knows which sectors hold each file. A file does not have to be in one piece.
+3. Copies the reissue's game loader and changes it in memory, all inside the 4 KB the loader keeps for the whole game (`$1000`-`$1fff`):
+   - each load table entry points to its file's sectors and holds its destination, its length and a delay;
+   - `load_file` becomes a jump to a new sector reader, which goes in the zero padding at the end of the loader (`$1d14`-`$1fb3`); the lists of sectors go over the rest of the old track reader (`$1514`-`$160d`);
+   - the FORM HUFF unpacker makes way for the Pack-Ice 2.40 depacker, the one that comes with Pack-Ice (by Axe of Superior), over the Huffman tree work area (`$1914`-`$1d13`).
+4. Starts the loader at `$21000`, as the SpeedLock boot does. From here on the game runs as from its own disk.
+
+### Each time the game loads a file
+
+The new reader:
+
+- waits about 2.4 seconds when the file comes after a loading picture, so the picture can be seen as it was while the original disk loaded;
+- reads the file's sectors with its own FDC and DMA code, a track side at a time, and the last sector through `$70000` so that nothing after the file is written;
+- tries a read that fails again after a restore to track 0, as the old loader did.
+
+The game then unpacks the file where it was loaded, and the 31 bytes after it are cleared, as the reissue's own unpacker does. The depacker keeps the 120 bytes after the file on the stack while it works, 196 bytes of stack in all.
+
+### Limits
+
+The files must be in the root directory of the disk in drive A; it does not work from a hard disk. Before the game starts it stops with a message (and goes back to the desktop after a key) if drive A has no TOS disk, the disk cannot be read, a file is missing, or the files are in too many pieces.
+
+## Pack-Ice packer
+
+Folder `512-file-version/icepack`. My own packer, written so that the files can be packed on a PC instead of running Pack-Ice under an emulator. It writes byte for byte what Pack-Ice 2.40 (ICE_2_4.PRG) writes for a data file with its standard settings, and with `-2.31` the older Pack-Ice 2.31 format of the budget release.
+
+| File | Contents |
+|---|---|
+| [icepack.py](512-file-version/icepack/icepack.py) | The packer in Python 3: `python icepack.py [-2.31] source target`. |
+| [icepack.go](512-file-version/icepack/icepack.go) | The same in Go (1.21 or later): `go run icepack.go [-2.31] source target`. |
+| [python-pack.cmd](512-file-version/icepack/python-pack.cmd), [go-pack.cmd](512-file-version/icepack/go-pack.cmd) | Pack the reissue's 24 files (`retail_1disk_speedlock/unpacked`) into `512-file-version/files` with icepack.py or icepack.go. |
+
+With `-2.31`, given the budget release's unpacked files (`budget_1disk/unpacked`), it writes the budget release's packed files (`budget_1disk/packed`) back byte for byte. Those differ from the reissue's files only after the data: each has the 31 bytes its loader clears, and a few files end in other unused bytes.
+
+Pack-Ice parses a file from its start: at each position the longest match whose source lies after it, within a 5504 byte window, the nearest of those, or else a literal byte; the depacker meets them in the opposite order, from the end of the file. Pack-Ice 2.40 adds runs of one byte and writes its bits a byte at a time instead of a long at a time, which packs the reissue's files 769 bytes smaller than 2.31. icepack.py describes both formats and the rules in full.

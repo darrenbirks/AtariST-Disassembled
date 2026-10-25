@@ -62,17 +62,17 @@ snd_sfx_on:	; from: snd_tick_body
 	dc.b	$01
 snd_tune_playing:	; from: play_tune_body, snd_init_channels, snd_tick_body
 	dc.b	$00
-snd_sfx_playing:	; from: level1, play_sfx_body, snd_init_channels, snd_tick_body
+snd_sfx_playing:	; from: level1, play_sfx_body, snd_init_channels, unused_sfx_take_channels, snd_tick_body
 	dc.b	$00
-snd_disabled:	; from: snd_init_channels, snd_tick_body
+snd_disabled:	; from: unused_snd_pause, unused_snd_resume, snd_init_channels, snd_tick_body
 	dc.w	$0000
-sample_channel:	; from: play_sfx_body, snd_init_channels, snd_tick_body, snd_sequence_channel, cmd_end, snd_sample_start, ...
+sample_channel:	; from: play_sfx_body, snd_init_channels, unused_sfx_take_channels, snd_tick_body, snd_sequence_channel, cmd_end, ...
 	dc.w	$0000
 sample_end:	; from: snd_sample_start
 	dc.w	$0000,$0000
 sample_pos:
 	dc.w	$0000,$0000,$0000
-snd_music_chan_a:	; from: play_tune_body, snd_init_channels, snd_tick_body
+snd_music_chan_a:	; from: play_tune_body, snd_init_channels, unused_sfx_take_channels, snd_tick_body
 	dcb.b	71,$00
 	dc.b	$09,$08,$00
 snd_music_chan_b:	; from: snd_init_channels, snd_tick_body
@@ -111,9 +111,34 @@ psg_vol_a:	; from: snd_init_channels, snd_tick_body
 psg_vol_b:	; from: snd_init_channels, snd_tick_body
 	dc.b	$00
 psg_vol_c:	; from: snd_init_channels, snd_tick_body
-	dc.w	$0000,$1038,$fa19,$6600,$0004,$70ff,$13c0,$0006
-	dc.w	$d422,$4238,$fa19,$6000,$012a,$1039,$0006,$d422
-	dc.w	$6b00,$0006,$11c0,$fa19,$4239,$0006,$d422,$4e75
+	dc.w	$0000
+
+;----------------------------------------------------------------------
+; Not called by anything: pause.  Keep the timer A control in snd_disabled (-1 when timer A
+; was stopped), stop timer A and silence the PSG.
+;----------------------------------------------------------------------
+unused_snd_pause:
+	move.b	$fffffa19.w,d0                  ; MFP TACR
+	bne.w	snd_pause_store
+	moveq	#-1,d0
+snd_pause_store:
+	move.b	d0,snd_disabled
+	clr.b	$fffffa19.w                     ; MFP TACR
+	bra.w	psg_silence
+
+
+;----------------------------------------------------------------------
+; Not called by anything: resume after unused_snd_pause.  Restart timer A as it was and clear
+; snd_disabled.
+;----------------------------------------------------------------------
+unused_snd_resume:
+	move.b	snd_disabled,d0
+	bmi.w	snd_resume_clear
+	move.b	d0,$fffffa19.w                  ; MFP TACR
+snd_resume_clear:
+	clr.b	snd_disabled
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Start tune d0: 8 bytes per tune in snd_tune_table (three pattern list offsets), each channel
@@ -221,7 +246,7 @@ sfx_next_channel:
 ;----------------------------------------------------------------------
 ; Silence the PSG: volumes 0, mixer $f8, tone and noise registers 0.
 ;----------------------------------------------------------------------
-psg_silence:	; from: snd_init_channels
+psg_silence:	; from: unused_snd_pause, snd_init_channels
 	lea	$ffff8800.w,a0                  ; PSG register select
 	move.w	#$a00,d0
 	moveq	#2,d1
@@ -262,7 +287,7 @@ snd_init_channels:	; from: snd_reset, snd_stop, snd_stop_music, play_tune_body
 	movem.l	(sp)+,d0-d2/a0
 	rts
 
-stop_sfx_channels:	; from: play_sfx_body
+stop_sfx_channels:	; from: play_sfx_body, unused_sfx_take_channels
 	clr.b	snd_sfx_playing
 	lea	snd_sfx_chan_a,a1
 	moveq	#2,d7
@@ -278,11 +303,38 @@ stop_sfx_next:
 	dbra	d7,stop_sfx_loop
 	rts
 
-	dc.w	$4239,$0006,$d421,$5340,$6bc8,$b07c,$0014,$64c2
-	dc.w	$41fa,$1f78,$e540,$41f0,$0000,$43f9,$0006,$d430
-	dc.w	$7e02,$3018,$6700,$0018,$0891,$0000,$6700,$000e
-	dc.w	$7000,$11c0,$fa19,$33c0,$0006,$d424,$4251,$43e9
-	dc.w	$004a,$51cf,$ffde,$13fc,$0001,$0006,$d421,$4e75
+
+;----------------------------------------------------------------------
+; Not called by anything: for sound effect d0 (1-20), stop the music on each channel the
+; effect uses (and timer A when that channel plays a sample), then set snd_sfx_playing.
+;----------------------------------------------------------------------
+unused_sfx_take_channels:
+	clr.b	snd_sfx_playing
+	subq.w	#1,d0
+	bmi.s	stop_sfx_channels
+	cmp.w	#$14,d0
+	bcc.s	stop_sfx_channels
+	lea	snd_sfx_table(pc),a0
+	asl.w	#2,d0
+	lea	$0(a0,d0.w),a0
+	lea	snd_music_chan_a,a1
+	moveq	#2,d7
+take_channel_loop:
+	move.w	(a0)+,d0
+	beq.w	take_channel_next
+	bclr	#$0,(a1)
+	beq.w	take_channel_clear
+	moveq	#0,d0
+	move.b	d0,$fffffa19.w                  ; MFP TACR
+	move.w	d0,sample_channel
+take_channel_clear:
+	clr.w	(a1)
+take_channel_next:
+	lea	$4a(a1),a1
+	dbra	d7,take_channel_loop
+	move.b	#$1,snd_sfx_playing
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Driver tick: sequence the three music and three effect channels into the PSG shadow,
@@ -1024,7 +1076,7 @@ sfx_vibrato_shapes:	; from: cmd_sfx_vibrato
 	dc.w	$007f,$0022,$007f,$0002,$007f,$fff2,$007f,$ffec
 	dc.w	$0001,$0011,$ffff,$fffa,$007f,$0234,$007f,$00b8
 	dc.w	$007f,$ffff,$007f,$0002,$007f,$0001
-snd_sfx_table:	; from: play_sfx_body
+snd_sfx_table:	; from: play_sfx_body, unused_sfx_take_channels
 	dc.w	$00a0,$0000,$0000,$0000,$009f,$0000,$0000,$0000
 	dc.w	$0000,$009c,$0000,$0000,$0000,$009d,$0000,$0000
 	dc.w	$009e,$00a8,$0000,$0000,$0000,$0000,$00a5,$0000

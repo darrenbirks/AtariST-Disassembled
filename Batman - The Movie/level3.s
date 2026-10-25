@@ -103,7 +103,7 @@ unscramble_font:
 
 	dc.w	$303c,$02cc,$1e10,$e30f,$10c7,$51c8,$fff8,$6000
 	dc.w	$21b0
-cheat_skip:	; from: level_restart, play_sound, is_selected
+cheat_skip:	; from: level_restart, unused_clear_keys, is_selected
 	dc.w	$0000
 game_over_exit:	; from: level_restart
 	move.w	#$64,d0
@@ -597,9 +597,9 @@ mouse_y_store:
 	move.w	d5,mouse_y
 	bra.w	packet_done
 
-key_queue:	; from: keyboard_decode, get_key, random
+key_queue:	; from: keyboard_decode, get_key, unused_clear_keys, random
 	dcb.b	32,$00
-key_queue_head:	; from: keyboard_decode, get_key
+key_queue_head:	; from: keyboard_decode, get_key, unused_clear_keys
 	dc.w	$0000
 key_queue_tail:	; from: get_key
 	dc.w	$0000
@@ -667,7 +667,7 @@ flip_wait:	; from: flip_screens
 	dc.w	$0000
 screen_front:	; from: level_start, hw_init, flip_screens, dissolve_in, init_puzzle, is_selected, ...
 	dc.w	$0007,$0000
-screen_back:	; from: level_start, print_text, init_puzzle, is_selected, draw_batcave
+screen_back:	; from: level_start, unused_clear_back, print_text, init_puzzle, is_selected, draw_batcave
 	dc.w	$0007,$8000
 
 ;----------------------------------------------------------------------
@@ -704,8 +704,18 @@ clear_screens_loop:
 	dbra	d7,clear_screens_loop
 	rts
 
-	dc.w	$2079,$0002,$883e,$3e3c,$17bf,$4298,$51cf,$fffc
-	dc.w	$4e75
+
+;----------------------------------------------------------------------
+; Not called by anything: clear the back screen (screen_back).
+;----------------------------------------------------------------------
+unused_clear_back:
+	movea.l	screen_back,a0
+	move.w	#$17bf,d7
+clear_back_screen_loop:
+	clr.l	(a0)+
+	dbra	d7,clear_back_screen_loop
+	rts
+
 
 clear_back_dissolve:	; from: level_start, is_selected
 	move.w	#$17c0,d0
@@ -958,9 +968,11 @@ print_exit:
 
 ; Font, 40 bytes per character, unscrambled at level start.
 font:	; from: level_start, print_text
-	incbin	"data/l3_font.bin"		; $640 bytes of data
+	incbin	"data/font.bin"		; $640 bytes of data
 spare_counter:	; from: level_restart
-	dc.w	$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000
+key_queue_spare:	; from: unused_clear_keys
+	dc.w	$0000
 
 wait_frames:	; from: level_start, main_loop, cursor_update, is_selected, reveal_answer, draw_batcave
 	tst.w	frame_flag
@@ -1010,8 +1022,17 @@ play_tune_once:
 	jmp	snd_play_tune
 
 last_tune:	; from: play_sound
-	dc.w	$ffff,$4279,$0002,$87a6,$4239,$0002,$8786,$4279
-	dc.w	$0002,$916a,$4e75
+	dc.w	$ffff
+
+;----------------------------------------------------------------------
+; Not called by anything: empty the key queue.
+;----------------------------------------------------------------------
+unused_clear_keys:
+	clr.w	key_queue_head
+	clr.b	key_queue
+	clr.w	key_queue_spare
+	rts
+
 abort_level:	; from: handle_keys
 	move.w	#$9999,panel_time
 	bset	#$1,panel_flags
@@ -1162,7 +1183,16 @@ random_value:	; from: random_item, random, unused_debug_random
 	dc.w	$1164
 random_pool:	; from: timerb_handler, random
 	dc.w	$f051,$ffe0,$cf01,$337f,$feef,$0506,$0838,$0012
-	dc.w	$0839,$0006,$00df,$f002,$6600,$fff6,$4e75
+
+;----------------------------------------------------------------------
+; Not called by anything: wait while bit 6 of $dff002 is set, the blitter busy flag of an
+; Amiga (DMACONR): left over from the Amiga version.
+;----------------------------------------------------------------------
+unused_blit_wait:
+	btst	#$6,$dff002
+	bne.w	unused_blit_wait
+	rts
+
 
 ;----------------------------------------------------------------------
 ; Move the cursor between the item slots (slot_x/slot_y) and handle a selection:
@@ -1463,7 +1493,7 @@ lose_game:	; from: main_loop, cursor_update
 	move.w	#$9999,panel_time
 	move.w	#$c8,d0
 	bsr.w	wait_frames
-end_level:	; from: play_sound
+end_level:	; from: unused_clear_keys
 	move.w	#$17c0,d0
 	lea	$78000,a0
 end_clear_loop:
@@ -2268,7 +2298,8 @@ unused_print_hex:	; from: unused_debug_input, unused_debug_random, unused_debug_
 	lea	debug_text,a6
 	bra.w	unused_print_text
 
-	dc.w	$4e75
+	rts
+
 hex_digits:	; from: unused_print_hex
 	dc.b	'0123456789ABCDEF'
 debug_x:	; from: unused_print_text
