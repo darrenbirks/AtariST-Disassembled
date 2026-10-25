@@ -1,0 +1,760 @@
+<!doctype html>
+<!--
+  Batman The Movie map editor, for the level 1 and level 5 map files.
+
+  Open this page in a web browser, then open (or drop on it) an unpacked level1.map or
+  level5.map.  Everything happens in the browser; "Save map" hands the edited file back.
+  The README's "Map files" section describes the file format this page reads and writes.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batman Map Editor</title>
+<style>
+/* Colours: the page, and the overlay colour of each tile type. */
+:root {
+  --bg: #16181d; --panel: #1f2229; --line: #343844; --text: #e4e6eb; --muted: #9aa0ab;
+  --accent: #f2c14e; --bad: #ef6461; --ok: #5bc27a;
+  --wall: rgba(239, 100, 97, .45); --open: rgba(0, 0, 0, 0); --floor: rgba(91, 194, 122, .5);
+  --ladder: rgba(77, 163, 255, .55); --deadly: rgba(214, 92, 214, .6);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+
+/* The tool bar across the top. */
+header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; margin: 0 8px 0 0; }
+button, select, label.file { background: #2b2f39; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer; }
+button:disabled { opacity: .4; cursor: default; }
+label.file input { display: none; }
+label.check { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
+
+/* The map on the left: two canvases on top of each other (the tiles, then the overlay). */
+main { flex: 1; display: flex; min-height: 0; }
+#view { flex: 1; overflow: auto; position: relative; background: #0d0e11; }
+#stack { position: relative; }
+#stack canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+#cursor { position: absolute; border: 1px solid var(--accent); pointer-events: none; display: none; }
+#drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; }
+
+/* The side panel on the right: selected block, cursor, block list, tile counts. */
+aside { width: 340px; flex: none; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px; }
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+.group { margin-bottom: 8px; }
+.group .name { display: flex; align-items: center; gap: 6px; margin: 6px 0 3px; }
+.swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--line); }
+.blocks { display: flex; flex-wrap: wrap; gap: 3px; }
+.blocks canvas { width: 32px; height: 32px; image-rendering: pixelated; border: 2px solid transparent; cursor: pointer; border-radius: 2px; }
+.blocks canvas.selected { border-color: var(--accent); }
+.blocks canvas.unusable { opacity: .25; }
+table { border-collapse: collapse; width: 100%; }
+td, th { padding: 2px 4px; text-align: left; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th { color: var(--muted); font-weight: 500; }
+#info { font-variant-numeric: tabular-nums; min-height: 3.6em; }
+#msg { margin-top: 6px; min-height: 1.4em; }
+#msg.bad { color: var(--bad); }
+#msg.ok { color: var(--ok); }
+.hint { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Batman Map Editor</h1>
+  <label class="file">Open map…<input type="file" id="file" accept=".map,.MAP"></label>
+  <span id="level" class="hint">no map loaded</span>
+  <label class="check">Zoom
+    <select id="zoom"><option value="1">1x</option><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select>
+  </label>
+  <label class="check"><input type="checkbox" id="showTypes" checked> tile types</label>
+  <label class="check"><input type="checkbox" id="showGrid"> grid</label>
+  <label class="check"><input type="checkbox" id="showBroken"> broken pairs</label>
+  <button id="undo" disabled>Undo</button>
+  <button id="redo" disabled>Redo</button>
+  <button id="save" disabled>Save map</button>
+</header>
+<main>
+  <div id="view">
+    <div id="stack"><canvas id="mapCanvas"></canvas><canvas id="overlayCanvas"></canvas><div id="cursor"></div></div>
+    <div id="drop">Open level1.map or level5.map (unpacked, from retail_1disk_speedlock\unpacked),<br>or drop it here.<br><br>
+      Left click or drag: paint the selected block. Right click: pick the block under the cursor.</div>
+  </div>
+  <aside>
+    <h2>Selected block</h2>
+    <div id="selected" class="hint">none</div>
+    <h2>Cursor</h2>
+    <div id="info" class="hint">-</div>
+    <div id="msg"></div>
+    <h2>Blocks</h2>
+    <div class="hint">Dimmed blocks have no tile for the pair they would make at the cursor.</div>
+    <div id="palette"></div>
+    <h2>Tiles</h2>
+    <table id="stats"></table>
+    <p class="hint">A tile is a pair of blocks: its own and the one to its right. Painting a block picks the tiles for the cell and its left neighbour. A pair with no tile can take over a tile no longer on the map, of the same type, if the game's sorted tile order stays the same; tile numbers the code uses directly are never taken.</p>
+  </aside>
+</main>
+<script>
+'use strict';
+
+// ===================================================================================
+// What the editor knows about the game
+// ===================================================================================
+//
+// A map file (see the README's "Map files" section):
+//
+//   4 bytes    load address, $00007400 (some copies leave it out)
+//   3 words    header: tile count, row length, number of rows
+//   bytes      the map: one tile number per 16 x 16 pixel cell, row by row
+//   256 words  the tile table: for each tile, (own block << 8) | block to its right
+//   $200 bytes work space the game fills in at level start (not used here)
+//   $80 each   the graphics blocks: 16 lines of 4 bitplane words (planes 0-3)
+//
+// A tile is a pair of blocks so the game can make 8 copies of it, shifted 2 pixels at
+// a time, for smooth scrolling.  At level start the game sorts the tile table by its
+// words and renumbers the map; the tile type tests (wall, floor ...) use those new
+// numbers, which this page calls a tile's "rank".
+
+const HEADER_BYTES = 6;             // the 3 header words
+const TILE_TABLE_WORDS = 256;
+const WORK_SPACE_BYTES = 0x200;
+const BLOCK_BYTES = 0x80;           // 16 lines x 4 planes x 2 bytes
+const BLOCK_SIZE = 16;              // pixels across and down
+
+// The two levels, told apart by their row length.  The palette is the one the level
+// code sets for the play area (palette_split in level1.s / level5.s).  The types list
+// gives, for each tile type, the first rank that is NOT that type any more.
+const LEVELS = {
+  204: {
+    name: 'Level 1',
+    palette: [0x000, 0x223, 0x445, 0x667, 0x024, 0x146, 0x632, 0x511,
+              0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
+    types: [[0x28, 'wall'], [0xe2, 'open'], [0xfa, 'floor'], [0x100, 'ladder']],
+  },
+  92: {
+    name: 'Level 5',
+    palette: [0x000, 0x223, 0x445, 0x667, 0x024, 0x146, 0x632, 0x511,
+              0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
+    types: [[0x18, 'wall'], [0xca, 'open'], [0xcd, 'deadly'], [0xf8, 'floor'], [0x100, 'ladder']],
+  },
+};
+
+// Ranks the level code writes into the map itself (the acid animation, the objects the
+// player uses).  The tiles at these ranks must keep them, so they are never reused.
+const PROTECTED_RANKS = [0x00, 0x03, 0x09, 0x4f, 0x51, 0x52, 0x53, 0x54, 0x5e,
+                         0x6a, 0x6b, 0x6c, 0xc5, 0xc6, 0xc7];
+
+const TYPE_ORDER = ['wall', 'open', 'deadly', 'floor', 'ladder'];
+const TYPE_LABEL = { wall: 'Wall', open: 'Open space', deadly: 'Deadly floor', floor: 'Floor', ladder: 'Ladder' };
+
+// ===================================================================================
+// State
+// ===================================================================================
+
+const $ = id => document.getElementById(id);
+
+let map = null;             // the loaded map file and everything worked out from it
+let undoStack = [];         // each entry: the list of changes one paint stroke made
+let redoStack = [];
+let stroke = null;          // the changes of the paint stroke in progress, or null
+
+// ===================================================================================
+// Loading a map file
+// ===================================================================================
+
+function loadMap(fileName, arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const hasLoadAddress = bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 0x74 && bytes[3] === 0;
+  const start = hasLoadAddress ? 4 : 0;
+  const readWord = offset => (bytes[offset] << 8) | bytes[offset + 1];
+
+  const tileCount = readWord(start);
+  const width = readWord(start + 2);
+  const height = readWord(start + 4);
+  const level = LEVELS[width];
+  if (!level || tileCount > TILE_TABLE_WORDS || !height) {
+    showMessage('Not a level 1 or level 5 map file.', 'bad');
+    return;
+  }
+
+  // where each part of the file starts
+  const mapOffset = start + HEADER_BYTES;
+  const tableOffset = mapOffset + width * height;
+  const blocksOffset = tableOffset + 2 * TILE_TABLE_WORDS + WORK_SPACE_BYTES;
+  const blockCount = Math.floor((bytes.length - blocksOffset) / BLOCK_BYTES);
+  if (blockCount < 1) {
+    showMessage('The file is too short.', 'bad');
+    return;
+  }
+
+  const tileWords = [];
+  for (let tile = 0; tile < tileCount; tile++) tileWords.push(readWord(tableOffset + 2 * tile));
+
+  map = {
+    fileName, bytes, level, width, height, tileCount, blockCount,
+    mapOffset, tableOffset, blocksOffset,
+    cells: bytes.slice(mapOffset, mapOffset + width * height),   // tile number of each cell
+    tileWords,                                                    // the tile table
+  };
+  map.rgb = level.palette.map(stColourToRgb);
+  map.blockImages = [];
+  for (let block = 0; block < blockCount; block++) map.blockImages.push(decodeBlock(block));
+
+  updateRanks();
+  map.protectedTiles = new Set(PROTECTED_RANKS.filter(r => r < tileCount).map(r => map.tilesInRankOrder[r]));
+  map.cellsUsingTile = new Array(tileCount).fill(0);
+  for (const tile of map.cells) map.cellsUsingTile[tile]++;
+  updateBlockTypes();
+  map.selectedBlock = ownBlock(map.cells[0]);
+
+  undoStack = [];
+  redoStack = [];
+  $('drop').style.display = 'none';
+  $('level').textContent = `${level.name}: ${fileName}, ${width} x ${height} tiles, ${tileCount} tiles, ${blockCount} blocks`;
+  $('save').disabled = false;
+  setUpCanvases();
+  drawWholeMap();
+  buildBlockPalette();
+  updateTileStats();
+  updateUndoButtons();
+  showMessage('Loaded.', 'ok');
+}
+
+// An ST colour word ($0RGB, 0-7 a channel) as [r, g, b], 0-255.
+function stColourToRgb(colour) {
+  return [(colour >> 8) & 7, (colour >> 4) & 7, colour & 7].map(c => c * 36);
+}
+
+// One graphics block as a 16 x 16 ImageData: each line is 4 words, one per bitplane,
+// and a pixel's colour takes one bit from each plane.
+function decodeBlock(block) {
+  const image = new ImageData(BLOCK_SIZE, BLOCK_SIZE);
+  const offset = map.blocksOffset + block * BLOCK_BYTES;
+  const bytes = map.bytes;
+  for (let y = 0; y < BLOCK_SIZE; y++) {
+    const planes = [0, 1, 2, 3].map(p => (bytes[offset + y * 8 + 2 * p] << 8) | bytes[offset + y * 8 + 2 * p + 1]);
+    for (let x = 0; x < BLOCK_SIZE; x++) {
+      const bit = 15 - x;
+      let colour = 0;
+      for (let p = 0; p < 4; p++) colour |= ((planes[p] >> bit) & 1) << p;
+      const [r, g, b] = map.rgb[colour];
+      const pixel = (y * BLOCK_SIZE + x) * 4;
+      image.data.set([r, g, b, 255], pixel);
+    }
+  }
+  return image;
+}
+
+// ===================================================================================
+// Tiles, ranks and types
+// ===================================================================================
+
+function ownBlock(tile) { return map.tileWords[tile] >> 8; }
+function rightBlock(tile) { return map.tileWords[tile] & 0xff; }
+
+// The game sorts the tile table at level start (a bubble sort, so tiles with equal words
+// keep their order) and renumbers the map.  Returns the tiles in that order, and each
+// tile's place in it (its rank).
+function sortLikeTheGame(tileWords) {
+  const tilesInRankOrder = tileWords.map((word, tile) => tile)
+    .sort((a, b) => tileWords[a] - tileWords[b] || a - b);
+  const rankOfTile = new Array(tileWords.length);
+  tilesInRankOrder.forEach((tile, rank) => { rankOfTile[tile] = rank; });
+  return { tilesInRankOrder, rankOfTile };
+}
+
+function updateRanks() {
+  const sorted = sortLikeTheGame(map.tileWords);
+  map.tilesInRankOrder = sorted.tilesInRankOrder;
+  map.rankOfTile = sorted.rankOfTile;
+}
+
+function typeOfRank(rank) {
+  for (const [limit, type] of map.level.types) if (rank < limit) return type;
+  return 'ladder';
+}
+
+function typeOfTile(tile) { return typeOfRank(map.rankOfTile[tile]); }
+
+// The type of each block: the type of the tiles that have it as their own block.  As the
+// tiles are sorted by their own block, each type is a run of block numbers; a block no
+// tile uses takes the type of the used block below it.
+function updateBlockTypes() {
+  const types = new Array(map.blockCount).fill(null);
+  for (let tile = 0; tile < map.tileCount; tile++) {
+    const block = ownBlock(tile);
+    if (block < map.blockCount) types[block] = typeOfTile(tile);
+  }
+  map.usedBlocks = new Set();
+  types.forEach((type, block) => { if (type) map.usedBlocks.add(block); });
+  let below = types.find(type => type) || 'open';
+  for (let block = 0; block < map.blockCount; block++) {
+    if (types[block]) below = types[block];
+    else types[block] = below;
+  }
+  map.blockTypes = types;
+}
+
+// A cell whose right hand neighbour has a different own block than the cell's tile
+// expects.  The original maps have a few of these too.
+function isBrokenPair(cell) {
+  const column = cell % map.width;
+  return column < map.width - 1 && rightBlock(map.cells[cell]) !== ownBlock(map.cells[cell + 1]);
+}
+
+// ===================================================================================
+// Drawing
+// ===================================================================================
+
+function setUpCanvases() {
+  for (const canvas of [$('mapCanvas'), $('overlayCanvas')]) {
+    canvas.width = map.width * BLOCK_SIZE;
+    canvas.height = map.height * BLOCK_SIZE;
+  }
+  applyZoom();
+}
+
+// The canvases stay at 1 pixel a pixel; zoom only stretches them on the page.
+function applyZoom() {
+  if (!map) return;
+  const zoom = +$('zoom').value;
+  const width = map.width * BLOCK_SIZE * zoom + 'px';
+  const height = map.height * BLOCK_SIZE * zoom + 'px';
+  for (const element of [$('mapCanvas'), $('overlayCanvas'), $('stack')]) {
+    element.style.width = width;
+    element.style.height = height;
+  }
+}
+
+function cellPosition(cell) {
+  return { x: (cell % map.width) * BLOCK_SIZE, y: Math.floor(cell / map.width) * BLOCK_SIZE };
+}
+
+// A cell shows its tile's own block.
+function drawCell(cell) {
+  const { x, y } = cellPosition(cell);
+  const block = ownBlock(map.cells[cell]);
+  const context = $('mapCanvas').getContext('2d');
+  if (block < map.blockCount) {
+    context.putImageData(map.blockImages[block], x, y);
+  } else {
+    context.fillStyle = '#f0f';                     // a block the file does not have
+    context.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE);
+  }
+  drawCellOverlay(cell);
+}
+
+// The overlay of a cell: its type's colour, a yellow box for a broken pair, the grid.
+function drawCellOverlay(cell) {
+  const { x, y } = cellPosition(cell);
+  const context = $('overlayCanvas').getContext('2d');
+  context.clearRect(x, y, BLOCK_SIZE, BLOCK_SIZE);
+  if ($('showTypes').checked) {
+    const colour = cssVariable('--' + typeOfTile(map.cells[cell]));
+    if (colour) {
+      context.fillStyle = colour;
+      context.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE);
+    }
+  }
+  if ($('showBroken').checked && isBrokenPair(cell)) {
+    context.strokeStyle = '#ff2';
+    context.lineWidth = 2;
+    context.strokeRect(x + 1, y + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+  }
+  if ($('showGrid').checked) {
+    context.strokeStyle = 'rgba(255,255,255,.18)';
+    context.lineWidth = 1;
+    context.strokeRect(x + .5, y + .5, BLOCK_SIZE - 1, BLOCK_SIZE - 1);
+  }
+}
+
+function drawWholeMap() {
+  for (let cell = 0; cell < map.cells.length; cell++) drawCell(cell);
+}
+
+function redrawOverlay() {
+  if (map) for (let cell = 0; cell < map.cells.length; cell++) drawCellOverlay(cell);
+}
+
+function cssVariable(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// ===================================================================================
+// The block palette in the side panel
+// ===================================================================================
+
+function buildBlockPalette() {
+  const palette = $('palette');
+  palette.innerHTML = '';
+  map.blockCanvases = [];
+  for (const type of TYPE_ORDER) {
+    const blocks = [];
+    for (let block = 0; block < map.blockCount; block++) if (map.blockTypes[block] === type) blocks.push(block);
+    if (!blocks.length) continue;
+
+    const group = document.createElement('div');
+    group.className = 'group';
+    const used = blocks.filter(block => map.usedBlocks.has(block)).length;
+    group.innerHTML = `<div class="name"><span class="swatch" style="background:${cssVariable('--' + type) || 'transparent'}"></span>` +
+      `${TYPE_LABEL[type]}: blocks ${blocks[0]}-${blocks[blocks.length - 1]} <span class="hint">(${used} used)</span></div>`;
+
+    const row = document.createElement('div');
+    row.className = 'blocks';
+    for (const block of blocks) {
+      const canvas = document.createElement('canvas');
+      canvas.width = BLOCK_SIZE;
+      canvas.height = BLOCK_SIZE;
+      canvas.getContext('2d').putImageData(map.blockImages[block], 0, 0);
+      canvas.title = `block ${block}${map.usedBlocks.has(block) ? '' : ' (no tile uses it)'}`;
+      canvas.onclick = () => selectBlock(block);
+      row.appendChild(canvas);
+      map.blockCanvases[block] = canvas;
+    }
+    group.appendChild(row);
+    palette.appendChild(group);
+  }
+  selectBlock(map.selectedBlock);
+}
+
+function selectBlock(block) {
+  map.selectedBlock = block;
+  map.blockCanvases.forEach((canvas, b) => canvas && canvas.classList.toggle('selected', b === block));
+  $('selected').innerHTML = `block ${block}, ${TYPE_LABEL[map.blockTypes[block]]}`;
+}
+
+// Dim the blocks that have no tile for the pairs they would make at a cell: the pair
+// (block, right neighbour's own block) and the left neighbour's pair (its own block, block).
+function dimUnusableBlocks(cell) {
+  if (cell == null) {
+    map.blockCanvases.forEach(canvas => canvas && canvas.classList.remove('unusable'));
+    return;
+  }
+  const existingWords = new Set(map.tileWords);
+  const column = cell % map.width;
+  const blockOnRight = column < map.width - 1 ? ownBlock(map.cells[cell + 1]) : rightBlock(map.cells[cell]);
+  const blockOnLeft = column > 0 ? ownBlock(map.cells[cell - 1]) : null;
+  map.blockCanvases.forEach((canvas, block) => {
+    if (!canvas) return;
+    const usable = existingWords.has((block << 8) | blockOnRight) &&
+      (blockOnLeft === null || existingWords.has((blockOnLeft << 8) | block));
+    canvas.classList.toggle('unusable', !usable);
+  });
+}
+
+// ===================================================================================
+// Painting
+// ===================================================================================
+//
+// A change is { kind: 'cell', cell, from, to } (a cell's tile number) or
+// { kind: 'tile', tile, from, to } (a tile's word in the tile table).  Painting works out
+// all its changes first, applies them only if every one is possible, and keeps them for
+// undo.
+
+// Work out painting block `block` at `cell`: the cell becomes the tile for
+// (block, right neighbour's own block), and the left neighbour the tile for
+// (its own block, block).  Returns { changes } or { error }.
+function planPaint(cell, block) {
+  const column = cell % map.width;
+  const blockOnRight = column < map.width - 1 ? ownBlock(map.cells[cell + 1]) : rightBlock(map.cells[cell]);
+  const wanted = [[cell, (block << 8) | blockOnRight]];
+  if (column > 0) wanted.push([cell - 1, (ownBlock(map.cells[cell - 1]) << 8) | block]);
+
+  // work on copies, so nothing changes if a later step fails
+  const tileWords = map.tileWords.slice();
+  const cellsUsingTile = map.cellsUsingTile.slice();
+  const newCellTiles = new Map();
+  const tileAt = c => newCellTiles.has(c) ? newCellTiles.get(c) : map.cells[c];
+  const changes = [];
+
+  for (const [targetCell, word] of wanted) {
+    const currentTile = tileAt(targetCell);
+    if (tileWords[currentTile] === word) continue;
+
+    let tile = tileWords.indexOf(word);
+    if (tile < 0) {
+      tile = findFreeTile(word, tileWords, cellsUsingTile, currentTile);
+      if (tile < 0) {
+        const typeName = TYPE_LABEL[map.blockTypes[word >> 8]].toLowerCase();
+        return { error: `No tile for blocks ${word >> 8} + ${word & 0xff}, and no free tile of type ${typeName} can take it.` };
+      }
+      changes.push({ kind: 'tile', tile, from: tileWords[tile], to: word });
+      tileWords[tile] = word;
+    }
+    cellsUsingTile[currentTile]--;
+    cellsUsingTile[tile]++;
+    newCellTiles.set(targetCell, tile);
+    changes.push({ kind: 'cell', cell: targetCell, from: currentTile, to: tile });
+  }
+  return { changes };
+}
+
+// A tile that can take the new pair `word`: one no cell uses any more (counting the cell
+// being painted over, `leaving`), not protected, which after the change sorts into a
+// rank of the right type, and without moving the rank of any tile still in use.
+function findFreeTile(word, tileWords, cellsUsingTile, leaving) {
+  const wantedType = map.blockTypes[word >> 8];
+  const stillUsed = t => cellsUsingTile[t] - (t === leaving ? 1 : 0) > 0;
+  for (let tile = 0; tile < map.tileCount; tile++) {
+    if (stillUsed(tile) || map.protectedTiles.has(tile)) continue;
+
+    const trial = tileWords.slice();
+    trial[tile] = word;
+    const { rankOfTile } = sortLikeTheGame(trial);
+    if (typeOfRank(rankOfTile[tile]) !== wantedType) continue;
+
+    let ranksKept = true;
+    for (let other = 0; other < map.tileCount && ranksKept; other++) {
+      if (other === tile) continue;
+      if ((stillUsed(other) || map.protectedTiles.has(other)) && rankOfTile[other] !== map.rankOfTile[other]) ranksKept = false;
+    }
+    if (ranksKept) return tile;
+  }
+  return -1;
+}
+
+// Apply a list of changes, or undo it (`backwards`), and redraw what they touched.
+function applyChanges(changes, backwards) {
+  const list = backwards ? changes.slice().reverse() : changes;
+  const touchedCells = new Set();
+  let tableChanged = false;
+
+  for (const change of list) {
+    const value = backwards ? change.from : change.to;
+    if (change.kind === 'tile') {
+      map.tileWords[change.tile] = value;
+      tableChanged = true;
+    } else {
+      map.cellsUsingTile[map.cells[change.cell]]--;
+      map.cells[change.cell] = value;
+      map.cellsUsingTile[value]++;
+      touchedCells.add(change.cell);
+    }
+  }
+
+  // a new tile word can change ranks, and with them types, anywhere on the map
+  if (tableChanged) {
+    updateRanks();
+    for (let cell = 0; cell < map.cells.length; cell++) touchedCells.add(cell);
+  }
+  for (const cell of touchedCells) {
+    drawCell(cell);
+    // the neighbours' broken pair boxes may change too
+    if (cell + 1 < map.cells.length) drawCellOverlay(cell + 1);
+    if (cell > 0) drawCellOverlay(cell - 1);
+  }
+  if (tableChanged) {
+    updateBlockTypes();
+    buildBlockPalette();
+  }
+  updateTileStats();
+}
+
+function paintCell(cell) {
+  if (ownBlock(map.cells[cell]) === map.selectedBlock) return;
+  const plan = planPaint(cell, map.selectedBlock);
+  if (plan.error) {
+    showMessage(plan.error, 'bad');
+    return;
+  }
+  if (!plan.changes.length) return;
+  applyChanges(plan.changes, false);
+  stroke.push(...plan.changes);
+  const reusedTile = plan.changes.some(change => change.kind === 'tile');
+  showMessage(reusedTile ? 'A free tile took the new pair.' : '', 'ok');
+}
+
+function endStroke() {
+  if (stroke && stroke.length) {
+    undoStack.push(stroke);
+    redoStack = [];
+  }
+  stroke = null;
+  updateUndoButtons();
+}
+
+function undo() {
+  const changes = undoStack.pop();
+  if (changes) {
+    applyChanges(changes, true);
+    redoStack.push(changes);
+  }
+  updateUndoButtons();
+}
+
+function redo() {
+  const changes = redoStack.pop();
+  if (changes) {
+    applyChanges(changes, false);
+    undoStack.push(changes);
+  }
+  updateUndoButtons();
+}
+
+function updateUndoButtons() {
+  $('undo').disabled = !undoStack.length;
+  $('redo').disabled = !redoStack.length;
+}
+
+// ===================================================================================
+// The side panel's information
+// ===================================================================================
+
+// The table of tile types: their rank ranges, how many tiles each has and how many are
+// on the map, and the number of broken pairs.
+function updateTileStats() {
+  const counts = {};
+  for (let tile = 0; tile < map.tileCount; tile++) {
+    const type = typeOfTile(tile);
+    counts[type] = counts[type] || { tiles: 0, onMap: 0 };
+    counts[type].tiles++;
+    if (map.cellsUsingTile[tile] > 0) counts[type].onMap++;
+  }
+  let brokenPairs = 0;
+  for (let cell = 0; cell < map.cells.length; cell++) if (isBrokenPair(cell)) brokenPairs++;
+
+  let html = '<tr><th>Type</th><th>Numbers</th><th>Tiles</th><th>On map</th></tr>';
+  let first = 0;
+  for (const [limit, type] of map.level.types) {
+    const last = Math.min(limit, map.tileCount) - 1;
+    if (last >= first) {
+      const c = counts[type] || { tiles: 0, onMap: 0 };
+      html += `<tr><td>${TYPE_LABEL[type]}</td><td>$${hex(first)}-$${hex(last)}</td><td>${c.tiles}</td><td>${c.onMap}</td></tr>`;
+    }
+    first = limit;
+  }
+  html += `<tr><td colspan="3">Broken pairs (as in the original too)</td><td>${brokenPairs}</td></tr>`;
+  $('stats').innerHTML = html;
+}
+
+function hex(value) { return value.toString(16).padStart(2, '0'); }
+
+function showMessage(text, kind) {
+  const element = $('msg');
+  element.textContent = text;
+  element.className = kind || '';
+}
+
+// The cell under the mouse, or null.
+function cellUnderMouse(event) {
+  const rect = $('mapCanvas').getBoundingClientRect();
+  const cellSize = BLOCK_SIZE * +$('zoom').value;
+  const column = Math.floor((event.clientX - rect.left) / cellSize);
+  const row = Math.floor((event.clientY - rect.top) / cellSize);
+  if (column < 0 || row < 0 || column >= map.width || row >= map.height) return null;
+  return row * map.width + column;
+}
+
+// Show the cursor box and the cursor cell's details.
+function showCursor(cell) {
+  const cursor = $('cursor');
+  if (cell == null) {
+    cursor.style.display = 'none';
+    $('info').textContent = '-';
+    dimUnusableBlocks(null);
+    return;
+  }
+  const zoom = +$('zoom').value;
+  const column = cell % map.width;
+  const row = Math.floor(cell / map.width);
+  const tile = map.cells[cell];
+  const size = BLOCK_SIZE * zoom;
+  Object.assign(cursor.style, { display: 'block', left: column * size + 'px', top: row * size + 'px', width: size + 'px', height: size + 'px' });
+
+  const broken = isBrokenPair(cell)
+    ? ` <span style="color:var(--bad)">(right cell is block ${ownBlock(map.cells[cell + 1])})</span>` : '';
+  $('info').innerHTML =
+    `column ${column}, row ${row} (pixels ${column * BLOCK_SIZE}, ${row * BLOCK_SIZE})<br>` +
+    `tile $${hex(tile)} in the file, $${hex(map.rankOfTile[tile])} in the game: ${TYPE_LABEL[typeOfTile(tile)]}<br>` +
+    `blocks ${ownBlock(tile)} + ${rightBlock(tile)}${broken}`;
+  dimUnusableBlocks(cell);
+}
+
+// ===================================================================================
+// Saving
+// ===================================================================================
+
+// The original file with the edited map and tile table written over it; every other
+// byte stays as it was.
+function saveMap() {
+  const output = map.bytes.slice();
+  output.set(map.cells, map.mapOffset);
+  map.tileWords.forEach((word, tile) => {
+    output[map.tableOffset + 2 * tile] = word >> 8;
+    output[map.tableOffset + 2 * tile + 1] = word & 0xff;
+  });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([output], { type: 'application/octet-stream' }));
+  link.download = map.fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  showMessage('Saved ' + map.fileName + '.', 'ok');
+}
+
+// ===================================================================================
+// Events
+// ===================================================================================
+
+function openFile(file) {
+  if (file) file.arrayBuffer().then(buffer => loadMap(file.name, buffer));
+}
+
+$('file').onchange = event => openFile(event.target.files[0]);
+$('view').addEventListener('dragover', event => event.preventDefault());
+$('view').addEventListener('drop', event => {
+  event.preventDefault();
+  openFile(event.dataTransfer.files[0]);
+});
+
+$('zoom').onchange = applyZoom;
+for (const id of ['showTypes', 'showGrid', 'showBroken']) $(id).onchange = redrawOverlay;
+$('undo').onclick = undo;
+$('redo').onclick = redo;
+$('save').onclick = saveMap;
+
+const stack = $('stack');
+stack.addEventListener('contextmenu', event => event.preventDefault());
+
+// left button: start a paint stroke; right button (or Alt): pick up the block
+stack.addEventListener('mousedown', event => {
+  if (!map) return;
+  const cell = cellUnderMouse(event);
+  if (cell == null) return;
+  if (event.button === 2 || event.altKey) {
+    selectBlock(ownBlock(map.cells[cell]));
+    showCursor(cell);
+    return;
+  }
+  if (event.button !== 0) return;
+  stroke = [];
+  paintCell(cell);
+  showCursor(cell);
+});
+
+// dragging with the left button keeps painting
+stack.addEventListener('mousemove', event => {
+  if (!map) return;
+  const cell = cellUnderMouse(event);
+  if (stroke && cell != null && (event.buttons & 1)) paintCell(cell);
+  showCursor(cell);
+});
+
+window.addEventListener('mouseup', () => { if (stroke) endStroke(); });
+stack.addEventListener('mouseleave', () => showCursor(null));
+
+// Ctrl+Z undo, Ctrl+Y (or Ctrl+Shift+Z) redo, Ctrl+S save
+window.addEventListener('keydown', event => {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  if (event.key === 'z' && !event.shiftKey) {
+    event.preventDefault();
+    undo();
+  } else if (event.key === 'y' || (event.key === 'z' && event.shiftKey)) {
+    event.preventDefault();
+    redo();
+  } else if (event.key === 's' && map) {
+    event.preventDefault();
+    saveMap();
+  }
+});
+</script>
+</body>
+</html>

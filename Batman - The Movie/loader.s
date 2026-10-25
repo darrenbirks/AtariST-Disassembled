@@ -175,7 +175,7 @@
 ;   002200-00747b  level1.bin (level 1 code)
 ;   007400-00f37b  level1.map (level 1 map)
 ;   007400-007405  map header: tile count, row length ($cc), rows (42)
-;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   007406-00957d  map: a byte per 16 x 16 pixel tile
 ;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00977e-00987d  tile reference counts
 ;   00987e-00997d  cache slot of each tile
@@ -222,7 +222,7 @@
 ;   002200-0075fb  level5.bin (level 5 code)
 ;   007400-00f3fb  level5.map (level 5 map)
 ;   007400-007405  map header: tile count, row length ($5c), rows (204)
-;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   007406-00bd55  map: a byte per 16 x 16 pixel tile
 ;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00bf56-00c055  tile reference counts
 ;   00c056-00c155  cache slot of each tile
@@ -260,7 +260,7 @@
 ;   002200-007074  level1.bin (level 1 code)
 ;   007400-00c27e  level1.map (level 1 map)
 ;   007400-007405  map header: tile count, row length ($cc), rows (42)
-;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   007406-00957d  map: a byte per 16 x 16 pixel tile
 ;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00977e-00987d  tile reference counts
 ;   00987e-00997d  cache slot of each tile
@@ -307,7 +307,7 @@
 ;   002200-0075fb  level5.bin (level 5 code)
 ;   007400-00f356  level5.map (level 5 map)
 ;   007400-007405  map header: tile count, row length ($5c), rows (204)
-;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   007406-00bd55  map: a byte per 16 x 16 pixel tile
 ;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00bf56-00c055  tile reference counts
 ;   00c056-00c155  cache slot of each tile
@@ -359,7 +359,7 @@
 ;   002200-007093  level1.bin (level 1 code)
 ;   007400-00c29d  level1.map (level 1 map)
 ;   007400-007405  map header: tile count, row length ($cc), rows (42)
-;   007406-00957d  map: a byte per 8 x 8 pixel tile
+;   007406-00957d  map: a byte per 16 x 16 pixel tile
 ;   00957e-00977d  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00977e-00987d  tile reference counts
 ;   00987e-00997d  cache slot of each tile
@@ -408,7 +408,7 @@
 ;   002200-00761a  level5.bin (level 5 code)
 ;   007400-00f375  level5.map (level 5 map)
 ;   007400-007405  map header: tile count, row length ($5c), rows (204)
-;   007406-00bd55  map: a byte per 8 x 8 pixel tile
+;   007406-00bd55  map: a byte per 16 x 16 pixel tile
 ;   00bd56-00bf55  tile table, a word per tile (build_tile_order, tile_cache_free)
 ;   00bf56-00c055  tile reference counts
 ;   00c056-00c155  cache slot of each tile
@@ -428,7 +428,21 @@
 ; whose use is not known yet.  "; from:" lists the routines or modules that
 ; refer to a label (documentation only).
 
+; constants
 	include	"config.s"			; CONFIG: which version to assemble
+
+TRACK_BYTES	equ	$1800           ; data bytes on a game track
+TRACK_SYNC	equ	$a1             ; the sync bytes before them, as Read Track gives them
+ESCAPE_BYTE	equ	$0f             ; escape: $0f, x stands for ~x
+DECRYPT_KEY0	equ	$f4bd128c       ; the decryption keys: long ^ k0, swap, ^ k1, k0 += k1
+DECRYPT_KEY1	equ	$5716923a       ; and the second
+PICTURE_SCREEN	equ	$78000          ; the screen pictures are shown on
+	ifeq	CONFIG-RETAIL_2DISK
+CHECKSUM_SET	equ	$4992           ; a track checksum is (sum | CHECKSUM_SET) & CHECKSUM_MASK
+CHECKSUM_MASK	equ	$7fbf           ; and its mask
+SCREEN_BYTES	equ	$7d00           ; a picture: 320 x 200, 4 planes
+SECTOR_DATA_MARK	equ	$fb     ; the data mark of a sector, after its sync bytes
+	endc
 
 	opt	o-
 	org	$1000
@@ -742,11 +756,11 @@ level5_load:
 ; word, a long, then words; the marker followed by a word and a count byte repeats that word.
 ;----------------------------------------------------------------------
 load_picture:	; from: start_level1, start_level2, start_level3, start_level4, start_level5
-	move.l	#$78000,d4                      ; screen $78000
+	move.l	#PICTURE_SCREEN,d4              ; screen $78000
 	move.b	#$7,$ff8201                     ; video base high
 	move.b	#$80,$ff8203                    ; video base mid
 	move.l	d2,-(sp)
-	addi.l	#$7d00,d4                       ; $7fd00, the end of the screen
+	addi.l	#SCREEN_BYTES,d4                ; $7fd00, the end of the screen
 	sub.l	d3,d4                           ; - length: the picture is read there
 	move.l	d4,d3
 	move.l	d3,-(sp)
@@ -885,7 +899,7 @@ black_palette_loop:
 	movea.l	d4,a0                           ; the picture is at d4, the load table destination
 	nop
 	endc
-	cmpa.l	#$78000,a0
+	cmpa.l	#PICTURE_SCREEN,a0
 	bne.s	decode_to_screen
 	lea	$70000,a1
 	move.w	#$13ff,d0
@@ -928,7 +942,7 @@ unused_unpack_rest:
 	endc
 	movea.l	$c(a6),a0
 	moveq	#-2,d3
-	move.l	#$434f4445,d1
+	move.l	#'CODE',d1
 	bsr.w	find_chunk
 	move.l	(a0)+,d0
 	addq.l	#1,d0
@@ -943,7 +957,7 @@ copy_tree_loop:
 	dbra	d0,copy_tree_loop
 	movea.l	$c(a6),a0
 	lea	(a0),a1
-	move.l	#$53495a45,d1
+	move.l	#'SIZE',d1
 	bsr.s	find_chunk
 	addq.w	#4,a0
 	move.l	(a0),d0
@@ -1077,7 +1091,7 @@ parse_form:	; from: unpack_form
 	move.l	(a0)+,d0
 	move.l	(a0)+,d1
 	subq.l	#4,d0
-	cmpi.l	#$48554646,d1
+	cmpi.l	#'HUFF',d1
 	beq.s	form_is_huff
 	movem.l	(sp)+,d0/a0
 	rts
@@ -1118,11 +1132,11 @@ parse_form_exit:
 ; One chunk of the FORM: SIZE, TREE and CODE are recorded in the frame at a6, others skipped.
 ;----------------------------------------------------------------------
 huff_chunk:	; from: parse_form
-	cmpi.l	#$53495a45,d1
+	cmpi.l	#'SIZE',d1
 	beq.s	size_chunk
-	cmpi.l	#$434f4445,d1
+	cmpi.l	#'CODE',d1
 	beq.s	code_chunk
-	cmpi.l	#$54524545,d1
+	cmpi.l	#'TREE',d1
 	beq.s	tree_chunk
 	movem.l	d0/a0,-(sp)
 	move.l	(a0)+,d0
@@ -1271,16 +1285,16 @@ next_track:
 	bsr.w	read_track
 	lea	$70000,a0
 find_sync:
-	cmpi.b	#$a1,(a0)+
+	cmpi.b	#TRACK_SYNC,(a0)+
 	bne.s	find_sync
 skip_sync:
-	cmpi.b	#$a1,(a0)+
+	cmpi.b	#TRACK_SYNC,(a0)+
 	beq.s	skip_sync
 	move.b	(a0)+,d0
 	addq.w	#1,a0
 	cmp.b	d5,d0
 	bne.s	retry_load
-	move.w	#$17ff,d0
+	move.w	#TRACK_BYTES-1,d0
 	move.b	$1801(a0),d3
 	lsl.w	#8,d3
 	move.b	$1802(a0),d3
@@ -1299,8 +1313,8 @@ copy_byte_loop:
 	ifeq	CONFIG-RETAIL_2DISK
 	beq.s	last_track_checksum
 	dbra	d0,copy_byte_loop
-	ori.w	#$4992,d2
-	andi.w	#$7fbf,d2
+	ori.w	#CHECKSUM_SET,d2
+	andi.w	#CHECKSUM_MASK,d2
 	cmp.w	d3,d2
 	bne.w	retry_load                      ; bad checksum: start again
 	endc
@@ -1314,8 +1328,8 @@ copy_byte_loop:
 
 	ifeq	CONFIG-RETAIL_2DISK
 last_track_checksum:
-	ori.w	#$4992,d2
-	andi.w	#$7fbf,d2
+	ori.w	#CHECKSUM_SET,d2
+	andi.w	#CHECKSUM_MASK,d2
 	cmp.w	d3,d2
 	bne.w	retry_load                      ; bad checksum: start again
 	endc
@@ -1333,7 +1347,7 @@ unescape_loop:
 	clr.b	-$1(a0)
 	cmpa.l	a0,a2
 	beq.s	decrypt
-	cmpi.b	#$f,d0
+	cmpi.b	#ESCAPE_BYTE,d0
 	bne.s	unescape_store
 	move.b	(a0)+,d0
 	clr.b	-$1(a0)
@@ -1355,8 +1369,8 @@ decrypt_pass:
 	lea	(a0),a1
 	adda.l	$4(a6),a1
 	moveq	#0,d3
-	move.l	#$f4bd128c,d0
-	move.l	#$5716923a,d1
+	move.l	#DECRYPT_KEY0,d0
+	move.l	#DECRYPT_KEY1,d1
 decrypt_loop:
 	move.l	(a0),d2
 	eor.l	d0,d2
@@ -1389,14 +1403,14 @@ read_disc_number:	; from: after_level, start_level1, start_level2, start_level3,
 find_data_mark:
 	cmpa.l	a1,a0
 	bcc.s	no_data_mark
-	cmpi.b	#$a1,(a0)+
+	cmpi.b	#TRACK_SYNC,(a0)+
 	bne.s	find_data_mark
 skip_mark_sync:
 	cmpa.l	a1,a0
 	bcc.s	no_data_mark
-	cmpi.b	#$a1,(a0)+
+	cmpi.b	#TRACK_SYNC,(a0)+
 	beq.s	skip_mark_sync
-	cmpi.b	#$fb,-$1(a0)                    ; $fb: data mark
+	cmpi.b	#SECTOR_DATA_MARK,-$1(a0)       ; $fb: data mark
 	bne.s	find_data_mark
 	move.b	$8(a0),d0                       ; first serial number byte of the boot sector
 disc_number_exit:
@@ -2449,15 +2463,15 @@ tool_sync_loop:
 	move.b	#$f,(a6)+
 	moveq	#0,d2
 	moveq	#0,d0
-	move.w	#$17ff,d1                       ; 6144 data bytes
+	move.w	#TRACK_BYTES-1,d1               ; 6144 data bytes
 tool_data_loop:
 	move.b	(a0)+,d0
 	add.w	d0,d2
 	rol.w	#1,d2
 	move.b	d0,(a6)+
 	dbra	d1,tool_data_loop
-	ori.w	#$4992,d2                       ; the checksum load_file checks
-	andi.w	#$7fbf,d2
+	ori.w	#CHECKSUM_SET,d2                ; the checksum load_file checks
+	andi.w	#CHECKSUM_MASK,d2
 	clr.b	(a6)+
 	ror.l	#8,d2
 	move.b	d2,(a6)+
@@ -2617,8 +2631,8 @@ tool_crypt_pass:
 	movea.l	$20ee(pc),a0
 	movea.l	$20f2(pc),a1
 	moveq	#0,d3
-	move.l	#$f4bd128c,d0
-	move.l	#$5716923a,d1
+	move.l	#DECRYPT_KEY0,d0
+	move.l	#DECRYPT_KEY1,d1
 tool_crypt_loop:
 	move.l	(a0),d2
 	eor.l	d0,d2

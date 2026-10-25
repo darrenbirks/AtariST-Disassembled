@@ -19,7 +19,22 @@
 ; whose use is not known yet.  "; from:" lists the routines or modules that
 ; refer to a label (documentation only).
 
+; constants
 	include	"config.s"			; CONFIG: which version to assemble
+
+LEVEL2_DISTANCE	equ	999             ; level 2: distance to drive
+LEVEL2_TIME	equ	$500            ; and the time for it (5:00)
+LEVEL2_HALF_DISTANCE	equ	500     ; a restart with this little distance left
+LEVEL2_HALF_TIME	equ	$230    ; gets this time (2:30)
+LEVEL4_BALLOONS	equ	100             ; level 4: balloons to cut
+LEVEL4_TIME	equ	$320            ; and the time for it (3:20)
+LEVEL4_HALF_BALLOONS	equ	50      ; a restart with this few balloons left
+LEVEL4_HALF_TIME	equ	$150    ; gets this time (1:50)
+BATMOBILE_TOP_SPEED	equ	450     ; the Batmobile's top speed
+BATMOBILE_SPEED_STEP	equ	280     ; its speed change a frame
+BATWING_TOP_SPEED	equ	511     ; the Batwing's top speed
+BATWING_MIN_SPEED	equ	120     ; its lowest speed, and its speed at the start
+BATWING_SPEED_STEP	equ	300     ; its speed change a frame
 
 ; symbols in other modules
 panel_tick	equ	$6b800		; panel.s
@@ -785,14 +800,14 @@ level2_1mb:
 level2_unpack_rest:
 	lea	scenery_map,a4
 	bsr.w	unpack_gfx
-	move.w	#$3e7,distance_left
+	move.w	#LEVEL2_DISTANCE,distance_left
 level2_restart:	; from: lose_life
-	move.w	#$230,d0
-	move.w	#$1f4,d1
+	move.w	#LEVEL2_HALF_TIME,d0
+	move.w	#LEVEL2_HALF_DISTANCE,d1
 	cmp.w	distance_left,d1
 	bcc.s	level2_set_distance
-	move.w	#$500,d0
-	move.w	#$3e7,d1
+	move.w	#LEVEL2_TIME,d0
+	move.w	#LEVEL2_DISTANCE,d1
 level2_set_distance:
 	move.w	d1,distance_left
 	bsr.w	reset_level_vars
@@ -830,20 +845,20 @@ level4_1mb:
 level4_unpack_rest:
 	lea	scenery_map,a4
 	bsr.w	unpack_gfx
-	move.w	#$64,balloons_left
+	move.w	#LEVEL4_BALLOONS,balloons_left
 level4_restart:	; from: lose_life
-	move.w	#$32,d1
-	move.w	#$150,d0
+	move.w	#LEVEL4_HALF_BALLOONS,d1
+	move.w	#LEVEL4_HALF_TIME,d0
 	cmp.w	balloons_left,d1
 	bcc.s	level4_set_balloons
-	move.w	#$64,d1
-	move.w	#$320,d0
+	move.w	#LEVEL4_BALLOONS,d1
+	move.w	#LEVEL4_TIME,d0
 level4_set_balloons:
 	move.w	d1,balloons_left
 	bsr.w	reset_level_vars
 	lea	vehicle,a0
 	move.w	#$64,$10(a0)
-	move.w	#$78,speed
+	move.w	#BATWING_MIN_SPEED,speed
 	move.w	#$c6,$30(a0)
 	move.w	#$70,$2e(a0)
 	move.w	#$1,$2a(a0)
@@ -1389,8 +1404,8 @@ key_f10:	; from: hud_update
 key_f9:	; from: hud_update
 	btst	#$7,game_flags
 	beq.s	hud_count
-	move.w	#$3e7,distance_left
-	move.w	#$64,balloons_left
+	move.w	#LEVEL2_DISTANCE,distance_left
+	move.w	#LEVEL4_BALLOONS,balloons_left
 	bsr.w	clear_screens
 	pea	restart_level
 	jmp	snd_stop
@@ -3784,15 +3799,15 @@ control_speed:
 speed_change:
 	sub.w	d1,d2
 	bcc.s	speed_brake
-	addi.w	#$118,d1
+	addi.w	#BATMOBILE_SPEED_STEP,d1
 	bcs.s	speed_decel
-	addi.w	#$118,d1
+	addi.w	#BATMOBILE_SPEED_STEP,d1
 	lsr.w	#6,d1
 	ori.w	#$1,d1
 	bra.s	speed_apply
 
 speed_decel:
-	subi.w	#$118,d1
+	subi.w	#BATMOBILE_SPEED_STEP,d1
 	neg.w	d1
 	lsr.w	#6,d1
 	ori.w	#$1,d1
@@ -3807,9 +3822,9 @@ speed_apply:
 	bpl.s	speed_min
 	moveq	#0,d1
 speed_min:
-	cmpi.w	#$1c2,d1
+	cmpi.w	#BATMOBILE_TOP_SPEED,d1
 	bcs.s	speed_max
-	move.w	#$1c2,d1
+	move.w	#BATMOBILE_TOP_SPEED,d1
 speed_max:
 	move.w	d1,speed
 control_steer:
@@ -4019,15 +4034,15 @@ wing_speed:
 	move.w	#$200,d1
 	sub.w	d1,d2
 	bcc.s	wing_brake
-	addi.w	#$12c,d1
+	addi.w	#BATWING_SPEED_STEP,d1
 	bcs.s	wing_decel
-	addi.w	#$12c,d1
+	addi.w	#BATWING_SPEED_STEP,d1
 	lsr.w	#6,d1
 	ori.w	#$1,d1
 	bra.s	wing_speed_apply
 
 wing_decel:
-	subi.w	#$12c,d1
+	subi.w	#BATWING_SPEED_STEP,d1
 	neg.w	d1
 	lsr.w	#6,d1
 	ori.w	#$1,d1
@@ -4040,15 +4055,15 @@ wing_brake:
 wing_speed_apply:
 	add.w	d3,d1
 	bpl.s	wing_speed_max
-	moveq	#120,d1
+	moveq	#BATWING_MIN_SPEED,d1
 wing_speed_max:
-	cmpi.w	#$1ff,d1
+	cmpi.w	#BATWING_TOP_SPEED,d1
 	bcs.s	wing_speed_min
-	move.w	#$1ff,d1
+	move.w	#BATWING_TOP_SPEED,d1
 wing_speed_min:
-	cmpi.w	#$78,d1
+	cmpi.w	#BATWING_MIN_SPEED,d1
 	bcc.s	wing_altitude
-	moveq	#120,d1
+	moveq	#BATWING_MIN_SPEED,d1
 wing_altitude:
 	move.w	d1,speed
 	lea	course_bytes,a0

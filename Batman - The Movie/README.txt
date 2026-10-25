@@ -256,6 +256,135 @@ they are:
   level24.gfx, level2.gfx and level4.gfx start with a load address $c00 lower
   than where the loaders put them; the addresses above are the real ones.
 
+Map files (level1.map, level5.map)
+----------------------------------
+Levels 1 and 5 use the same platform engine and the same map format.  A map file
+loads at $7400 (level5.map over the end of level5.bin) and holds:
+
+  address        level 1        level 5        contents
+  -------------  -------------  -------------  --------------------------------------
+  header         $7400-$7405    $7400-$7405    3 words: tile count, row length, rows
+  map            $7406-$957d    $7406-$bd55    one byte per tile, row by row
+  tile table     $957e-$977d    $bd56-$bf55    one word per tile (see below)
+  work space     $977e-$997d    $bf56-$c155    reference counts and cache slots, set
+                                               at level start; the file's bytes there
+                                               are not used
+  blocks         $997e-$c27d    $c156-$f355    the tile graphics, $80 bytes a block
+
+The code reads only the tile count from the header; the row length and the
+number of rows are built into it.
+
+                 level 1             level 5
+  tiles          253                 255
+  map size       204 x 42 tiles      92 x 204 tiles
+  in pixels      3264 x 672          1472 x 3264
+  blocks         82 (81 used)        100 (96 used)
+
+Tiles are 16 x 16 pixels; the code keeps positions in units of 2 pixels.
+
+A block is 16 x 16 pixels in 4 bitplanes with no mask: 16 lines of 4 words
+(planes 0-3), $80 bytes.  The colours come from the level's palette, which the
+level code sets (and changes part way down the screen).
+
+A tile is a pair of blocks.  Its word in the tile table holds:
+
+  bits 15-8   the tile's own block
+  bits 7-0    the block of the tile to its right
+
+When a tile enters the tile cache, the engine makes 8 copies of it, 2 pixels
+apart: its own block slid left, with the left edge of the right hand block
+filling in, so the map can scroll by 2 pixels with no work at draw time.  Next
+to almost every tile in both maps the tile to its right has that block as its
+own (8510 of 8526 pairs on level 1, 18536 of 18564 on level 5).
+
+At level start build_tile_order sorts the tile table by its words and renumbers
+every byte of the map to match (level 1's table is in that order already, level
+5's is not).  The tile types are tested against the new numbers:
+
+  type            level 1      level 5      what the code does
+  --------------  -----------  -----------  ------------------------------------------
+  wall            $00-$27      $00-$17      stops walking, bullets, batarangs and a
+                                            fall's sideways move; no dropping through
+  open space      $28-$e1      $18-$c9      nothing stops the player
+  deadly floor    -            $ca-$cc      falling onto one counts as a fall of $70,
+                                            which costs a life
+  floor           $e2-$f9      $cd-$f7      stand and walk on it, land on it, drop
+                                            through it; enemies turn at its end; the
+                                            bat-rope hooks onto it
+  ladder          $fa-$fc      $f8-$fe      climb; level 1's $fa-$fb and level 5's
+                                            $f8-$fa are floor as well
+
+As the tiles are sorted by their own block, each type is a run of blocks:
+
+  type            level 1                    level 5
+  --------------  -------------------------  -------------------------
+  wall            40 tiles, blocks 0-10      24 tiles, blocks 0-2
+  open space      186 tiles, blocks 11-71    178 tiles, blocks 3-79
+  deadly floor    -                          3 tiles, block 80
+  floor           24 tiles, blocks 72-77     43 tiles, blocks 81-95
+  ladder          3 tiles, blocks 78-80      7 tiles, blocks 96-99
+
+The type limits are fixed tile numbers in the code, so an edited map has to keep
+the number of tiles of each type: tiles that exist can go anywhere, but a new
+pair of blocks can only replace an unused pair of the same type, or every tile
+after it moves across a limit.  There are at most 256 tiles.
+
+Not in the map file: the enemies and objects (spawn_table) and the restart
+points (checkpoint_starts) are in the level code.  acid_animate changes a few
+map words while the level plays to move the acid surface.
+
+Map editor
+----------
+Folder tools\map-editor.  map-editor.html is a map editor for levels 1 and 5 that runs in
+a web browser: open it, then open (or drop on it) an unpacked level1.map or
+level5.map (retail_1disk_speedlock\unpacked).  Nothing is sent anywhere; Save map
+gives the edited file back to save.
+
+  - The map is drawn with its own blocks, in the level's colours.  The tile types
+    can be shown over it, and so can a grid and the broken pairs (cells whose
+    right hand block is not the one their tile expects; there are a few in the
+    original maps too).
+  - The blocks are listed by type.  Left click or drag paints the selected block;
+    right click (or Alt and click) picks the block under the cursor.  Blocks
+    with no tile for the pair they would make at the cursor are dimmed.
+  - Painting a block sets the tiles of the cell and of its left neighbour to the
+    pairs they now make.  A pair with no tile can take over a tile that is no
+    longer on the map, of the same type, as long as the game's sorted order of
+    the tiles on the map stays the same; the tile numbers the code uses itself
+    (0, 3, 9, $4f, $51-$54, $5e, $6a-$6c, $c5-$c7) are never taken.  Otherwise
+    the paint is refused with a message.
+  - Undo and redo (Ctrl+Z, Ctrl+Y), zoom, Save map (Ctrl+S).  Only the map and the
+    tile table change; the rest of the file is kept as it was.
+
+To play an edited map, put it in place of the unpacked file and pack or copy it
+for the file versions (python-pack.cmd or go-pack.cmd for the 512K version).
+
+Picture converter
+-----------------
+Folder tools\picconv.  Converts the loading pictures (title.pic, level1.pic ..
+level5.pic) to BMP and back, to edit them in any paint program.
+
+  picconv.py   in Python 3: python picconv.py tobmp picture.pic picture.bmp [level]
+                            python picconv.py topic picture.bmp picture.pic [-2disk]
+  picconv.go   the same in Go (1.21 or later): go run picconv.go ...
+
+The pictures are 320 x 200 in 16 colours, in two formats:
+
+  release                    format
+  -------------------------  --------------------------------------------------------
+  1 disk reissue, budget     Tiny: resolution byte, palette, control bytes and data
+                             words, the words going down the screen in columns
+  2 disk release             a marker word, the length, then the screen words where
+                             marker, word, count repeats a word; no palette in the
+                             file: the loader's for that level is used (give the
+                             level number, or keep the name levelN.pic)
+
+topic writes Tiny, or the 2 disk format with -2disk.  The BMP must be 320 x 200 with
+4 or 8 bits a pixel and use colours 0-15 only; its first 16 colours become the
+picture's palette (ST colours, 0-7 a channel).  Converting a picture to BMP and back
+gives every picture of the game back byte for byte, but for the reissue's title.pic,
+whose last, unused word differs.
+
 Scenes (what is in memory together):
 
   front   panel.gfx panel.bin sound.prg + frontend.bin frontend.gfx    entry $20000 / $20004
@@ -304,8 +433,20 @@ Reading the sources: every routine, branch target and variable is named for
 what it does or holds, and unused_ marks code that nothing calls.  A few level
 2/4 tables still carry their address (tab_ table, dat_ data) because their use
 is not known yet.  "; from:" lists the routines or modules that refer to a
-label.  Symbols of other modules in the same scene
-are equ'd at the top of each file.  Long runs of data are incbin'd from
+label.  Symbols of other modules in the same scene are equ'd at the top of
+each file.  level1.s and level5.s also name their level's numbers there and use the
+names in the code: MAP_ROW_LENGTH and MAP_ROWS, the tile types (TILE_OPEN,
+TILE_FLOOR, TILE_LADDER, and level 5's TILE_DEADLY), the floor ranges, LEVEL_TIME
+($900 = 9:00 on level 1, $1200 = 12:00 on level 5, in BCD) and TILE_CACHE_SLOTS;
+spawn_singles marks where spawn_table's single objects start after its groups.
+level24.s names what levels 2 and 4 start with (LEVEL2_DISTANCE 999 in 5:00,
+LEVEL4_BALLOONS 100 in 3:20, and the half way restarts) and the vehicles' speeds
+(BATMOBILE_TOP_SPEED, BATWING_TOP_SPEED, BATWING_MIN_SPEED and their steps);
+loader.s names the game track format (TRACK_BYTES, TRACK_SYNC, ESCAPE_BYTE, and the
+2 disk release's CHECKSUM_SET and CHECKSUM_MASK), the decryption keys (DECRYPT_KEY0,
+DECRYPT_KEY1) and PICTURE_SCREEN, and writes the FORM HUFF chunk names as 'CODE',
+'SIZE', 'TREE' and 'HUFF'.
+Long runs of data are incbin'd from
 data\ (8.3 names: two letter module code ld lo pn sn fe l1 l2 l3 l5, then what
 it holds, e.g. pn_ebar.bin, l3_items.bin; the label above each incbin line
 describes it).  font.bin is the font every module has, one file for all of
@@ -323,8 +464,8 @@ files are the reissue's; only its loader is changed, in memory, when it starts.
   batman.s     the program (Devpac source)
   batman.prg   batman.s assembled
   loader.bin   the reissue's decrypted game loader, incbin'd by batman.s
-  files\       the reissue's 24 game files, packed with Pack-Ice 2.40
-  icepack\     my packer, which packs them (see Pack-Ice packer below)
+  files\       the reissue's 24 game files, packed with Pack-Ice 2.40 by
+               tools\icepack
   batman.st    a 720K floppy image with batman.prg (in the root and in AUTO) and
                the files
 
@@ -369,9 +510,63 @@ work from a hard disk.  Before the game starts it stops with a message (and goes
 back to the desktop after a key) if drive A has no TOS disk, the disk cannot be
 read, a file is missing, or the files are in too many pieces.
 
+2 MB file version (not an official release)
+-------------------------------------------
+Folder 2mb-file-version.  Like the file version on a floppy, Ocean never released
+this: I made it as a second example of a file loader, a simpler one.  It runs the 1
+disk retail reissue from its unpacked files on an ST with 2 MB or more, from any
+drive: a hard disk, an emulator's GEMDOS drive, or a floppy with room for the files.
+
+  batman.s     the program (Devpac source)
+  batman.prg   batman.s assembled
+  loader.bin   the reissue's decrypted game loader, incbin'd by batman.s
+  files\       the reissue's 24 game files, unpacked
+               (retail_1disk_speedlock\unpacked)
+  batman.st    an 800K floppy image (80 tracks, 2 sides, 10 sectors a track) with
+               batman.prg (in the root and in AUTO) and the files in FILES
+
+The files are not packed, so together they take 778754 bytes: more than a 720K
+floppy holds, but an 800K one (10 sectors a track) takes them with 5 KB to spare.
+On a hard disk or an emulator's GEMDOS drive, copy the folder (batman.prg with
+files\ beside it) and run batman.prg from there.
+
+Why it works: the game never uses the second megabyte ($100000 on).  Levels 2 and 4
+use $80000-$e9491 when they find more than 512K, and a 2 MB ST keeps its screen at
+$1f8000.  So all the files fit between, loaded with GEMDOS before the game starts.
+
+What batman.s does, in order:
+
+  1. Shows its title: the screen fades to black with the text in white.
+  2. Takes the largest free block of memory from GEMDOS and checks that it covers
+     $100000.
+  3. Loads the 24 files one after another from $100000 on (Fopen, Fread, Fclose),
+     a dot on the screen for each.  They end at about $1be202.
+  4. Waits for a key and fades the text out.
+  5. Copies the reissue's game loader and changes it in memory:
+       - each load table entry holds the file's address in the second megabyte,
+         its destination, its length and a delay;
+       - load_file becomes a copy: wait out the delay, then copy the file to its
+         destination;
+       - unpack_file only clears the 31 bytes after the file, as the reissue's own
+         unpacker does, as the files are not packed.
+  6. Starts the loader at $21000, as the SpeedLock boot does.
+
+The load table entry, as load_file gets it in d0-d4:
+
+  long  holds
+  ----  ------------------------------------------------------------------
+  d0    the file's address in the second megabyte (from $100000)
+  d1    its destination
+  d2    its length
+  d3    the delay: about 2.4 seconds after a loading picture, else 0
+  d4    the entry's own destination, which the loader keeps using
+
+Limits: it stops with a message (and goes back to the desktop after a key) if the ST
+has less than 2 MB, a file is missing or cannot be read.
+
 Pack-Ice packer
 ---------------
-Folder 512-file-version\icepack.  My own packer, written so that the files can be
+Folder tools\icepack.  My own packer, written so that the files can be
 packed on a PC instead of running Pack-Ice under an emulator.  It writes byte for
 byte what Pack-Ice 2.40 (ICE_2_4.PRG) writes for a data file with its standard
 settings, and with -2.31 the older Pack-Ice 2.31 format of the budget release.

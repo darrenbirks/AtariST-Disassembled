@@ -14,15 +14,27 @@
 ; 4 fire) through player_input_table.  Enemies are 10 records of $16 bytes in
 ; enemies, updated through enemy_type_table (indexed by type).  Map tiles are
 ; in level1_map at $7406, 42 rows of $cc bytes (the words at $7400 hold the tile
-; count, the row length and the rows); a tile is 8 x 8 pixels; tile >= $28 is solid,
-; >= $e2 a slope, >= $fa a ladder.
+; count, the row length and the rows); a tile is 16 x 16 pixels, and positions are in
+; units of 2 pixels.  Tiles below $28 are walls, $28-$e1 open space, $e2-$fb floor to
+; stand on, $fa and up ladders.
 ;
 ; Labels are named for what they do or hold; unused_ marks code that nothing
 ; calls.  A label still ending in its address (tab_ table, dat_ data) is one
 ; whose use is not known yet.  "; from:" lists the routines or modules that
 ; refer to a label (documentation only).
 
+; constants
 	include	"config.s"			; CONFIG: which version to assemble
+
+MAP_ROW_LENGTH	equ	$cc             ; tiles a map row (level1_map)
+MAP_ROWS	equ	42              ; map rows
+TILE_OPEN	equ	$28             ; tile numbers below this are walls
+TILE_FLOOR	equ	$e2             ; from here: floor to stand on
+TILE_LADDER	equ	$fa             ; from here: ladders
+FLOOR_WALK_END	equ	$fc             ; floor ends here for walking (ladders $fa-$fb count)
+FLOOR_LAND_END	equ	$fb             ; and here for landing from a fall
+LEVEL_TIME	equ	$900            ; the time limit, minutes and seconds in BCD (9:00)
+TILE_CACHE_SLOTS	equ	96      ; tiles the tile cache holds, $400 bytes each
 
 ; symbols in other modules
 panel_tick	equ	$6b800		; panel.s
@@ -650,7 +662,7 @@ level_restart:	; from: state_dying
 	jsr	panel_init_energy
 	bset	#$0,panel_flags
 	bsr.w	fade_in
-	move.w	#$900,d0
+	move.w	#LEVEL_TIME,d0
 	jsr	panel_set_time
 	lea	$7406,a0                        ; level1_map +$6
 	movea.l	object_stack,a5
@@ -680,7 +692,7 @@ reset_spawn_groups:
 	move.w	$4(a0),d0
 	mulu.w	#$6,d0
 	lea	$6(a0,d0.w),a0
-	cmpa.w	#spawn_table+$2f4,a0
+	cmpa.w	#spawn_singles,a0
 	bcs.s	reset_spawn_groups
 reset_spawn_singles:
 	bclr	#$7,$4(a0)
@@ -1504,7 +1516,7 @@ redraw_tiles:	; from: level_begin, main_loop, tile_cache_free
 	movea.l	d2,a4
 	lsr.w	#3,d1
 	lsr.w	#3,d0
-	mulu.w	#$cc,d1
+	mulu.w	#MAP_ROW_LENGTH,d1
 	addq.w	#1,d1
 	add.w	d0,d1
 	addi.l	#$7406,d1                       ; level1_map +$6
@@ -1609,14 +1621,14 @@ tile_free_ptr:	; from: init_tile_cache, tile_cache_get, tile_cache_free
 ; Reset the tile cache: free list, reference counts at $977e, cache every tile of the start window.
 ;----------------------------------------------------------------------
 init_tile_cache:	; from: level_begin
-	moveq	#95,d7
+	moveq	#TILE_CACHE_SLOTS-1,d7
 	lea	tile_free_list.w,a0
 	move.l	a0,tile_free_ptr.w
 free_list_loop:
 	move.b	d7,(a0)+
 	dbra	d7,free_list_loop
 	lea	$977e,a0                        ; level1_map +$237e
-	moveq	#95,d7
+	moveq	#TILE_CACHE_SLOTS-1,d7
 clear_refs_loop:
 	move.l	#$ffffffff,(a0)+
 	dbra	d7,clear_refs_loop
@@ -1626,11 +1638,11 @@ clear_refs_loop:
 	lsr.w	#3,d0
 	subq.w	#1,d0
 	subq.w	#1,d1
-	mulu.w	#$cc,d1
+	mulu.w	#MAP_ROW_LENGTH,d1
 	add.w	d1,d0
 	addi.w	#$7406,d0
 	movea.l	d0,a6
-	addi.w	#$cd,d0
+	addi.w	#MAP_ROW_LENGTH+1,d0
 	move.l	d0,map_row_ptr.w
 	moveq	#10,d6
 cache_rows_loop:
@@ -1762,7 +1774,7 @@ up_free_loop:
 	moveq	#7,d0
 	and.w	scroll_y.w,d0
 	bne.s	scroll_up_exit
-	addi.l	#$cc,map_row_ptr.w
+	addi.l	#MAP_ROW_LENGTH,map_row_ptr.w
 scroll_up_exit:
 	rts
 
@@ -1774,7 +1786,7 @@ scroll_down:	; from: update_scroll
 	and.w	scroll_y.w,d1
 	cmp.w	d0,d1
 	bne.s	down_in_row
-	subi.l	#$cc,map_row_ptr.w
+	subi.l	#MAP_ROW_LENGTH,map_row_ptr.w
 down_in_row:
 	and.w	scroll_x.w,d0
 	lsl.w	#3,d0
@@ -2035,7 +2047,7 @@ unused_flip_map:
 	lea	$7406,a0                        ; level1_map +$6
 	tst.b	(a0)
 	lea	$94b2,a1                        ; level1_map +$20b2
-	move.w	#$cc,d6
+	move.w	#MAP_ROW_LENGTH,d6
 	move.w	#$14,d7
 flip_map_row_loop:
 	move.w	d6,d5
@@ -2141,7 +2153,7 @@ tile_order_invert_loop:
 	move.b	d7,$0(a1,d0.w)
 	dbra	d7,tile_order_invert_loop
 	lea	$7406,a0                        ; level1_map +$6
-	move.w	#$2177,d7
+	move.w	#MAP_ROW_LENGTH*MAP_ROWS-1,d7
 tile_order_remap_loop:
 	clr.w	d0
 	move.b	(a0),d0
@@ -2680,7 +2692,7 @@ spawn_next_group:
 	add.w	d2,d2
 	lea	$2(a0,d2.w),a0
 spawn_groups_done:
-	cmpa.w	#spawn_table+$2f4,a0
+	cmpa.w	#spawn_singles,a0
 	bcs.s	spawn_group_loop
 	subi.w	#$10,d0
 	subq.w	#8,d1
@@ -2928,7 +2940,7 @@ thug_left_step:
 	subi.w	#$c,d0
 	bsr.w	map_tile_at
 	addi.w	#$c,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcc.w	goon_left_step
 	tst.w	$8(a6)
 	bpl.s	thug_left_turn
@@ -2995,7 +3007,7 @@ thug_right_step:
 	addq.w	#8,d0
 	bsr.w	map_tile_at
 	subq.w	#8,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcc.w	goon_right_step
 	tst.w	$8(a6)
 	bpl.s	thug_right_turn
@@ -3015,14 +3027,14 @@ check_jump_ladder:	; from: goon_walk_right, goon_walk_left
 	cmpi.w	#$20,d5
 	bcs.s	jump_ladder_exit
 	bpl.s	jump_ladder_check
-	move.w	#$cc,d2
+	move.w	#MAP_ROW_LENGTH,d2
 	add.w	d2,d2
 	add.w	d2,d2
 	sub.w	d2,d3
 	clr.w	d2
 	move.b	$0(a0,d3.w),d2
 jump_ladder_check:
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcs.s	jump_ladder_exit
 	move.w	#$2,$8(a6)
 	move.w	#$d,$c(a6)
@@ -3046,7 +3058,7 @@ goon_walk_right:	; from: enemy_type_table
 	addq.w	#7,d0
 	bsr.w	map_tile_at
 	subq.w	#7,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcc.s	goon_right_decide
 goon_right_edge:
 	move.w	#$f,(a6)
@@ -3128,7 +3140,7 @@ goon_walk_left:	; from: enemy_type_table
 	subq.w	#7,d0
 	bsr.w	map_tile_at
 	addq.w	#7,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcc.s	goon_left_decide
 	move.w	$6(a6),d2
 	cmpi.w	#$803d,d2
@@ -3253,7 +3265,7 @@ climb_up:	; from: enemy_type_table
 	bsr.w	map_tile_at
 	addi.w	#$18,d1
 climb_check:	; from: climb_down
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcc.s	climb_draw
 	bsr.s	climb_turn
 climb_draw:	; from: climb_down
@@ -3523,7 +3535,7 @@ bullets_update_next:
 bullet_move:	; from: bullet_up_left, bullet_up_right, bullet_down_left, bullet_down_right, bullet_left, bullet_right
 	movem.w	d0-d1,(a6)
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	bullet_hit_wall
 	sub.w	player_x.w,d0
 	addq.w	#4,d0
@@ -3605,7 +3617,7 @@ batarang_right:	; from: bullet_table
 	cmpi.w	#$a8,d0
 	bpl.s	bullet_remove
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	movem.w	d0-d1,(a6)
 	bcc.s	hit_enemies
 	bcs.s	bullet_remove
@@ -3615,7 +3627,7 @@ batarang_left:	; from: bullet_table
 	cmpi.w	#$fff6,d0
 	bmi.s	bullet_remove
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	movem.w	d0-d1,(a6)
 	bcc.s	hit_enemies
 	bra.s	bullet_remove
@@ -3686,7 +3698,7 @@ grenade_fall:
 grenade_move:	; from: grenade_left
 	movem.w	d0-d1,(a6)
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	grenade_explode
 	sub.w	player_x.w,d0
 	addq.w	#3,d0
@@ -4178,12 +4190,12 @@ swing_move:
 	moveq	#2,d7
 swing_tile_loop:
 	move.b	$0(a0,d3.w),d2
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	swing_blocked
 	move.b	$1(a0,d3.w),d2
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	swing_blocked
-	subi.w	#$cc,d3
+	subi.w	#MAP_ROW_LENGTH,d3
 	dbra	d7,swing_tile_loop
 	movem.w	player_x.w,d0-d1
 	add.w	d4,d1
@@ -4286,7 +4298,7 @@ state_rope_climb:	; from: state_rope_swing
 	bmi.s	climb_left_side
 	addq.w	#7,d0
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	climb_anim
 	addq.w	#1,player_x.w
 	bra.s	climb_anim
@@ -4294,7 +4306,7 @@ state_rope_climb:	; from: state_rope_swing
 climb_left_side:
 	subq.w	#6,d0
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	climb_anim
 	subq.w	#1,player_x.w
 climb_anim:
@@ -4397,11 +4409,11 @@ extend_check_wall:
 	bne.s	rope_extend_exit
 	add.w	d3,d0
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	rope_miss
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcc.s	rope_miss
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcs.s	rope_extend_exit
 	move.w	#state_rope_swing,player_state_lo.w
 	move.l	rope_end.w,rope_anchor.w
@@ -4444,7 +4456,7 @@ ladder_below:	; from: walk_right_down, walk_left_down, crouch
 	subq.w	#4,d2
 	bne.s	ladder_exit
 	bsr.w	map_tile_at
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcs.s	ladder_exit
 	bra.s	on_ladder
 
@@ -4464,7 +4476,7 @@ ladder_above:	; from: push_up, walk_right_up, walk_left_up
 	subi.w	#$c,d1
 	bsr.w	map_tile_at
 	addi.w	#$c,d1
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcs.s	ladder_exit
 on_ladder:	; from: ladder_below
 	addq.w	#4,sp
@@ -4485,14 +4497,14 @@ walk_right:	; from: player_input_table, walk_right_down
 	addq.w	#4,d0
 	subq.w	#2,d1
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	player_idle
 	addq.w	#1,player_x.w
 	addq.w	#7,d1
 	subq.w	#5,d0
 	bsr.w	map_tile_at
-	subi.b	#$e2,d2
-	cmpi.b	#$1a,d2
+	subi.b	#TILE_FLOOR,d2
+	cmpi.b	#FLOOR_WALK_END-TILE_FLOOR,d2
 	bcc.w	start_fall
 	lea	player_frames.w,a0
 	add.w	scroll_x.w,d0
@@ -4525,14 +4537,14 @@ walk_left:	; from: player_input_table, walk_left_down
 	subq.w	#5,d0
 	subq.w	#2,d1
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	player_idle
 	subq.w	#1,player_x.w
 	addq.w	#7,d1
 	addq.w	#5,d0
 	bsr.w	map_tile_at
-	subi.b	#$e2,d2
-	cmpi.b	#$1a,d2
+	subi.b	#TILE_FLOOR,d2
+	cmpi.b	#FLOOR_WALK_END-TILE_FLOOR,d2
 	bcc.w	start_fall
 	lea	player_frames.w,a0
 	add.w	scroll_x.w,d0
@@ -4555,8 +4567,8 @@ ladder_idle:	; from: state_ladder
 ladder_step_off:	; from: state_ladder
 	add.w	d5,d3
 	move.b	$0(a0,d3.w),d2
-	subi.b	#$e2,d2
-	cmpi.b	#$19,d2
+	subi.b	#TILE_FLOOR,d2
+	cmpi.b	#FLOOR_LAND_END-TILE_FLOOR,d2
 	bcc.s	ladder_down
 	andi.b	#$3,joy_state.w
 	move.w	#player_input,player_state_lo.w
@@ -4602,7 +4614,7 @@ ladder_down:	; from: walk_left
 	asr.w	#1,d4
 	bcc.s	ladder_up
 	move.w	#$28,player_ref_y.w
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcs.w	ladder_leave
 	addq.w	#1,player_y.w
 	bra.s	ladder_anim
@@ -4611,12 +4623,12 @@ ladder_up:
 	asr.w	#1,d4
 	bcc.s	ladder_done
 	move.w	#$48,player_ref_y.w
-	move.w	#$cc,d5
+	move.w	#MAP_ROW_LENGTH,d5
 	sub.w	d5,d3
 	sub.w	d5,d3
 	sub.w	d5,d3
 	move.b	$0(a0,d3.w),d2
-	cmpi.b	#$fa,d2
+	cmpi.b	#TILE_LADDER,d2
 	bcs.s	ladder_leave
 	subq.w	#1,d1
 	move.w	d1,player_y.w
@@ -4649,7 +4661,7 @@ drop_down:	; from: player_input_table, crouch, object_use_anim
 	addi.w	#$8,d1
 	bsr.w	map_tile_at
 	movem.w	player_x.w,d0-d1
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	crouch
 	move.w	#$8000,fall_distance_patch.w
 	bra.w	start_fall
@@ -4733,12 +4745,12 @@ state_falling:
 	movem.w	player_x.w,d0-d1
 	moveq	#1,d7
 fall_tile_loop:
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	fall_stop_x
 	move.b	$1(a0,d3.w),d2
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	fall_stop_x
-	addi.w	#$cc,d3
+	addi.w	#MAP_ROW_LENGTH,d3
 	move.b	$0(a0,d3.w),d2
 	dbra	d7,fall_tile_loop
 	add.w	d0,d4
@@ -4763,15 +4775,15 @@ fall_exit:
 
 fall_check_floor:
 	bsr.w	map_tile_at
-	cmpi.b	#$28,d2
-	bcc.s	fall_check_slope
+	cmpi.b	#TILE_OPEN,d2
+	bcc.s	fall_check_floor_tile
 	subq.w	#7,player_y.w
 	movem.w	player_x.w,d0-d1
 	bra.s	state_falling
 
-fall_check_slope:
-	subi.b	#$e2,d2
-	cmpi.b	#$19,d2
+fall_check_floor_tile:
+	subi.b	#TILE_FLOOR,d2
+	cmpi.b	#FLOOR_LAND_END-TILE_FLOOR,d2
 fall_distance_patch:	; from: drop_down
 	nop
 	move.w	sr,d6
@@ -4832,7 +4844,7 @@ map_tile_at:	; from: thug_walk_left, thug_walk_right, goon_walk_right, goon_walk
 	add.w	d1,d3
 	lsr.w	#3,d2
 	lsr.w	#3,d3
-	mulu.w	#$cc,d3
+	mulu.w	#MAP_ROW_LENGTH,d3
 	add.w	d2,d3
 	lea	$7406,a0                        ; level1_map +$6
 	clr.w	d2
@@ -5198,7 +5210,7 @@ faller_speed:
 	move.w	d5,$8(a6)
 	add.w	d5,d1
 	bsr.w	map_tile_at
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcs.s	faller_hit_player
 	move.w	scroll_y.w,d3
 	add.w	d1,d3
@@ -5442,20 +5454,20 @@ object_use_start:	; from: enemy_type_table
 	eori.w	#$6,d4
 	move.w	d4,use_toggle.w
 	moveq	#0,d4
-	cmpi.b	#$28,d2
+	cmpi.b	#TILE_OPEN,d2
 	bcs.s	use_tile_above
 	moveq	#3,d4
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcs.s	use_tile_above
 	moveq	#94,d4
 use_tile_above:
 	move.b	d4,(a5)
 	move.w	$5(a0,d3.w),d4
 	moveq	#0,d5
-	cmpi.b	#$28,d4
+	cmpi.b	#TILE_OPEN,d4
 	bcs.s	use_tile_below
 	moveq	#9,d5
-	cmpi.b	#$e2,d4
+	cmpi.b	#TILE_FLOOR,d4
 	bcs.s	use_tile_below
 	moveq	#94,d5
 use_tile_below:
@@ -5610,7 +5622,7 @@ crawler_right:	; from: enemy_type_table
 	addq.w	#8,d0
 	bsr.w	map_tile_at
 	subq.w	#8,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcs.s	crawler_right_turn
 crawler_right_move:
 	addq.w	#1,$2(a6)
@@ -5643,7 +5655,7 @@ crawler_left:	; from: enemy_type_table
 	subi.w	#$10,d0
 	bsr.w	map_tile_at
 	addi.w	#$10,d0
-	cmpi.b	#$e2,d2
+	cmpi.b	#TILE_FLOOR,d2
 	bcs.s	crawler_left_turn
 crawler_left_move:
 	subq.w	#1,$2(a6)
@@ -5790,15 +5802,16 @@ spawn_table:	; from: level_begin, spawn_enemies
 	dc.w	$0540,$00b8,$000f,$0580,$00b8,$0580,$0090,$0002
 	dc.w	$000e,$0568,$0078,$000f,$0568,$0078,$0574,$0030
 	dc.w	$0003,$0018,$0520,$0018,$0017,$05a0,$0018,$0002
-	dc.w	$0530,$0018,$0014,$0118,$0038,$0015,$00c8,$0028
-	dc.w	$0014,$0070,$0068,$0014,$01b0,$0110,$0014,$01f0
-	dc.w	$0038,$0015,$01ef,$0078,$0015,$0217,$0028,$0014
-	dc.w	$0270,$0060,$0016,$0298,$0090,$0014,$0310,$0120
-	dc.w	$0016,$0372,$0038,$0014,$0378,$0098,$0014,$0398
-	dc.w	$0090,$0015,$0400,$0130,$0014,$0458,$0078,$0016
-	dc.w	$04ec,$0044,$0014,$03d0,$0030,$0014,$03e0,$0030
-	dc.w	$0014,$0510,$0100,$0014,$0570,$00d8,$0014,$0580
-	dc.w	$0108
+	dc.w	$0530,$0018
+spawn_singles:
+	dc.w	$0014,$0118,$0038,$0015,$00c8,$0028,$0014,$0070
+	dc.w	$0068,$0014,$01b0,$0110,$0014,$01f0,$0038,$0015
+	dc.w	$01ef,$0078,$0015,$0217,$0028,$0014,$0270,$0060
+	dc.w	$0016,$0298,$0090,$0014,$0310,$0120,$0016,$0372
+	dc.w	$0038,$0014,$0378,$0098,$0014,$0398,$0090,$0015
+	dc.w	$0400,$0130,$0014,$0458,$0078,$0016,$04ec,$0044
+	dc.w	$0014,$03d0,$0030,$0014,$03e0,$0030,$0014,$0510
+	dc.w	$0100,$0014,$0570,$00d8,$0014,$0580,$0108
 checkpoint_starts:	; from: level_begin
 	dc.w	$0020,$00f8,$0020,$0048,$0048,$0048,$0048,$0258
 	dc.w	$0008,$0258,$0048,$0038,$0038,$0048

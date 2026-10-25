@@ -6,7 +6,7 @@
 ; floppy instead of its SpeedLock disk, on any ST with 512K or more.  The disk in drive
 ; A holds batman.prg and the game files in its root directory: the reissue's 24 files
 ; (retail_1disk_speedlock\unpacked: title.pic, panel.gfx, ... level5.map) packed with
-; Pack-Ice 2.40 by icepack (icepack\python-pack.cmd or go-pack.cmd, into files\).
+; Pack-Ice 2.40 by icepack (tools\icepack\python-pack.cmd or go-pack.cmd, into files\).
 ;
 ;======================================================================
 ; How the original disk loads
