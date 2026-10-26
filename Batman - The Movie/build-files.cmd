@@ -5,7 +5,7 @@ rem in build\file-version\loader.bin.  build-2mb.cmd and build-512.cmd use it.
 rem
 rem   - The code files (PANEL.BIN, FRONTEND.BIN, LEVEL1.BIN, LEVEL24.BIN, LEVEL3.BIN,
 rem     LEVEL5.BIN) are the built files with their 4 byte load address in front: the
-rem     org of their source.
+rem     org of their source (level15.inc for LEVEL1 and LEVEL5).
 rem   - SOUND.PRG is sound.bin as a GEMDOS program: a 28 byte header, the code (sound.bin
 rem     without the $400 byte BSS it ends with) and an empty relocation table.
 rem   - The pictures, graphics and maps are copied from retail_1disk_speedlock\unpacked,
@@ -25,7 +25,10 @@ set FAILED=
 rem the code files: a source with dc.l <its org> and the built file after it (these two
 rem small sources assemble in vasm's own mode, as Devpac mode has no incbin offset)
 for %%S in (PANEL FRONTEND LEVEL1 LEVEL24 LEVEL3 LEVEL5) do (
-  for /f "tokens=2" %%A in ('findstr /b /c:"	org	" %%S.s') do set ORG=%%A
+  set SRC=%%S.s
+  if /i "%%S"=="LEVEL1" set SRC=level15.inc
+  if /i "%%S"=="LEVEL5" set SRC=level15.inc
+  for /f "tokens=2" %%A in ('findstr /b /c:"	org	" !SRC!') do set ORG=%%A
   > header.s echo  dc.l !ORG!
   >> header.s echo  incbin "%%S.bin"
   "%VASM%" -m68000 -Fbin -quiet -o "%OUT%\files\%%S.BIN" header.s

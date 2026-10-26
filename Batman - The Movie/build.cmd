@@ -31,6 +31,7 @@ set OUT=build\%CFG%
 if exist "%OUT%" rmdir /s /q "%OUT%"
 mkdir "%OUT%"
 copy /y *.s "%OUT%" >nul
+copy /y *.inc "%OUT%" >nul
 xcopy /e /i /q data "%OUT%\data" >nul
 
 rem config.s with CONFIG set to this release

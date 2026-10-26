@@ -104,8 +104,8 @@ in retail_2disk_speedlock\disk1 and disk2 with those in retail_1disk_speedlock\
 unpacked: code instruction by instruction, data word by word with the code
 address shifts taken out, graphics after running the reissue's own conversion.
 Addresses are where the code runs; labels are the reissue's.  The code bugs are
-also commented in the RETAIL_2DISK blocks of level1.s and level5.s.  Nothing here
-has been checked in play.
+also commented in the RETAIL_2DISK blocks of level15.inc.  Nothing here has
+been checked in play.
 
 Bugs the reissue fixed:
   - Level 5, respawn outside the cathedral.  In checkpoint_starts checkpoint 1
@@ -260,12 +260,22 @@ data for sound.prg):
   panel.s      $6b800  panel.bin   resident panel: timer, score, lives, energy (panel_*)
   sound.s      $6d400  sound.prg   resident sound driver (snd_*)
   frontend.s   $20000  frontend.bin  title, credits script, high scores, cheat
-  level1.s     $2200   level1.bin  level 1  Axis Chemical Factory (platform engine)
+  level1.s     $2200   level1.bin  level 1  Axis Chemical Factory (platform engine,
+                       in level15.inc)
   level24.s    $2200   level24.bin level 2  Batmobile and level 4 Batwing (driving
                        engine, entry $2200 / $2202)
   level3.s     $20000  level3.bin  level 3  Batcave puzzle (picture first, code at $28000)
-  level5.s     $2200   level5.bin  level 5  Cathedral (level 1 engine, named as
-                       in level1.s)
+  level5.s     $2200   level5.bin  level 5  Cathedral (the same engine, in
+                       level15.inc)
+
+Levels 1 and 5 are one source: level1.s and level5.s hold only their level's
+header, BUILD_LEVEL (1 or 5) and an include of level15.inc, which has the code
+and data of both levels.  The lines both levels have are there once; the parts
+only one has are in level blocks: "ifeq BUILD_LEVEL-1" ... "endc" for level 1
+only, "ifeq BUILD_LEVEL-5" ... "endc" for level 5 only, and "ifeq BUILD_LEVEL-1"
+... "else" ... "endc" where each has its own lines, level 1's first.  Release
+blocks can sit inside them.  The object tables are one such block, level 1's
+then level 5's.
 
 Data files (retail_1disk_speedlock\unpacked and budget_1disk\unpacked, and for
 the 2 disk release retail_2disk_speedlock\disk1 and disk2 with one level1.gfx /
@@ -352,7 +362,7 @@ As the tiles are sorted by their own block, each type is a run of blocks:
   ladder          3 tiles, blocks 78-80      7 tiles, blocks 96-99
 
 The type limits are fixed tile numbers in the code (TILE_OPEN and so on at the
-top of level1.s and level5.s), so an edited map has to keep
+top of level15.inc), so an edited map has to keep
 the number of tiles of each type: tiles that exist can go anywhere, but a new
 pair of blocks can only replace an unused pair of the same type, or every tile
 after it moves across a limit.  There are at most 256 tiles.
@@ -366,9 +376,10 @@ Map editor
 ----------
 Folder tools\map-editor.  map-editor.html is a map editor for levels 1 and 5 that
 runs in a web browser: open it, then open (or drop on it) an unpacked level1.map
-or level5.map (retail_1disk_speedlock\unpacked), and for the objects the level's
-source, level1.s or level5.s.  Nothing is sent anywhere; Save map and Save source
-give the edited files back to save.
+or level5.map (retail_1disk_speedlock\unpacked), and for the objects the levels'
+source, level15.inc: the editor uses the lines of the map's level, and opening the
+other level's map reads it again for that level, with the edits so far.  Nothing
+is sent anywhere; Save map and Save source give the edited files back to save.
 
   - The map is drawn with its own blocks, in the level's colours.  The tile types
     can be shown over it, and so can a grid and the broken pairs (cells whose
@@ -401,7 +412,7 @@ give the edited files back to save.
     move keeping the difference and a typed number setting the same value, and
     saving writes the config blocks back.  The table size is shown with what
     limits it: level 1 has about 870 bytes before the map, and level 5 must
-    change font_filler in level5.s by the opposite amount.  The game has room
+    change its font_filler by the opposite amount.  The game has room
     for 10 bad guys at a time.
   - The objects and the start positions are drawn with the game's own sprites
     (the pictures box turns them off, back to the boxes).  The editor holds
@@ -417,9 +428,9 @@ give the edited files back to save.
     kept as it was.
 
 To play an edited map or source, put the map in place of the unpacked file
-(retail_1disk_speedlock\unpacked) and the source in place of level1.s or
-level5.s, run build.cmd, and run 2mb-file-version\batman.prg (or build-512.cmd
-for the 512K version).
+(retail_1disk_speedlock\unpacked) and the source in place of level15.inc, run
+build.cmd, and run 2mb-file-version\batman.prg (or build-512.cmd for the 512K
+version).
 
 Picture converter
 -----------------
@@ -496,8 +507,8 @@ what it does or holds, and unused_ marks code that nothing calls.  A few level
 2/4 tables still carry their address (tab_ table, dat_ data) because their use
 is not known yet.  "; from:" lists the routines or modules that refer to a
 label.  Symbols of other modules in the same scene are equ'd at the top of
-each file.  level1.s and level5.s also name their level's numbers there and use
-the names in the code:
+each file.  level15.inc also names each level's numbers there, in level blocks
+where the levels differ, and uses the names in the code:
   - the map: MAP_ROW_LENGTH and MAP_ROWS, the tile types (TILE_OPEN, TILE_FLOOR,
     TILE_LADDER, and level 5's TILE_DEADLY), the floor ranges and
     TILE_CACHE_SLOTS;
@@ -524,10 +535,11 @@ the names in the code:
     LANDED_SPRITE, BULLET_SPRITE).
 The code of the two levels then differs only where the levels really do
 something else, such as level 5's goons checking the floor every 4 units when
-they walk left.  Levels 1 and 5 run the same engine and each file holds all of
-its routines.  Code that is Jack Napier's, run by level 1 only, has his names in
-both (jack_start, jack_wait, vat_watch, vat_splash ...); the boss climb code, run
-by level 5 for the Joker, is named for a boss in both (boss_climb,
+they walk left, and level15.inc has those in level blocks.  Levels 1 and 5 run
+the same engine and both assemble all of its routines.  Code that is Jack
+Napier's, run by level 1 only, has his names (jack_start, jack_wait, vat_watch,
+vat_splash ...); the boss climb code, run by level 5 for the Joker, is named for
+a boss (boss_climb,
 boss_climb_watch, climb_column_animate).  A routine a level never runs says
 "Never run on level N" in its comment.  The end texts are each level's own:
 jack_dead_text and joker_lives_text on level 1, end_text and end_blank_text on

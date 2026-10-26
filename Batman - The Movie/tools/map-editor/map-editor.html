@@ -3,12 +3,12 @@
   Batman The Movie map editor, for levels 1 and 5.
 
   Open this page in a web browser, then open (or drop on it) an unpacked level1.map or
-  level5.map, and to edit the bad guys and start positions too, the level's source
-  (level1.s or level5.s).  Everything happens in the browser; "Save map" and "Save
+  level5.map, and to edit the bad guys and start positions too, the levels' source
+  (level15.inc).  Everything happens in the browser; "Save map" and "Save
   source" hand the edited files back.  The objects are drawn with the game's own
   sprites, built in; Graphics... decodes them from changed levelNa.gfx and levelNb.gfx.
   The README's "Map files" section describes the map format, and the comment above
-  spawn_table in each source the object tables.
+  spawn_table in level15.inc the object tables.
 -->
 <html lang="en">
 <head>
@@ -86,7 +86,7 @@ body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
 <header>
   <h1>Batman Map Editor</h1>
   <label class="file">Open map…<input type="file" id="file" accept=".map,.MAP"></label>
-  <label class="file">Open source…<input type="file" id="objectFile" accept=".s,.S"></label>
+  <label class="file">Open source…<input type="file" id="objectFile" accept=".inc"></label>
   <label class="file" title="the level's levelNa.gfx and levelNb.gfx, to draw the objects from changed graphics files">Graphics…<input type="file" id="graphicsFile" accept=".gfx,.GFX" multiple></label>
   <span id="level" class="hint">no map loaded</span>
   <label class="check">Edit
@@ -111,7 +111,7 @@ body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
   <div id="view">
     <div id="stack"><canvas id="mapCanvas"></canvas><canvas id="overlayCanvas"></canvas><svg id="objectLayer"></svg><div id="cursor"></div></div>
     <div id="drop">Open level1.map or level5.map (unpacked, from retail_1disk_speedlock\unpacked),<br>
-      then level1.s or level5.s for the objects and the level's settings, or drop them here.<br><br>
+      then level15.inc for the objects and the level's settings, or drop them here.<br><br>
       Edit tiles: left click or drag paints the selected block, right click picks the block under the cursor.<br>
       Edit objects: drag objects, triggers and start positions; click an empty spot to choose where new objects go.</div>
   </div>
@@ -144,7 +144,7 @@ body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
     </div>
     <div class="objects-only">
       <h2>Objects</h2>
-      <div id="objectStats" class="hint">Open level1.s or level5.s.</div>
+      <div id="objectStats" class="hint">Open level15.inc.</div>
       <p class="hint">A group appears all at once when its trigger point (the diamond) comes into view; a single object (dashed) appears when it comes into view itself. The game has room for 10 bad guys at a time. The middle of a marker's bottom edge is where the object stands; the small markers are objects the game does not draw (checkpoints, the level end watchers, things the code writes into the map). Moving a start position moves the view and the player together; edit score_scroll_x and the others in the fields.</p>
     </div>
   </aside>
@@ -177,7 +177,7 @@ const BLOCK_BYTES = 0x80;           // 16 lines x 4 planes x 2 bytes
 const BLOCK_SIZE = 16;              // pixels across and down
 
 // The two levels, told apart by their row length.  The palette is the one the level
-// code sets for the play area (palette_split in level1.s / level5.s).  The types list
+// code sets for the play area (palette_split in level15.inc).  The types list
 // gives, for each tile type, the first rank that is NOT that type any more.
 // spawnOffsetX is what spawn_enemy adds to an object's x (level 1 $50, level 5 8), and
 // roomNote says what limits the size of the object tables.
@@ -189,7 +189,7 @@ const LEVELS = {
               0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
     types: [[0x28, 'wall'], [0xe2, 'open'], [0xfa, 'floor'], [0x100, 'ladder']],
     spawnOffsetX: 0x50,
-    roomNote: 'level1.s ends about 870 bytes before the map loads at $7400, so the tables can grow by about that much.',
+    roomNote: 'Level 1\'s code ends about 870 bytes before the map loads at $7400, so the tables can grow by about that much.',
   },
   92: {
     name: 'Level 5',
@@ -198,7 +198,7 @@ const LEVELS = {
               0x353, 0x652, 0x763, 0x744, 0x300, 0x131, 0x334, 0x357],
     types: [[0x18, 'wall'], [0xca, 'open'], [0xcd, 'deadly'], [0xf8, 'floor'], [0x100, 'ladder']],
     spawnOffsetX: 0x08,
-    roomNote: 'level5.s must keep its size, as the map loads straight after it: change font_filler (510 bytes, 372 in the 2 disk release) by the opposite of the change here.',
+    roomNote: 'Level 5\'s code must keep its size, as the map loads straight after it: change its font_filler (510 bytes, 372 in the 2 disk release) by the opposite of the change here.',
   },
 };
 
@@ -577,7 +577,9 @@ function loadMap(fileName, arrayBuffer) {
   updateBlockTypes();
   map.selectedBlock = ownBlock(map.cells[0]);
 
-  // objects belong to one level, so a new map drops them
+  // objects belong to one level, so a new map drops them; a source that holds both
+  // levels is read again below for the new map's level, with the edits so far
+  const source = objects && objects.bothLevels ? { fileName: objects.fileName, text: objectFileText() } : null;
   objects = null;
   selection = null;
   placePoint = null;
@@ -595,6 +597,7 @@ function loadMap(fileName, arrayBuffer) {
   drawObjects();
   updateObjectPanel();
   showMessage('Loaded.', 'ok');
+  if (source) loadObjects(source.fileName, source.text);
 }
 
 function updateLevelLabel() {
@@ -1110,7 +1113,7 @@ function download(blob, fileName) {
 // Objects: the level source
 // ===================================================================================
 //
-// The level source (level1.s, level5.s) holds the level's settings and, near its end, its
+// The levels' source, level15.inc, holds each level's settings and, near its end, its
 // object tables and start positions, all in words:
 //
 //   spawn_table        groups: trigger x, trigger y, count, then count x (type, x, y)
@@ -1119,8 +1122,13 @@ function download(blob, fileName) {
 //                      scroll_x, scroll_y, score_scroll_x, player_x, player_y,
 //                      player_ref_y, camera_x
 //
-// scroll_x follows them.  The editor rewrites the lines from spawn_table to scroll_x and
-// keeps every other line as it was.  The game marks objects that have appeared in the
+// scroll_x follows them.  The lines only one level has are in level blocks (ifeq
+// BUILD_LEVEL-1 ... else ... endc, ifeq BUILD_LEVEL-5 ... endc), and the editor uses the
+// lines of the map's level (levelLines): the tables are level 1's up to the else, and
+// level 5's after it.  It rewrites the map level's lines from spawn_table to the end of
+// its tables and keeps every other line as it was; opening the other level's map reads
+// the source again for that level, with the edits so far.  An older source of one level
+// alone (level1.s or level5.s from before level15.inc) works too.  The game marks objects that have appeared in the
 // top bit of a group's trigger x and a single's y; they must be clear in the file.
 //
 // The settings it reads (readSettings): the map size, tile type limits and time limit
@@ -1150,7 +1158,7 @@ function loadObjects(fileName, text) {
     showMessage('Open the map first, then its level source.', 'bad');
     return;
   }
-  const parsed = parseObjects(text);
+  const parsed = parseObjects(text, map.level.number);
   if (parsed.error) {
     showMessage(parsed.error, 'bad');
     return;
@@ -1288,18 +1296,52 @@ function typeIsDrawn(type) {
   return Boolean(entry && entry[1]);
 }
 
-// The level number, the lines around the tables, each release's tables (models), and
-// the settings.
-function parseObjects(text) {
+// Which lines of the source a level assembles: for each line whether the level has it,
+// and whether it is a level block's own line (ifeq / else / endc of BUILD_LEVEL).
+// Config blocks are kept as they are, for linesFor.
+function levelLines(lines, levelNumber) {
+  const active = [], blockLine = [], stack = [];
+  for (const line of lines) {
+    const block = /^\s+(ifeq|ifne)\s+(\S+)/.exec(line);
+    let own = false;
+    if (block) {
+      const level = /^BUILD_LEVEL-(\d+)$/.exec(block[2]);
+      stack.push({ level: Boolean(level), on: !level || (+level[1] === levelNumber) === (block[1] === 'ifeq') });
+      own = Boolean(level);
+    } else if (/^\s+else\b/.test(line) && stack.length && stack[stack.length - 1].level) {
+      stack[stack.length - 1].on = !stack[stack.length - 1].on;
+      own = true;
+    } else if (/^\s+endc\b/.test(line) && stack.length) {
+      own = stack.pop().level;
+    }
+    active.push(!own && stack.every(entry => entry.on));
+    blockLine.push(own);
+  }
+  return { active, blockLine, bothLevels: blockLine.some(Boolean) };
+}
+
+// The lines around the map level's tables, each release's tables (models), and the
+// settings.
+function parseObjects(text, levelNumber) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = text.split(/\r?\n/);
-  const find = label => lines.findIndex(line => line.startsWith(label + ':'));
-  const tableLine = find('spawn_table'), singlesLine = find('spawn_singles');
-  const startsLine = find('checkpoint_starts'), afterLine = find('scroll_x');
-  if (tableLine < 0 || !(tableLine < singlesLine && singlesLine < startsLine && startsLine < afterLine)) {
-    return { error: 'Not level1.s or level5.s: it needs spawn_table, spawn_singles, checkpoint_starts and scroll_x in that order.' };
+  const { active, blockLine, bothLevels } = levelLines(lines, levelNumber);
+  const isLabel = k => active[k] && /^[A-Za-z_]\w*:/.test(lines[k]);
+  const find = (label, from) => from < 0 ? -1 : lines.findIndex((line, k) => k >= from && active[k] && line.startsWith(label + ':'));
+  const tableLine = find('spawn_table', 0), singlesLine = find('spawn_singles', tableLine);
+  const startsLine = find('checkpoint_starts', singlesLine), scrollLine = find('scroll_x', startsLine);
+  // the tables end at the end of the level's block of them, or at scroll_x
+  let afterLine = startsLine + 1;
+  while (startsLine >= 0 && afterLine < lines.length && !blockLine[afterLine] && !isLabel(afterLine)) afterLine++;
+  let nextLabel = afterLine;
+  while (startsLine >= 0 && nextLabel < lines.length && !isLabel(nextLabel)) nextLabel++;
+  if (tableLine < 0 || singlesLine < 0 || startsLine < 0 || nextLabel !== scrollLine) {
+    if (lines.some(line => /^\s+include\s+"level15\.inc"/i.test(line))) {
+      return { error: 'level1.s and level5.s only include level15.inc, which holds both levels: open level15.inc.' };
+    }
+    return { error: 'Not level15.inc: it needs spawn_table, spawn_singles, checkpoint_starts and scroll_x in that order, for this map\'s level.' };
   }
-  const settings = readSettings(linesFor(lines, 'RETAIL_1DISK'));
+  const settings = readSettings(linesFor(lines.filter((line, k) => active[k]), 'RETAIL_1DISK'));
   if (!settings.MAP_ROW_LENGTH || !settings.MAP_ROWS) return { error: 'The source has no MAP_ROW_LENGTH and MAP_ROWS.' };
   const tableText = lines.slice(tableLine, afterLine);
   const hasBlocks = tableText.some(line => /^\s+(ifeq|ifne)\s+CONFIG-/.test(line));
@@ -1317,7 +1359,7 @@ function parseObjects(text) {
     return { error: 'The releases have different numbers of objects here; the editor needs their tables in step.' };
   }
   return {
-    settings, eol, marksCleared, hasBlocks, models,
+    settings, eol, marksCleared, hasBlocks, models, bothLevels,
     linesBefore: lines.slice(0, tableLine),
     labelLines: [lines[tableLine], lines[singlesLine], lines[startsLine]],
     linesAfter: lines.slice(afterLine),
@@ -1770,7 +1812,7 @@ function updateObjectPanel() {
   const statsElement = $('objectStats');
   if (!objects) {
     inspector.textContent = 'none';
-    statsElement.textContent = 'Open level1.s or level5.s.';
+    statsElement.textContent = 'Open level15.inc.';
     return;
   }
 
@@ -1893,7 +1935,7 @@ function setMode() {
   const objectsMode = !isTilesMode();
   document.body.className = objectsMode ? 'objects-mode' : 'tiles-mode';
   $('stack').classList.toggle('objects-mode', objectsMode);
-  if (objectsMode && !objects) showMessage('Open level1.s or level5.s to edit the objects.', '');
+  if (objectsMode && !objects) showMessage('Open level15.inc to edit the objects.', '');
 }
 
 function select(newSelection) {
@@ -2045,10 +2087,11 @@ function nudgeSelected(key, shift) {
 // Events
 // ===================================================================================
 
-// A .s file is a level source, read as latin-1 (a character a byte); anything else a map.
+// A .inc or .s file is a level source, read as latin-1 (a character a byte); anything
+// else a map.
 function openFile(file) {
   if (!file) return Promise.resolve();
-  if (/\.s$/i.test(file.name)) {
+  if (/\.(inc|s)$/i.test(file.name)) {
     return file.arrayBuffer().then(buffer => {
       const bytes = new Uint8Array(buffer);
       let text = '';
@@ -2066,7 +2109,7 @@ $('view').addEventListener('dragover', event => event.preventDefault());
 $('view').addEventListener('drop', event => {
   event.preventDefault();
   // a map, its source and its graphics files dropped together: the map first
-  const files = [...event.dataTransfer.files].sort((a, b) => /\.s$/i.test(a.name) - /\.s$/i.test(b.name));
+  const files = [...event.dataTransfer.files].sort((a, b) => /\.(inc|s)$/i.test(a.name) - /\.(inc|s)$/i.test(b.name));
   const graphics = files.filter(file => /\.gfx$/i.test(file.name));
   files.filter(file => !graphics.includes(file))
     .reduce((done, file) => done.then(() => openFile(file)), Promise.resolve())
