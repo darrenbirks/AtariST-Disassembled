@@ -403,6 +403,14 @@ give the edited files back to save.
     limits it: level 1 has about 870 bytes before the map, and level 5 must
     change font_filler in level5.s by the opposite amount.  The game has room
     for 10 bad guys at a time.
+  - The objects and the start positions are drawn with the game's own sprites
+    (the pictures box turns them off, back to the boxes).  The editor holds
+    the sprites it needs, decoded from the original levelNa.gfx and
+    levelNb.gfx, and for each object type the sprites the game puts together
+    to draw it and where.  Graphics... (or dropping the files on the page)
+    decodes the sprites from a level's two changed graphics files instead, in
+    the page itself; the level comes from the file names, else the map open.
+    The format is described above decodeSprites in the editor.
   - Undo and redo (Ctrl+Z, Ctrl+Y) for both, zoom, Save map and Save source
     (Ctrl+S).  Only the map and the tile table change in the map file, and only
     spawn_table, spawn_singles and checkpoint_starts in the source; the rest is

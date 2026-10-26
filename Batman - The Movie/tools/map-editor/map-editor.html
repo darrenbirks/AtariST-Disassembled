@@ -5,7 +5,8 @@
   Open this page in a web browser, then open (or drop on it) an unpacked level1.map or
   level5.map, and to edit the bad guys and start positions too, the level's source
   (level1.s or level5.s).  Everything happens in the browser; "Save map" and "Save
-  source" hand the edited files back.
+  source" hand the edited files back.  The objects are drawn with the game's own
+  sprites, built in; Graphics... decodes them from changed levelNa.gfx and levelNb.gfx.
   The README's "Map files" section describes the map format, and the comment above
   spawn_table in each source the object tables.
 -->
@@ -45,6 +46,7 @@ main { flex: 1; display: flex; min-height: 0; }
 #stack.objects-mode #objectLayer { pointer-events: auto; }
 #stack.objects-mode { cursor: crosshair; }
 #objectLayer * { vector-effect: non-scaling-stroke; }
+#objectLayer image { pointer-events: none; image-rendering: pixelated; }
 #objectLayer text { pointer-events: none; font-family: system-ui, sans-serif; font-weight: 600; paint-order: stroke; stroke: #000; stroke-width: 2px; }
 #objectLayer .marker { pointer-events: none; }
 #stack.objects-mode #objectLayer .marker { pointer-events: all; cursor: move; }
@@ -85,6 +87,7 @@ body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
   <h1>Batman Map Editor</h1>
   <label class="file">Open map…<input type="file" id="file" accept=".map,.MAP"></label>
   <label class="file">Open source…<input type="file" id="objectFile" accept=".s,.S"></label>
+  <label class="file" title="the level's levelNa.gfx and levelNb.gfx, to draw the objects from changed graphics files">Graphics…<input type="file" id="graphicsFile" accept=".gfx,.GFX" multiple></label>
   <span id="level" class="hint">no map loaded</span>
   <label class="check">Edit
     <select id="mode"><option value="tiles">tiles</option><option value="objects">objects</option></select>
@@ -93,11 +96,12 @@ body.tiles-mode .tiles-only, body.objects-mode .objects-only { display: block; }
   <label class="check">Zoom
     <select id="zoom"><option value="1">1x</option><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select>
   </label>
-  <label class="check"><input type="checkbox" id="showTypes" checked> tile types</label>
+  <label class="check"><input type="checkbox" id="showTypes"> tile types</label>
   <label class="check"><input type="checkbox" id="showGrid"> grid</label>
   <label class="check"><input type="checkbox" id="showBroken"> broken pairs</label>
   <label class="check"><input type="checkbox" id="showObjects" checked> objects</label>
   <label class="check"><input type="checkbox" id="showTriggers" checked> triggers</label>
+  <label class="check"><input type="checkbox" id="showPictures" checked> pictures</label>
   <button id="undo" disabled>Undo</button>
   <button id="redo" disabled>Redo</button>
   <button id="save" disabled>Save map</button>
@@ -272,6 +276,257 @@ let stroke = null;          // the changes of the paint stroke in progress, or n
 let selection = null;       // the selected object (see selectionKey), or null
 let placePoint = null;      // { x, y } in object units: where new objects go
 let drag = null;            // the object drag in progress, or null
+
+let loadedSprites = {};     // level number -> its sprites, from graphics files opened
+let pictureCache = {};      // the pictures made so far (see pictureOf)
+
+// ===================================================================================
+// The objects' pictures
+// ===================================================================================
+
+// How the game draws each object type that it draws, and Batman at the start positions:
+// the sprites it puts together, in the order it draws them, as [sprite, mirrored, x, y]
+// with x, y the sprite's top left corner against the object's point, in pixels.
+// Recorded from the game's own drawing of each type's first frame.  A mirrored sprite is
+// flipped left to right; the sprites are numbered as decodeSprites numbers them.
+const OBJECT_RECIPES = {
+  1: {
+    player: [[1, 0, -16, -42], [2, 0, -16, -32], [5, 0, -16, -21]],
+    types: {
+      2: [[99, 0, -14, -21], [98, 0, -8, -32], [96, 0, -6, -41]],
+      3: [[104, 1, -8, -21], [97, 1, -20, -32], [96, 1, -10, -41]],
+      4: [[65, 0, -6, -41], [66, 0, -12, -34], [69, 0, -12, -21]],
+      5: [[65, 1, -10, -41], [66, 1, -20, -34], [69, 1, -20, -21]],
+      6: [[79, 0, -8, -41], [80, 0, 6, -27], [75, 0, 6, -37]],
+      7: [[79, 1, -8, -41], [80, 1, -22, -27], [75, 1, -38, -37]],
+      12: [[85, 0, -6, -23], [84, 0, -10, -42]],
+      13: [[87, 1, -10, -19], [84, 1, -22, -38]],
+      14: [[68, 0, -14, -21], [67, 0, -8, -34], [65, 0, -6, -41]],
+      15: [[68, 1, -18, -21], [67, 1, -24, -34], [65, 1, -10, -41]],
+      16: [[74, 0, -8, -41], [75, 0, 6, -37], [76, 0, -10, -19]],
+      17: [[74, 0, -8, -41], [75, 0, 6, -37], [76, 0, -10, -19]],
+      18: [[62, 0, -8, -32], [63, 0, -14, -18], [64, 0, 2, -18]],
+      20: [[112, 0, 0, -6]],
+      21: [[89, 0, -2, -3]],
+      22: [[89, 1, -14, -3]],
+      23: [[68, 1, -18, -21], [67, 1, -24, -34], [65, 1, -10, -41]],
+    },
+  },
+  5: {
+    player: [[1, 0, -16, -42], [2, 0, -16, -32], [5, 0, -16, -21]],
+    types: {
+      2: [[71, 0, -10, -21], [98, 0, -8, -32], [96, 0, -6, -41]],
+      3: [[76, 1, -8, -21], [97, 1, -22, -32], [96, 1, -10, -41]],
+      4: [[71, 0, -10, -21], [72, 0, -10, -21]],
+      5: [[71, 1, -22, -21], [72, 1, -22, -21]],
+      6: [[77, 0, -8, -41], [78, 0, 6, -37], [72, 0, -10, -21]],
+      7: [[77, 1, -8, -41], [78, 1, -38, -37], [72, 1, -22, -21]],
+      12: [[88, 0, -8, -23], [87, 0, -10, -42]],
+      13: [[92, 1, -10, -19], [90, 1, -20, -39]],
+      14: [[71, 0, -10, -21], [70, 0, -8, -32], [68, 0, -8, -41]],
+      15: [[71, 1, -22, -21], [70, 1, -24, -32], [68, 1, -8, -41]],
+      16: [[77, 0, -8, -41], [78, 0, 6, -37], [79, 0, -12, -21]],
+      17: [[77, 0, -8, -41], [78, 0, 6, -37], [79, 0, -12, -21]],
+      29: [[111, 0, -16, -9]],
+      30: [[114, 1, -16, -8]],
+      31: [[109, 1, -10, -19], [107, 1, -20, -39]],
+    },
+  },
+};
+
+// The sprites those use, decoded by decodeSprites from the original graphics files: for
+// each level, sprite number -> [width, pixels], with the pixels a row at a time from the
+// top, a colour number each (0-e), and '.' where the sprite is clear.
+const BUILT_IN_SPRITES = {
+  1: {
+    1: [32, '.................0...............................0.0............................00.0..........................001000.........................00001100........................00111e10........................00111020........................0011000e0.......................000107b0.......................000110060...........'],
+    2: [32, '...........000000110......................0001eee001......................0011ee2e070....................001011e2e01600.00...............001011ee101e000e10.............000110111e2100001110............0100e1001ee0ee110110............01001e1401011110000.............0100011e40101010................010001e4100000..................01001000000000..........'],
+    5: [32, '........01001770b6a0b0.................0410000000000a0.................011004101e2ee1..................04100411e222e0..................011000401e2ee00.................041000401e2e010.................041000040e2e01e0.................01000040e2e01e20................01010041ee011e20................0401001112011ee0.................0110411e201ee0..................011041ee000e0...................010041e00000.....................0.00001000......................0.0411e00.........................041120.........................0041120........................041041e0.........................01001e0..........................00411e00.........................044441e00.......................000000000..........'],
+    62: [32, '...00.............................0110............................02300...........................000e0..........................030e110.........................0201e10..........................0021110....100....................0e110...00170...................0e1110.0000170..................0ee000...10160.................00011110.10177b0...............01771111100117660.............006717011101717776b0............066771700000770000b0............'],
+    63: [16, '......0b677770cc......0b66777ccc.......0b000cccc......000077cccc....00777707c0bc..007777760770bb.07776776bb6706007760066b0006b0007776b000.0100bb0776600...011100.07776b0000111e0..007760bbb01e0.....0006b70200.........0660230.........0070e0..........0.000....'],
+    64: [32, 'cc1c777700000...................cc11c777077770000...............cc1117677676777770000...........111ccc6b60b06bb610bb600.........c1cc0c6b60000000060670..........cc6c06b00........0.070..........b607060.............0...........7e0060..........................00bb00..........................0000............................'],
+    65: [16, '...000000.........0c0cc0c0.......0ccc66b0........0ccc6bbb0.......0cc00b040........0c6bbb6b0......0000006c0......'],
+    66: [32, '.......077767060......................000117600......................0c77711170.....................0c7667771100...................0c76b606671770.................0076b66c7676160.................076666cc766c170................07667c0ccc71c100000000..........0776c600ccc000e5553333..........0c7777760000bbbe100000...........0cc7777030bb6670.................000ccc05066670.....................0000000000................'],
+    67: [32, '...077677060.......................00117600.......................0c7771170......................0c767777100....................0c77677661770...................0c76b6c7b6160...................0c76b6c766170...................0c76660c76710...00000000.........077660ccc710.00e5553333.........0c76070000000bbbe100000.........0c7767bb6130bb6670...............0c7776771b066670................000000000000000...............'],
+    68: [32, '........0cccccccc00.....................07ccccccc00.....................0777777cc00....................0c7776777c00....................0c7776777cc0....................0c7777777cc00..................0ccc776777cc00..................0c7c776777cc010................0c7c7766777cc0110...............0c777766677cc01e0...............0000767767ccc01e0..............000100000000000110.............001111e0.....000010............00011ee0......000010............0001ee0........000110..........0001ee0.........000010..........001e00..........0000000.........0000e0...........00011e0........020200...........0000000........0033300...........0e0e200.......000000e20.........00e200e20.........00000.........000000000....'],
+    69: [32, '......0cccccccc00.....................07ccccccc00.....................0777777cc00.....................07776777c00....................0c7776777cc0....................0cc777777cc0....................0cc776777cc00..................0c7c776677cc00..................0c77766c77cc010.................0c0767cccccc0110................000000000ccc0010.................00011ee00000110................0001eee0.000010...............000100e00..000010..............002001e0....000110..............0002000....0001e0................02320.....000000.................000e.....0001e0..................0020....000000...................000.....0e0e200.........................00e200e20.......................000000000..........'],
+    74: [16, '.....000000.........0c0cc0c0.......0ccc66b0........0ccc6bbb0.......0cc00b040........0c6bbb6b0......0000006c0.......077677060.......07110000000.....0766bbc66b6....0c6676766667...0c776666677cc...0c777777ccc00...0c77cc0cc000....0c7c7cccccc0.....0777c7cccc0.....0c6777cccc0.....0c77676ccc0......0c6676c700......07667b6700......0c767b7c00.....0c7766777c0...'],
+    75: [32, '..........00000000......................00e5553333...................000bbbe100000..............0000030bb6670...................6b661b066670....................76777000000.....................77c000..........................000.............................'],
+    76: [32, '....0c7c6677cc00....................0c7676767c00...................0c77676667c000..................0c77676b67c000.................0cc77776767c00e0................0c777676667c00e20..............0cc777766b77c001e20.............0cc7777666777001e20.............0ccc7767767670011e0..............0000000000000111e0..............0111110.....0111e0..............0111e0.......0111e0............0111e0........0111e0............0001e0........0011e0............01e00.........0000000...........000e0..........011ee20.........020230..........0000000.........0022330..........0202300..........0000e20........003300e20.........000000........000000000......'],
+    79: [16, '......00000..........000cc000.......00cccc0c0.......0ccc66bcc0......0ccc6bbb0........0c61b040.......000076b6b0.....0776700600......0711777070.....0c07700700......0c7bb67070.....0c7b66b67070....0c7676666700....0c7677767670....0c7c707766b10....0777c0077676....0c67c7c00767....0c776cccc077.....0c667cccc00.....0c667c7cc0......0c767c7cc0.....0c7c66777c0...'],
+    80: [16, '0...............60..............760.............70300...........0b06b0...........0066b0...........077050...........000030.............0030......0......0030.....0.......00......'],
+    84: [32, '.........0000...........................0ccc00.........................0ccccc00........................00ccc000...0....................000cccc0...60...................00000000..1b60..............000..077770..16b70.............0b60000c67cc00017070...........06706ccc7777676600c70...........0706c77677777777660c70..........0066777777777777776670.........006677777777777ccc77760.........06677c776776767c00cc770.........0677c0c7cccccc7c0.0000..........077c00ccccccccc00................000.0c7c6777c700....................0c7c7777c7c0....................0c77777777c0....................0cc77c7677c0...............'],
+    85: [16, '.0c7767777cc0....0c7777677cc0....0c77677777c0....0c77677777c0...0c77666677770...0c76b6767777c0..0c76b67777c7c0..0c76667c7777c0..0c76b7777c77c0..0c7c667c7c76c0..0c7c667cc7c6c0..0c7767ccc7c6c0...0000000000000....01111011e40.....01111011140.....0111100140.......011100000.......011000000.......01100e23e0......00000111e0......022000000......03ee0..........021110..........00000..........'],
+    87: [16, '.0cc7777677cc0...0cc7767777cc0...0c77777677cc0...0c77777677cc0...0777766667cc0..0c7c77676667cc0.0c7c77676b67cc0.0c7c777766677c0.0c77c7676b677c0.0c67c776667c7c0.0c6cc776c77ccc0.000000c7c7cc7c0...011100000000....000000110.......0220011110.....03ee0011110....021110011110....00000.01110...........01110...........01100...........00000...........0232e0..........0111e0..........00000.....'],
+    89: [16, '.....88............8.....8.......83.538..........55.88..8.a838.8.83a55585.555..5..8...8818....8....8.8................8.........'],
+    96: [16, '..00000000........01111110........0eeee2e0......000000000000.....11620b0400......16b26bb6b0......1bac76b70......16aa600bb0......b60a1dd00.......'],
+    97: [32, '.....1ee2d001d0.....................0eddd8dd0100...................0ed2dedddd1dd0..................0dd8210dedd1d0.................0dd22d10ddd10080................0d1ed1001dd008a80..............0dd210000000bbb0d0..............0dde28ee030bb6670...............01dddddd05066670.................01111110000000...................0000000000000......................0110000000................'],
+    98: [32, '.1e1dd111d0......................01e2ddd0100....................01dde2ddd1dd0...................01dd280ded1d0...................01dde201dd110....0..............01dede01ded10..0080..............01de0011dd10.008a80.............01d2d00000000bbb0d0.............01dd0e28e030bb6670...............01dddddd05066670................000000000000000...............'],
+    99: [32, '........0110000000......................0d11111100......................0ddddddd00.....................01dddeddd100....................01dddeddd110....................01ddddddd1100..................0111ddeddd1100..................01d1ddeddd11010................01d1ddeeddd110110...............01ddddeeedd1101e0...............0000dedded11101e0..............000100000000000110.............001111e0.....000010............00011ee0......000010............0001ee0........000110..........0001ee0.........000010..........001e00..........0000000.........0000e0...........00011e0........020200...........0000000........0033300...........0e0e200.......000000e20.........00e200e20.........00000.........000000000....'],
+    104: [16, '..0110000000......0d11111100......0ddddddd00......01ddeddd100.....01ddeddd100.....01dddddd1100...0111deddd1100...01d1deded11010..01ddeedd1110e0..01d1eeedd110e0..0111dde111010....00000000010.......001ee000.......0001ee00.......0001ee00........0001ee0..........000000..........001ee0..........000000..........00202300.........003300e20.......000000000...'],
+    112: [16, '...8...............50.............080............058ad...........0583d............d8d..............d............'],
+  },
+  5: {
+    1: [32, '.................0...............................0.0............................00.0..........................001000.........................00001100........................00111e10........................00111020........................0011000e0.......................000107b0.......................000110060...........'],
+    2: [32, '...........000000110......................0001eee001......................0011ee2e070....................001011e2e01600.00...............001011ee101e000e10.............000110111e2100001110............0100e1001ee0ee110110............01001e1401011110000.............0100011e40101010................010001e4100000..................01001000000000..........'],
+    5: [32, '........01001770b6a0b0.................0410000000000a0.................011004101e2ee1..................04100411e222e0..................011000401e2ee00.................041000401e2e010.................041000040e2e01e0.................01000040e2e01e20................01010041ee011e20................0401001112011ee0.................0110411e201ee0..................011041ee000e0...................010041e00000.....................0.00001000......................0.0411e00.........................041120.........................0041120........................041041e0.........................01001e0..........................00411e00.........................044441e00.......................000000000..........'],
+    68: [16, '...00000000........01111110........0ee2e2e0......000000000000.....11620b0400......16b26bb6b0......1bac76b70.......1a0a6bbb0.......1a00c670......'],
+    70: [32, '..0ccee0c0.......................0ececc2000.....................0eba2ecce010....................0c6b2ec7c010....................0ccceecccc10....................0cce2ecc7010...00000000..........0cce10c7110.00e5553333..........0ceee0000000bbbe100000..........0cccece2020bb6670................0cccccc0e066670.................00000000000000................'],
+    71: [32, '......02020e01........................0e0e0e01.......................044114100.......................0411e1e000......................041115e000......................0411e2e0010......................04115e001e0.....................041e2e011e20....................041e5e041e5e0.................0041e5e0044e120................04411120..041e20................0411ee0...04ee50...............0411e20....041ee0...............0411e0......01ee20..............041e50......041e50..............041e0.......0411e0..............0000.........0000..............04cc0.........0000.............0400c0.........000c0............0c4ccc0........0400c00..........000cccc00......044cccc00...........000000......000000000........'],
+    72: [32, '......02020e01........................0e0e0e01.......................044114100.......................0411e11000......................041115e1010......................041e2e101e0......................041e5110e50......................01e2e101e20...................000115e10ee50.................0044112e1011120................04111ee100041e0................0411ee100.0411e0................001ee10..0411e0...............00011400...041e50...............040c00....041150................40cc0.....0411e0................04cc0......0000..................00c0......0000...................0cc0.....000c0...................000.....0400c00.........................044cccc00.......................000000000............'],
+    76: [16, '....02020e01........0e0e0e01.......044114100.......0411e1e00.......041115e000......0411e2e000.......04115e04e0......041e2e04e50.....04e15004e20.....011e5004e50....04e12e004e0.....041ee00440......041e50040.......041e4000........04ee500........0041e50........0400410..........0c0000...........0000c0...........0400c00.........044cccc00.......000000000...'],
+    77: [16, '...00000000........01111110........0ee2e2e0......000000000000.....11620b0400......16b26bb6b0......1bac76b70.......1a0a6bbb0.......1a0006700000....0ccee00022ee....01eea6eeee1c...01e1eb62ccccc...00e1ce1eccc00...00ce1cc1c000....0c0c0c000000....0cc1c0ce00c0....0cecccc71c0.....0cecc0c7000......0ce2ceccc0......0ccecc0c00....'],
+    78: [32, '..........00000000......................00e5553333...................000bbbe100000..............0000020bb6670...................ce2e1e066670....................e1ccc000000.....................ccc000..........................000.............................'],
+    79: [32, '.........02020e01........................0e0e0e01.......................044111ee0.......................04411eee50......................0441111ee20.....................004411ee5520...................000004411ee520..................0110004411ee50.................0e1100004411ee50................0e1100..0044e120...............0eee100...0441e20..............02e1440.....04ee50.............02e1140......041ee0.............05e140.......041ee20............0e1140........041e50............0e140.........0411e0............0000...........00000...........04cc0............0000..........0400c0............000c0.........0c4ccc0...........0400c00.......000cccc00.........044cccc00........000000.........000000000....'],
+    87: [32, '......000000000.......................011111110.......................01ee11e10.....................001ee2222e100....................00000000000......................066aaa6a60......................0baaaabab0......................a6aaaaa6ba.....................00aaaaaa6a000.................00c1a1a6acaaa010...............0eccccc6accacacce0..............0cccccccaccaccccce0............0ecc1ccccccccccc0cce0...........0cc011ccccccccc101c10..........0ccc101ccccccccc101110..........01cc0011cccccc1101100...........00000001c1ccccc1000..............001110c1ccccc10...................00000e0202020................'],
+    88: [16, '....00e0e0e0e0......0411111110.....04411111140.....0411111111e0...04111110111e0...04e1111011e10...041110001110...04e1110001110...0110000011e0....041110.01140....041e14001140.....041e4000040.....041e400111e0....0141100111e0.....000000111e0.....0ccc001140......0c00001140.....0c000001100....0c0000.00000....00000..0ccc00...0000...0ccc00..........00000...'],
+    90: [32, '.........00000000........................01111110........................0ee22ee0......................000000000000.....................01c0460e60......................6b7bebbb0b......................a0167c660a.....................ab6176b61b6a...................000aecccc60a00.................0eccc1e00e1ce0e00..............02ccccc1e21ccccce200............0ecc1ccc1ecccc1cccce0..........0cccc0c6c0ccce01110ce0.........0c0001017cc0c710000cce0........0ccee10000c0cce10.0cce0.........0ccc020bbb0c0ce10000ce0.........0cc0e0666700ccc10bb600...........00010777c0c0111006b70.............0000000e0202006670..................010e0e0e00000...........'],
+    92: [16, '.04111111110.....011e1111e40.....0e1ee1e1eee0....01e2e041e1e0....0ee2e0112140....0ee2e0112140....0415e0112e40.....0e2101e240......0e51011540......01ee001e10......00e0000e10.....041110000140....041e10001e40....041e10010e40....041e10011140....041e10.0140.....041e10.0000......0000..0cc0......0cc0.0cccc0.....00c0.000000....0cccc0..........0cccc0...........0000..........'],
+    96: [16, '...000200.........012ee2e0.......0e2ee1100.......01e1ee0b00......000000040........0c67b04b1.......0cc6b670.........076bbb0........000670........'],
+    97: [32, '....00cce00c0......................0a2e1cec000....................06b2e10cc0010..................0cccee107cc010..................0ce2e101ccc0100................0ccce0000c70008d0...............0cce2ec00c7000e810..............01cccc2e0000bbbe00...............0111ccc020bb6670.................0001110e066670.....................0000000000.......................02020e01..................'],
+    98: [32, '...011ee0c0.......................0ececc2000.....................0eba2ecce010....................0c6b2ec7c010....................0ccceecccc10...00...............0cce2ecc7010..08d0...............0cce10c7110.00e810..............0ceee0000000bbbe00..............0cccece2020bb6670................0cccccc0e066670.................00000000000000...................02020e01....................'],
+    107: [32, '..........000d00.........................0d0dd8d0.......................0d08ddd0d0......................000ddddd00......................00d0ddd000.......................00ddddd0........................00000000.......................0cc7667cc0....................00000000000000................00cccccccccccccc00.............0cccccccccccccccccc0............0cccccccccccccccccc0...........0cccccccccccccccccccc0..........0cccccccccccccccccccc0.........0ccccc0cccccccccc0ccccc0.......0cccccc0cccccccccc0cccccc0......0cccc000cccccccccc000cccc0......0ccc0c000ccccccccc00c0ccc0.......0ccc0.00cccccccc00.0ccc0.........000..000c0e0e0c00..000........'],
+    109: [16, '...00c0cccccc00....000cccccccc0....0c0cccccccc0...00c00ccccccc0...000c0cc0cccc0..09d0cc0c0ccc00..097c0ccc0ccc00..07dc0cc000cc00...07c00c000c000...0d7d0c000c000...000000000c00.....097c000c000.....00000000c70....0e32e000cd7d0...02ee100c07970..0e1000.007d9d0..0000...0c79970.........0c7d9d0.........0c7970..........00c710..........000000..........0c7790..........000000...........0e2e0...........0111e0..........000000.'],
+    111: [32, '.............0000..........................001c1c00.......................011cccc1c00....................0ccccc1ccc1c00.................011c0c0cccccccc000..............01ccccc0cc0cccc7cc0.........666701cccc701ccccc0c06c0....b6b67....01c77000111070cccc70.............00066b600c60000000................000000.000..........'],
+    114: [32, '..............00000.........................001cccc0000....................0ccc1ccccc1c00.................011c0cccccc0ccc000..............01ccc0cc0c0cccc7cc0....b6b66767007c7c01ccc0ccc0c06c0..........077c0000011100c70cccc70..........066b0000000000c760000............0000.........0000.....'],
+  },
+};
+
+const CLEAR = 255;          // a clear pixel in a decoded sprite
+const GRAPHICS_A = 0x50000; // where the game loads levelNa.gfx
+const GRAPHICS_B = 0x60000; // and levelNb.gfx
+
+// A level's sprites from its two graphics files, numbered from 1 as the game numbers
+// them: levelNb.gfx's first, then levelNa.gfx's.  Each file is a long load address, then
+// a word, the sprite count, and 8 bytes a sprite: 2 unused, the width in 16-pixel blocks
+// less 1 in the top 4 bits, the rows less 1, and a long offset to its blocks, counted as
+// 10 bytes a block (the game's own copy holds 4 planes and a mask).  The blocks follow,
+// 8 bytes each: 16 pixels of 4 bits, the leftmost in the top bits of the first byte, and
+// each sprite's rows bottom first.  A pixel's colour is its 4 bits in the other order
+// (plane 0 in the top bit), and 15 is clear.  Bytes past the end of the file read as 0,
+// as the game finds them.  Gives sprite number -> { width, height, pixels }, the pixels
+// a colour number each, top row first, CLEAR where the sprite is clear.
+function decodeSprites(fileB, fileA) {
+  const reversed = n => ((n & 1) << 3) | ((n & 2) << 1) | ((n & 4) >> 1) | ((n & 8) >> 3);
+  const sprites = {};
+  let number = 1;
+  for (const file of [fileB, fileA]) {
+    const byteAt = offset => offset + 4 < file.length ? file[offset + 4] : 0;
+    const count = (byteAt(2) << 8) | byteAt(3);
+    const blocks = 4 + 8 * count;
+    for (let k = 0; k < count; k++, number++) {
+      const header = 4 + 8 * k;
+      const columns = (byteAt(header + 2) >> 4) + 1;
+      const height = byteAt(header + 3) + 1;
+      const offset = ((byteAt(header + 4) << 24) | (byteAt(header + 5) << 16) | (byteAt(header + 6) << 8) | byteAt(header + 7)) >>> 0;
+      const width = 16 * columns;
+      const pixels = new Uint8Array(width * height);
+      for (let row = 0; row < height; row++) {
+        const first = blocks + Math.floor(offset / 10) * 8 + row * columns * 8;
+        const line = (height - 1 - row) * width;
+        for (let x = 0; x < width; x++) {
+          const byte = byteAt(first + (x >> 4) * 8 + ((x & 15) >> 1));
+          const bits = x & 1 ? byte & 15 : byte >> 4;
+          pixels[line + x] = bits === 15 ? CLEAR : reversed(bits);
+        }
+      }
+      sprites[number] = { width, height, pixels };
+    }
+  }
+  return sprites;
+}
+
+// The built-in sprites of a level, in decodeSprites' form.
+function builtInSprites(levelNumber) {
+  const sprites = {};
+  for (const [number, [width, text]] of Object.entries(BUILT_IN_SPRITES[levelNumber] || {})) {
+    const pixels = Uint8Array.from(text, c => c === '.' ? CLEAR : parseInt(c, 16));
+    sprites[number] = { width, height: pixels.length / width, pixels };
+  }
+  return sprites;
+}
+
+// The picture of an object type (or 'player') on the level shown, when pictures are on:
+// { x, y, w, h, url } with x, y its top left corner against the object's point, made
+// from the recipe in the level's palette, or null.
+function pictureOf(type) {
+  if (!$('showPictures').checked || !map) return null;
+  const level = map.level.number;
+  const recipes = OBJECT_RECIPES[level];
+  const recipe = recipes && (type === 'player' ? recipes.player : recipes.types[type]);
+  if (!recipe) return null;
+  const key = [level, type, map.rgb.join(' ')].join('|');
+  if (!(key in pictureCache)) {
+    if (!loadedSprites[level]) loadedSprites[level] = builtInSprites(level);
+    pictureCache[key] = makePicture(recipe, loadedSprites[level], map.rgb);
+  }
+  return pictureCache[key];
+}
+
+// Draw a recipe's sprites, each over the ones before, and cut the picture to its pixels.
+function makePicture(recipe, sprites, rgb) {
+  const points = [];
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const [number, mirrored, dx, dy] of recipe) {
+    const sprite = sprites[number];
+    if (!sprite) continue;
+    for (let y = 0; y < sprite.height; y++) {
+      for (let x = 0; x < sprite.width; x++) {
+        const colour = sprite.pixels[y * sprite.width + x];
+        if (colour === CLEAR) continue;
+        const px = dx + (mirrored ? sprite.width - 1 - x : x), py = dy + y;
+        points.push([px, py, colour]);
+        left = Math.min(left, px); right = Math.max(right, px);
+        top = Math.min(top, py); bottom = Math.max(bottom, py);
+      }
+    }
+  }
+  if (!points.length) return null;
+  const w = right - left + 1, h = bottom - top + 1;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(w, h);
+  for (const [px, py, colour] of points) {
+    const at = 4 * ((py - top) * w + px - left);
+    image.data.set([...rgb[colour], 255], at);
+  }
+  context.putImageData(image, 0, 0);
+  return { x: left, y: top, w, h, url: canvas.toDataURL() };
+}
+
+// Decode the objects' sprites from a level's two graphics files, told apart by their
+// load address; the level comes from the file names (level1a.gfx ...), else the map.
+function loadGraphics(files) {
+  return Promise.all(files.map(file => file.arrayBuffer())).then(buffers => {
+    const parts = {};
+    let level = null;
+    buffers.forEach((buffer, k) => {
+      const bytes = new Uint8Array(buffer);
+      const address = bytes.length >= 8 ? ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0 : 0;
+      const count = bytes.length >= 8 ? (bytes[6] << 8) | bytes[7] : 0;
+      if ((address === GRAPHICS_A || address === GRAPHICS_B) && count && 8 + 8 * count <= bytes.length) parts[address] = bytes;
+      const named = files[k].name.match(/level([15])[ab]\.gfx$/i);
+      if (named) level = +named[1];
+    });
+    const names = files.map(file => file.name).join(' and ');
+    if (!parts[GRAPHICS_A] || !parts[GRAPHICS_B]) {
+      showMessage(`${names}: choose both of a level's graphics files, levelNa.gfx and levelNb.gfx.`, 'bad');
+      return;
+    }
+    if (!level && map) level = map.level.number;
+    if (!level) {
+      showMessage('Open the map first, or keep the graphics files\' names (level1a.gfx ...).', 'bad');
+      return;
+    }
+    loadedSprites[level] = decodeSprites(parts[GRAPHICS_B], parts[GRAPHICS_A]);
+    pictureCache = {};
+    $('showPictures').checked = true;
+    drawObjects();
+    showMessage(`Level ${level}'s pictures from ${names}.`, 'ok');
+  });
+}
 
 // ===================================================================================
 // Loading a map file
@@ -1342,17 +1597,29 @@ function drawObjects() {
   const parts = [];
   const escapeText = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
-  // an object: a box about a sprite's size above the point it stands on, or a small one
-  // for an object the game does not draw, with its marker text over it
+  // an object: its picture over the point it stands on, with a thin box round it to
+  // click and its marker text above; without a picture, a box about a sprite's size, or a
+  // small one for an object the game does not draw
   function marker(item, key, isSingle) {
     const [, text, look, drawn] = objectLook(item.type);
     const { x, y } = objectPixel(item.x, item.y);
-    const [width, height] = drawn ? [24, 32] : [12, 12];
     const colour = `var(--${look})`;
     const selected = key === selectedKey ? ' selected' : '';
-    parts.push(`<rect class="marker${selected}" data-key="${key}" x="${x - width / 2}" y="${y - height}" width="${width}" height="${height}" ` +
-      `fill="${colour}" fill-opacity="${drawn ? '.35' : '.7'}" stroke="${colour}" stroke-width="1.5"${isSingle ? ' stroke-dasharray="4 2"' : ''}/>`);
-    parts.push(`<text x="${x}" y="${y - height - 2}" text-anchor="middle" font-size="${fontSize}" fill="${colour}">${escapeText(text)}</text>`);
+    const dash = isSingle ? ' stroke-dasharray="4 2"' : '';
+    const pic = drawn && pictureOf(item.type);
+    let top;
+    if (pic) {
+      parts.push(`<image href="${pic.url}" x="${x + pic.x}" y="${y + pic.y}" width="${pic.w}" height="${pic.h}"/>`);
+      parts.push(`<rect class="marker${selected}" data-key="${key}" x="${x + pic.x}" y="${y + pic.y}" width="${pic.w}" height="${pic.h}" ` +
+        `fill="${colour}" fill-opacity="0" stroke="${colour}" stroke-opacity=".6" stroke-width="1"${dash}/>`);
+      top = y + pic.y;
+    } else {
+      const [width, height] = drawn ? [24, 32] : [12, 12];
+      parts.push(`<rect class="marker${selected}" data-key="${key}" x="${x - width / 2}" y="${y - height}" width="${width}" height="${height}" ` +
+        `fill="${colour}" fill-opacity="${drawn ? '.35' : '.7'}" stroke="${colour}" stroke-width="1.5"${dash}/>`);
+      top = y - height;
+    }
+    parts.push(`<text x="${x}" y="${top - 2}" text-anchor="middle" font-size="${fontSize}" fill="${colour}">${escapeText(text)}</text>`);
   }
 
   // groups: the trigger diamond, numbered, with lines to the group's objects
@@ -1385,9 +1652,15 @@ function drawObjects() {
     if (selected) {
       parts.push(`<rect x="${view.x}" y="${view.y}" width="${VIEW_WIDTH}" height="${VIEW_HEIGHT}" fill="none" stroke="var(--start)" stroke-dasharray="6 4"/>`);
     }
-    parts.push(`<rect class="marker${selected ? ' selected' : ''}" data-key="${key}" x="${player.x - 12}" y="${player.y - 32}" width="24" height="32" ` +
-      `fill="var(--start)" fill-opacity=".45" stroke="var(--start)" stroke-width="1.5"/>`);
-    parts.push(`<text x="${player.x}" y="${player.y - 34}" text-anchor="middle" font-size="${fontSize}" fill="var(--start)">${c ? 'Restart ' + c : 'Start'}</text>`);
+    const pic = pictureOf('player');
+    const box = pic ? { x: player.x + pic.x, y: player.y + pic.y, w: pic.w, h: pic.h }
+      : { x: player.x - 12, y: player.y - 32, w: 24, h: 32 };
+    if (pic) {
+      parts.push(`<image href="${pic.url}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}"/>`);
+    }
+    parts.push(`<rect class="marker${selected ? ' selected' : ''}" data-key="${key}" x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" ` +
+      `fill="var(--start)" fill-opacity="${pic ? 0 : '.45'}" stroke="var(--start)" stroke-width="${pic ? 1 : 1.5}"/>`);
+    parts.push(`<text x="${player.x}" y="${box.y - 2}" text-anchor="middle" font-size="${fontSize}" fill="var(--start)">${c ? 'Restart ' + c : 'Start'}</text>`);
   });
 
   // where new objects go
@@ -1788,12 +2061,16 @@ function openFile(file) {
 
 $('file').onchange = event => openFile(event.target.files[0]);
 $('objectFile').onchange = event => openFile(event.target.files[0]);
+$('graphicsFile').onchange = event => loadGraphics([...event.target.files]);
 $('view').addEventListener('dragover', event => event.preventDefault());
 $('view').addEventListener('drop', event => {
   event.preventDefault();
-  // a map and its source dropped together: the map first
+  // a map, its source and its graphics files dropped together: the map first
   const files = [...event.dataTransfer.files].sort((a, b) => /\.s$/i.test(a.name) - /\.s$/i.test(b.name));
-  files.reduce((done, file) => done.then(() => openFile(file)), Promise.resolve());
+  const graphics = files.filter(file => /\.gfx$/i.test(file.name));
+  files.filter(file => !graphics.includes(file))
+    .reduce((done, file) => done.then(() => openFile(file)), Promise.resolve())
+    .then(() => graphics.length && loadGraphics(graphics));
 });
 
 $('mode').onchange = setMode;
@@ -1805,7 +2082,7 @@ $('release').onchange = () => {
 };
 $('zoom').onchange = applyZoom;
 for (const id of ['showTypes', 'showGrid', 'showBroken']) $(id).onchange = redrawOverlay;
-for (const id of ['showObjects', 'showTriggers']) $(id).onchange = drawObjects;
+for (const id of ['showObjects', 'showTriggers', 'showPictures']) $(id).onchange = drawObjects;
 $('undo').onclick = undo;
 $('redo').onclick = redo;
 $('save').onclick = saveMap;
