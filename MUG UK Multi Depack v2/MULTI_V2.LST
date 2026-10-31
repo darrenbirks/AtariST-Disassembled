@@ -1,0 +1,1234 @@
+$m80000
+' ===========================================================================
+' MULTI DEPACKER v2.0 (MULTI_V2.PRG)              by MUG U.K, 1992 / 1993
+' ---------------------------------------------------------------------------
+' Loads a file packed with one of some 25 Atari ST packers (Atomik, Automation,
+' Ice, Fire, JAM, Speed, Pompey, Powerpacker, RNC ...), finds out which packer
+' made it, depacks it with that packer's own depack routine and saves the
+' result.  A depacked picture can be shown, a depacked text file viewed.
+'
+' The depack routines are machine code, held in the INLINE blocks below and
+' called with RCALL.  The user interface is a GEM resource, MULTI_V2.RSC.
+'
+' Disassembled by Darren Birks, 31 October 2026.
+'
+' Source rebuilt from the compiled program (GFA BASIC 3.6); compiled with
+' GFA_BCOM 3.6 it gives MULTI_V2.PRG again.
+' ===========================================================================
+'
+' $m80000: the program keeps 80000 bytes for itself and leaves the rest of
+' memory to GEMDOS, where the files are loaded and depacked (MALLOC).
+'
+' The program needs medium or high resolution.
+IF XBIOS(4)=0  !low resolution
+  ALERT 0,"How many decent utilities do|you know that run in low|resolution ????  This doesn't !!",1," Oh .. ",button|
+  END
+ENDIF
+IF XBIOS(4)=2  !high resolution: the depackers flash colours
+  ALERT 0,"Because I've used differing|colour flashes in the depack|routines, when depacking|a file - shut your eyes !!",1," Eh ?? ",button|
+ENDIF
+'
+' The depack routines, one per packer (machine code, called with RCALL).
+' Each takes its addresses and lengths in the registers% array: d0-d7 are
+' registers%(0)-registers%(7), a0-a6 registers%(8)-registers%(14).
+INLINE ice_v113%,558
+INLINE ice_v22%,434
+INLINE ice_v234%,390
+INLINE ice_v240%,406
+INLINE fire_v101%,478
+INLINE fire_v201%,458
+INLINE automation_v501%,380
+INLINE automation_v24%,372
+INLINE automation_v501_chunked%,416
+INLINE automation_v251_chunked%,454
+INLINE atomik_v31%,406
+INLINE atomik_v33%,442
+INLINE atomik_v35%,546
+INLINE pompey_v19%,272
+INLINE powerpacker%,256
+INLINE jam_lzw%,166
+INLINE jam_lzh%,834
+INLINE speed_v20%,402
+INLINE speed_v30%,1634
+INLINE txic%,270
+INLINE pawn%,450
+INLINE sentry%,500
+INLINE chfi_imp%,404
+INLINE rnc%,424
+INLINE saved_palette%,32
+'
+' Set up: error handling, paths, the resource and the credits box.
+ON ERROR GOSUB error_handler
+initialise
+load_resource
+DEFMOUSE 0
+CLS
+credits_dialog(credits_text$)
+'
+' The main loop: menu, load, identify, depack.  Each step sets abort! when the
+' user cancels or something fails, which starts the loop again.
+main_loop:
+main_menu  !returns when Depack is chosen
+load_packed_file
+IF abort!=TRUE
+  abort!=FALSE
+  GOTO main_loop
+ENDIF
+identify_packer
+IF abort!=TRUE
+  abort!=FALSE
+  GOTO main_loop
+ENDIF
+depack_file
+IF abort!=TRUE
+  abort!=FALSE
+  GOTO main_loop
+ENDIF
+free_buffers  !give the file buffers back to GEMDOS
+~FRE(0)  !collect the string garbage
+GOTO main_loop
+END
+' ---------------------------------------------------------------------------
+' ON ERROR GOSUB handler, also called to quit.  A small error (up to 100) can be
+' carried on from; a fatal one ends the program.
+' ---------------------------------------------------------------------------
+PROCEDURE error_handler
+  IF ERR<>FATAL AND ERR<=100 AND ERR<>0  !an error the program can carry on from
+    ALERT 0,"Error "+STR$(ERR)+" occurred ??",1," Oh **** ",button|
+    ALERT 0,"Continue or QUIT ?",1,"Carry On| QUIT ",button|
+    IF button|<>2
+      RESUME NEXT
+    ELSE
+      GOTO quit_program
+    ENDIF
+  ENDIF
+  IF (ERR=FATAL OR ERR>=100) AND ERR<>0  !bombs and worse
+    ALERT 0,"Error "+STR$(ERR)+" occurred ??",1," Oh **** ",button|
+    ALERT 0,"This was a BAD ERROR (Bombs?)",1," Bye Bye ",button|
+  ENDIF
+  ' Quit: free the resource, switch the keyboard click back on and end.
+quit_program:
+  ~RSRC_FREE()
+  ~FRE(0)
+  SPOKE 1156,BSET(PEEK(1156),0)  !conterm ($484): key click on
+  ON ERROR  !back to GFA's own error handling
+  END
+RETURN
+' ---------------------------------------------------------------------------
+' Splits a path ("A:\FOLDER\NAME.EXT") into its drive, folder, name and
+' extension.  A path without a drive gets the current drive.
+' ---------------------------------------------------------------------------
+PROCEDURE split_path(path_in$,VAR path_drive$,path_folder$,path_name$,path_extension$)
+  LOCAL path_pos,path_first,path_last,path_done!,path_found,path_file$
+  path_in$=UPPER$(path_in$)
+  IF MID$(path_in$,2,1)=":"  !a drive is given
+    path_drive$=LEFT$(path_in$,1)
+  ELSE
+    path_drive$=CHR$(65+GEMDOS(25))  !Dgetdrv: the current drive
+  ENDIF
+  path_pos=1
+  path_done!=FALSE
+  path_last=0
+  path_first=INSTR(1,path_in$,"\")  !the first backslash
+  ' Find the last backslash: everything after it is the file name.
+  REPEAT
+    path_found=INSTR(path_pos,path_in$,"\")
+    IF path_found>0
+      path_pos=path_found+1
+      path_last=path_found
+    ELSE
+      path_done!=TRUE
+    ENDIF
+  UNTIL path_done!
+  IF path_last>0
+    path_folder$=MID$(path_in$,path_first,path_last-path_first+1)  !the folder with its backslashes
+    path_file$=MID$(path_in$,path_last+1)
+  ELSE
+    path_folder$=""  !no folder: the name follows the drive, if any
+    path_pos=INSTR(1,path_in$,":")
+    IF path_pos>0
+      path_file$=MID$(path_in$,path_pos+1)
+    ELSE
+      path_file$=path_in$
+    ENDIF
+  ENDIF
+  ' The extension follows the dot.
+  path_pos=INSTR(path_file$,".")
+  IF path_pos>0
+    path_extension$=MID$(path_file$,path_pos+1)
+    path_name$=LEFT$(path_file$,path_pos-1)
+  ELSE
+    path_extension$=""
+    path_name$=path_file$
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Loads MULTI_V2.RSC and finds the address of each dialog tree.
+' ---------------------------------------------------------------------------
+PROCEDURE load_resource
+  ~RSRC_FREE()
+  rsc_loaded!=RSRC_LOAD("multi_v2.rsc")
+  IF rsc_loaded!=FALSE
+    ALERT 0," RSC file not found!  ",1," Oh! ",button|
+    error_handler  !no resource: quit
+  ENDIF
+  ' The tree numbers of the dialogs and the objects in them.
+  tree_credits&=0  !the credits box shown at the start
+  credits_line&=3
+  credits_ok&=4
+  tree_menu&=1  !the main menu
+  menu_credits&=1
+  menu_about&=3
+  menu_depack&=4
+  menu_memory&=5
+  menu_greetings&=6
+  menu_quit&=7
+  tree_info&=2  !the box describing the file before it is depacked
+  info_packer&=5
+  info_file_length&=9
+  info_type&=7
+  info_packed_length&=11
+  info_unpacked_length&=13
+  info_ok&=14
+  info_cancel&=15
+  info_disabled&=16
+  tree_memory&=3  !free memory and TOS version
+  memory_free&=3
+  memory_tos&=5
+  memory_ok&=6
+  tree_about&=4
+  about_ok&=11
+  tree_greetings&=5
+  greetings_secret&=1
+  greetings_ok&=9
+  tree_unused&=6  !a dialog no code shows
+  ' Object numbers set but not used.
+  object_2&=2
+  object_3&=3
+  object_4&=4
+  object_5&=5
+  object_6&=6
+  object_7&=7
+  object_8&=8
+  ' The address of each tree.
+  ~RSRC_GADDR(0,tree_credits&,credits_tree%)
+  ~RSRC_GADDR(0,tree_menu&,menu_tree%)
+  ~RSRC_GADDR(0,tree_info&,info_tree%)
+  ~RSRC_GADDR(0,tree_memory&,memory_tree%)
+  ~RSRC_GADDR(0,tree_about&,about_tree%)
+  ~RSRC_GADDR(0,tree_greetings&,greetings_tree%)
+  ~RSRC_GADDR(0,tree_unused&,unused_tree%)
+  OB_STATE(info_tree%,info_disabled&)=BSET(OB_STATE(info_tree%,info_disabled&),3)  !greyed out (DISABLED)
+RETURN
+' ---------------------------------------------------------------------------
+' Shows a dialog: centres it, saves the screen behind it in background$ (the
+' caller puts it back with PUT) and draws it.
+' ---------------------------------------------------------------------------
+PROCEDURE open_dialog(VAR dialog_tree%)
+  ~FORM_CENTER(dialog_tree%,dialog_x&,dialog_y&,dialog_w&,dialog_h&)
+  GET dialog_x&,dialog_y&,dialog_x&+dialog_w&,dialog_y&+dialog_h&,background$  !the screen behind the dialog
+  ~OBJC_DRAW(dialog_tree%,0,7,dialog_x&,dialog_y&,dialog_w&,dialog_h&)
+RETURN
+' The information box.
+PROCEDURE about_dialog
+  OB_STATE(about_tree%,about_ok&)=BCLR(OB_STATE(about_tree%,about_ok&),0)  !the OK button not selected
+  open_dialog(about_tree%)
+  exit_object&=FORM_DO(about_tree%,0)
+  PUT dialog_x&,dialog_y&,background$
+RETURN
+' The greetings box, with a hidden button for the curious.
+PROCEDURE greetings_dialog
+  OB_STATE(greetings_tree%,greetings_ok&)=BCLR(OB_STATE(greetings_tree%,greetings_ok&),0)
+  OB_STATE(greetings_tree%,greetings_secret&)=BCLR(OB_STATE(greetings_tree%,greetings_secret&),0)
+  open_dialog(greetings_tree%)
+  exit_object&=FORM_DO(greetings_tree%,0)
+  IF exit_object&=greetings_secret&
+    ALERT 0,"You looking for something ?| |In the next update there|might be something under here ...",1,"Oh yeah?",button|
+  ENDIF
+  PUT dialog_x&,dialog_y&,background$
+RETURN
+' ---------------------------------------------------------------------------
+' The main menu: Credits, About, Memory, Greetings, Quit and Depack.  Returns
+' when Depack is chosen.  Esc shows the credits again.
+' ---------------------------------------------------------------------------
+PROCEDURE main_menu
+menu_again:
+  DO
+    ' All buttons not selected.
+    OB_STATE(menu_tree%,menu_about&)=BCLR(OB_STATE(menu_tree%,menu_about&),0)
+    OB_STATE(menu_tree%,menu_depack&)=BCLR(OB_STATE(menu_tree%,menu_depack&),0)
+    OB_STATE(menu_tree%,menu_quit&)=BCLR(OB_STATE(menu_tree%,menu_quit&),0)
+    OB_STATE(menu_tree%,menu_memory&)=BCLR(OB_STATE(menu_tree%,menu_memory&),0)
+    OB_STATE(menu_tree%,menu_credits&)=BCLR(OB_STATE(menu_tree%,menu_credits&),0)
+    open_dialog(menu_tree%)
+    exit_object&=FORM_DO(menu_tree%,0)
+    IF INKEY$=CHR$(27)  !Esc
+      PUT dialog_x&,dialog_y&,background$
+      credits_dialog(credits_text$)
+      GOTO menu_again
+    ENDIF
+    IF exit_object&=menu_quit&
+      ALERT 0,"Are you positive ?",1," Yes | NO ",button|
+      IF button|=1
+        OB_STATE(menu_tree%,menu_quit&)=BCLR(OB_STATE(menu_tree%,menu_quit&),0)
+        PUT dialog_x&,dialog_y&,background$
+        error_handler
+      ELSE
+        OB_STATE(menu_tree%,menu_quit&)=BCLR(OB_STATE(menu_tree%,menu_quit&),0)
+        PUT dialog_x&,dialog_y&,background$
+        GOTO menu_again
+      ENDIF
+    ENDIF
+    IF exit_object&=menu_about&
+      OB_STATE(menu_tree%,menu_about&)=BCLR(OB_STATE(menu_tree%,menu_about&),0)
+      PUT dialog_x&,dialog_y&,background$
+      about_dialog
+      GOTO menu_again
+    ENDIF
+    IF exit_object&=menu_memory&
+      OB_STATE(menu_tree%,menu_memory&)=BCLR(OB_STATE(menu_tree%,menu_memory&),0)
+      PUT dialog_x&,dialog_y&,background$
+      memory_dialog
+      GOTO menu_again
+    ENDIF
+    IF exit_object&=menu_credits&
+      OB_STATE(menu_tree%,menu_depack&)=BCLR(OB_STATE(menu_tree%,menu_depack&),0)
+      PUT dialog_x&,dialog_y&,background$
+      credits_dialog(credits_text$)
+      GOTO menu_again
+    ENDIF
+    EXIT IF exit_object&<>menu_greetings&  !anything else is Depack
+    OB_STATE(menu_tree%,menu_greetings&)=BCLR(OB_STATE(menu_tree%,menu_greetings&),0)
+    PUT dialog_x&,dialog_y&,background$
+    greetings_dialog
+  LOOP
+  IF exit_object&=menu_depack&
+    OB_STATE(menu_tree%,menu_depack&)=BCLR(OB_STATE(menu_tree%,menu_depack&),0)
+    PUT dialog_x&,dialog_y&,background$
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Asks for the packed file and loads it whole into a GEMDOS buffer
+' (file_buffer%, file_length% bytes).
+' ---------------------------------------------------------------------------
+PROCEDURE load_packed_file
+  CLS
+  LOCATE 28,2
+  PRINT "pSelect packed file !!q"
+  FILESELECT load_path$+"*.*","",load_file$
+  ' Remember the folder for next time and the name as the default save name.
+  split_path(load_file$,drive$,folder$,file_name$,extension$)
+  load_path$=drive$+":"+folder$
+  default_name$=file_name$+"."+extension$
+  drive$=""
+  folder$=""
+  file_name$=""
+  extension$=""
+  IF load_file$=""  !Cancel
+    ALERT 0," Cancel was selected !! | | Returning to menu !!",1," OK ",button|
+    abort!=TRUE
+    GOTO load_done
+  ENDIF
+  IF NOT EXIST(load_file$)
+    ALERT 0,"File not found",1," Oh ..",button|
+    abort!=TRUE
+    GOTO load_done
+  ENDIF
+  OPEN "u",#1,load_file$
+  file_length%=LOF(1)
+  IF file_length%<=12  !too short for any packer's header
+    ALERT 0,"File is much too small to|be a packed file !!",1," Error !",button|
+    CLOSE #1
+    abort!=TRUE
+    GOTO load_done
+  ENDIF
+  free_memory%=GEMDOS(72,L:-1)  !Malloc(-1): the largest free block
+  IF file_length%>=free_memory%
+    ALERT 0,"Not enough memory to load|in this particular file !!",1," Oh ... ",button|
+    abort!=TRUE
+    CLOSE #1
+    GOTO load_done
+  ENDIF
+  file_buffer%=GEMDOS(72,L:file_length%)
+  BGET #1,file_buffer%,file_length%
+  CLOSE #1
+  ' Clear the title line.
+load_done:
+  LOCATE 28,2
+  PRINT "                     "
+RETURN
+' ---------------------------------------------------------------------------
+' Finds out which packer made the file and sets depacker% (the routine),
+' packer_name$ and data_offset% (where the packed data starts).
+'
+' A data file starts with the packer's identifier (the first long, compared as
+' a word under $S&).  Some packers put theirs at the end of the file.  A
+' program ($601A) keeps the depacker in front of the data, so its identifier
+' is looked for at the offset each packer's depack code puts it.
+' ---------------------------------------------------------------------------
+PROCEDURE identify_packer
+  file_start%=file_buffer%
+  file_end%=file_buffer%+file_length%
+  IF DPEEK(file_start%)=24602  !$601A: a program file
+    executable!=TRUE
+  ELSE
+    executable!=FALSE
+  ENDIF
+  ' A data file: the identifier at the start.
+  IF executable!=FALSE
+    $S&
+    $S<
+    SELECT LPEEK(file_start%)
+      '
+    CASE "D!"  !LSD!
+      depacker%=automation_v24%
+      packer_name$="Automation v2.4/2.51r"
+      data_offset%=0
+      GOTO identify_done
+    CASE "CS"
+      depacker%=automation_v24%
+      packer_name$="STCS Packer (LSD! clone ?)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "D$"
+      depacker%=automation_v24%
+      packer_name$="Automation v2.51 (Buffer)"
+      data_offset%=0
+      LONG{file_start%}=1280525345  !LSD! for the depacker
+      GOTO identify_done
+    CASE "DC"
+      depacker%=automation_v251_chunked%
+      packer_name$="Automation v2.51 (Chunked)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "e!"  !Ice!
+      depacker%=ice_v22%
+      packer_name$="Ice Packer v2.2 (or previous)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "E!"  !ICE!
+      depacker%=ice_v240%
+      packer_name$="Ice Packer v2.40 (or previous)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "RE"  !FIRE
+      depacker%=fire_v201%
+      packer_name$="Fire Packer v2.01"
+      data_offset%=0
+      GOTO identify_done
+    CASE "5!"  !AU5!
+      depacker%=automation_v501%
+      packer_name$="Automation v5.01 (NORM)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "5$"
+      depacker%=automation_v501%
+      packer_name$="Automation v5.01 (BUFF)"
+      data_offset%=0
+      LONG{file_start%}=1096103201  !AU5! for the depacker
+      GOTO identify_done
+    CASE "5C"
+      depacker%=automation_v501_chunked%
+      packer_name$="Automation v5.01 (Chunked)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "OM"  !ATOM: v3.1 and v3.3 use the same identifier
+      ALERT 0,"ATOMIK Packer Data File !!| Which version shall I depack|this data file as ??",1," v3.1 | v3.3 ",button|
+      IF button|=1
+        depacker%=atomik_v31%
+        packer_name$="Atomik Packer v3.1"
+      ELSE
+        depacker%=atomik_v33%
+        packer_name$="Atomik Packer v3.3"
+      ENDIF
+      data_offset%=0
+      GOTO identify_done
+    CASE "M5"  !ATM5
+      depacker%=atomik_v35%
+      packer_name$="Atomik Packer v3.5"
+      data_offset%=0
+      GOTO identify_done
+    CASE "H!"  !LZH!
+      depacker%=jam_lzh%
+      packer_name$="JAM Packer 4.0 (LZH)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "W!"  !LZW!
+      depacker%=jam_lzw%
+      packer_name$="JAM Packer 4.0 (LZW)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "K!"  !a JAM disk-pack file
+      ALERT 0,"This is a disk-pack file|using: JAM Packer v3.0/v4.0|You cannot unpack these without|using the original packer program.",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    CASE "20"  !PP20 (the next CASE "20" is never reached)
+      depacker%=powerpacker%
+      packer_name$="Powerpacker v2.0/v3.0/v4.0"
+      data_offset%=0
+      GOTO identify_done
+    CASE "20"
+      depacker%=speed_v20%
+      packer_name$="Speed Packer v2.0"
+      data_offset%=0
+      GOTO identify_done
+    CASE "v3"
+      depacker%=speed_v30%
+      packer_name$="Speed Packer v3.0"
+      data_offset%=0
+      GOTO identify_done
+    CASE 17153  !RNC
+      depacker%=rnc%
+      packer_name$="RNC Packer (?)"
+      data_offset%=0
+      GOTO identify_done
+    CASE "FI","P!"
+      depacker%=chfi_imp%
+      packer_name$="CHFI/IMP Packer ??"
+      data_offset%=0
+      LONG{file_start%}=1229803553  !IMP! for the depacker
+      GOTO identify_done
+    ENDSELECT
+    ' Not found at the start: some packers put their identifier at the end.
+    background$=SPACE$(4)
+    BMOVE file_end%-4,V:background$,4
+    temp_address%=V:background$
+    SELECT LPEEK(temp_address%)
+      '
+    CASE "re"
+      depacker%=fire_v101%
+      packer_name$="Fire Packer v1.01"
+      data_offset%=0
+      GOTO identify_done
+    CASE "e!"
+      depacker%=ice_v113%
+      packer_name$="Ice Packer v1.13"
+      data_offset%=0
+      GOTO identify_done
+    CASE "PI"
+      depacker%=pompey_v19%
+      packer_name$="Pompey Packer v1.9"
+      data_offset%=0
+      GOTO identify_done
+    CASE "IC"
+      depacker%=txic%
+      packer_name$="'TXIC' packer !!"
+      data_offset%=0
+      GOTO identify_done
+    CASE "WN"
+      depacker%=pawn%
+      packer_name$="Pawn (Ivory Dragon) packer"
+      data_offset%=0
+      GOTO identify_done
+    CASE "t2"
+      depacker%=sentry%
+      packer_name$="Sentry v2.05 packer"
+      data_offset%=0
+      GOTO identify_done
+    ENDSELECT
+    ' Not a packed file: name the archives and other file types it might be.
+    IF DPEEK(file_start%)=6664 OR LPEEK(file_start%+2)=762079281 OR LPEEK(file_start%)=1347093252 OR LPEEK(file_start%+2)=762079285 OR LPEEK(file_start%)=1515147040  !ARC, LZH, ZIP, ZOO
+      ALERT 0,"Multi Depacker v2.0 does not|support ARCHIVED files such as|ARC, LZH, ZIP or ZOO ",1," Oh ...",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1246776097  !JAM disk-pack
+      ALERT 0,"This is a disk-pack file done|with: JAM Packer v3.0/v4.0  You|have to use the original|packer to unpack this file.",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1130914159  !Chaos disk-pack
+      ALERT 0,"This is a disk-pack file done|with: Chaos v2.20  You|have to use the original|packer to unpack this file.",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=776882499  !Neodesk icons
+      ALERT 0,"This is a Neodesk Icon File !!",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1884108854  !STAD
+      ALERT 0,"This is a STAD vertically|packed picture file !!",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1884108853
+      ALERT 0,"This is a STAD horizontally|packed picture file !!",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1281978222  !STOS bank
+      ALERT 0,"This is a STOS memory|bank - Try using STOS !!",1," Oh ..",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%)=1179603533  !FORM: IFF
+      SELECT LPEEK(file_start%+8)
+        '
+      CASE "BM"
+        ALERT 0,"This is an IFF/ILBM picture|file - Try Dpaint ST !!",1," Oh ..",button|
+      CASE "VX"
+        ALERT 0,"This is an IFF/ILBM sample|file - Try a sample-editor !",1," Oh ..",button|
+      DEFAULT
+        ALERT 0,"This is an IFF/ILBM file !!",1," Oh ..",button|
+      ENDSELECT
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    ALERT 0,"Data file is not packed with|a recognised packer !!",1," Oh ... ",button|
+    abort!=TRUE
+    GOTO identify_done
+    ' A program file: look for each packer's identifier where its depack code
+    ' keeps it.  data_offset% is the length of that depack code.
+  ELSE
+    IF LPEEK(file_start%+30)=1348559723 AND LPEEK(file_start%+34)=759784293 AND LPEEK(file_start%+38)=543324448
+      ALERT 0,"Due to difficulties in my|calculations, I am unable to|unpack Ice v1.13 exec. files !!",1," Oh ... ",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    ' Ice v2.12 and before keep no identifier: write an ICE! header in front of the
+    ' packed data for the depacker.
+    IF LPEEK(file_start%+34)=759784293 AND LPEEK(file_start%+38)=1241186292
+      depacker%=ice_v22%
+      packer_name$="Ice Packer v2.12 (or previous)"
+      data_offset%=528
+      LONG{file_start%+528}=1231250721
+      LONG{file_start%+532}=file_length%-528
+      BMOVE file_start%+56,file_start%+536,4
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+448)=1229145377  !ICE! at +448
+      depacker%=ice_v234%
+      packer_name$="Ice Packer v2.34 (or previous)"
+      data_offset%=448
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+442)=1229145377
+      depacker%=ice_v240%
+      packer_name$="Ice Packer v2.40"
+      data_offset%=442
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+30)=1348559723 AND LPEEK(file_start%+34)=759589234 AND LPEEK(file_start%+38)=1696621177
+      ALERT 0,"Due to difficulties in my|calculations, I am unable to|unpack Fire v1.01 exec. files !!",1," Oh ... ",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+560)=1179210309  !FIRE at +560
+      depacker%=fire_v201%
+      packer_name$="Fire Packer v2.01"
+      data_offset%=560
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+452)=1231250721
+      depacker%=ice_v22%
+      packer_name$="Ice Packer v2.2"
+      data_offset%=452
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+836)=1096103201  !AU5!
+      depacker%=automation_v501%
+      packer_name$="Automation v5.01"
+      data_offset%=836
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+516)=1096044365 AND LPEEK(file_start%+522)=540225073  !ATOM
+      depacker%=atomik_v31%
+      packer_name$="Atomik v3.1"
+      data_offset%=534
+      LONG{file_start%+534}=1096044365
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+36)=809238909 AND LPEEK(file_start%+76)=1106903530
+      depacker%=atomik_v33%
+      packer_name$="Atomik v3.3"
+      data_offset%=564
+      LONG{file_start%+564}=1096044365
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+36)=1213220950
+      depacker%=atomik_v33%
+      packer_name$="Atomik v3.3B"
+      data_offset%=564
+      LONG{file_start%+564}=1096044365
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+36)=809238909 AND LPEEK(file_start%+76)=1106903618
+      depacker%=atomik_v35%
+      packer_name$="Atomik v3.5"
+      data_offset%=652
+      LONG{file_start%+652}=1096043829
+      atomik_byte|=PEEK(file_start%+663)
+      BYTE{file_start%+663}=atomik_byte|+1
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+748)=1280525345  !LSD!
+      depacker%=automation_v24%
+      packer_name$="JAM Packer v2.4/3.0 (V2)"
+      data_offset%=748
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+1170)=1280985121  !LZH!
+      depacker%=jam_lzh%
+      packer_name$="JAM Packer 3.0 (LZH)"
+      data_offset%=1170
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+544)=1280988961
+      depacker%=jam_lzw%
+      packer_name$="JAM Packer 4.0 (LZW)"
+      data_offset%=544
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+1194)=1280985121
+      depacker%=jam_lzh%
+      packer_name$="JAM Packer 4.0 (LZH)"
+      data_offset%=1194
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+758)=1280525345
+      depacker%=automation_v24%
+      packer_name$="JAM Packer v4.0 (V2)"
+      data_offset%=758
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+712)=1231250721
+      depacker%=ice_v22%
+      packer_name$="JAM Packer v4.0 (Ice)"
+      data_offset%=712
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+822)=1280525345
+      depacker%=automation_v24%
+      packer_name$="Automation v2.3/v2.4/2.51r"
+      data_offset%=822
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+542)=1397764656
+      depacker%=speed_v20%
+      packer_name$="Speed Packer v2.0"
+      data_offset%=542
+      GOTO identify_done
+    ENDIF
+    ' Speed Packer v3.0 programs have no program header: give the data one.
+    IF LPEEK(file_start%+28)=1312912947
+      ALERT 0,"Speed Packer v3.0 programs|contain NO program file|header !!  Are you sure|you want to depack it ?",1," Yes | No ",button|
+      IF button|=1
+        depacker%=speed_v30%
+        packer_name$="Speed Packer v3.0"
+        data_offset%=28
+        CARD{file_start%+28}=21328
+      ELSE
+        abort!=TRUE
+      ENDIF
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+530)=88302435
+      depacker%=sentry_exec%
+      packer_name$="Sentry Packer v2.05"
+      data_offset%=536
+      GOTO identify_done
+    ENDIF
+    IF LPEEK(file_start%+586)=1380860673  !RNC
+      depacker%=rnc%
+      packer_name$="RNC Packer (?)"
+      data_offset%=586
+      GOTO identify_done
+    ENDIF
+    background$=SPACE$(4)
+    ' Pompey Packer keeps its identifier at the end.
+    BMOVE file_end%-8,V:background$,4
+    temp_address%=V:background$
+    IF LPEEK(temp_address%)=1347375177
+      ALERT 0,"This version will NOT depack|executable files packed with|the Pompey Packer v1.9a !! ",1," Sorry ",button|
+      abort!=TRUE
+      GOTO identify_done
+    ENDIF
+    ALERT 0,"Program file was NOT|packed with a recognised|file packer !!",1," Oh ... ",button|
+    abort!=TRUE
+  ENDIF
+identify_done:
+  IF abort!=TRUE  !not recognised or cancelled: free the file
+    free_file_buffer
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Depacks the file: reads the packed and unpacked lengths from the packer's
+' header, shows the info box, gets a buffer for the unpacked file, calls the
+' depack routine and saves the result.
+' ---------------------------------------------------------------------------
+' The lengths: where each packer keeps them.
+PROCEDURE depack_file
+  $S%
+  SELECT depacker%
+    '
+  CASE pompey_v19%
+    BMOVE file_end%-8,temp_address%,4
+    unpacked_length%=LPEEK(temp_address%)
+    BMOVE file_end%-12,temp_address%,4
+    packed_length%=LPEEK(temp_address%)
+  CASE fire_v101%,ice_v113%
+    packed_length%=file_length%
+    BMOVE file_end%-8,temp_address%,4
+    unpacked_length%=LPEEK(temp_address%)
+  CASE atomik_v31%,atomik_v33%,atomik_v35%
+    packed_length%=LPEEK(file_start%+data_offset%+8)
+    unpacked_length%=LPEEK(file_start%+data_offset%+4)
+  CASE jam_lzh%,jam_lzw%
+    packed_length%=LPEEK(file_start%+data_offset%+8)
+    unpacked_length%=LPEEK(file_start%+data_offset%+4)
+  CASE automation_v501_chunked%,automation_v251_chunked%
+    unpacked_length%=LPEEK(file_start%+data_offset%+4)
+    packed_length%=file_length%
+  CASE automation_v24%
+    packed_length%=LPEEK(file_start%+data_offset%+8)
+    unpacked_length%=LPEEK(file_start%+data_offset%+4)
+    ADD packed_length%,4
+  CASE speed_v20%,speed_v30%
+    packed_length%=LPEEK(file_start%+data_offset%+8)
+    unpacked_length%=LPEEK(file_start%+data_offset%+12)
+  CASE rnc%,chfi_imp%
+    packed_length%=LPEEK(file_start%+data_offset%+8)
+    unpacked_length%=LPEEK(file_start%+data_offset%+4)
+  CASE txic%
+    packed_length%=file_length%
+    BMOVE file_end%-8,temp_address%,4
+    unpacked_length%=LPEEK(temp_address%)
+  CASE pawn%
+    packed_length%=file_length%
+    BMOVE file_end%-8,temp_address%,4
+    unpacked_length%=LPEEK(temp_address%)
+  CASE sentry%
+    packed_length%=file_length%-data_offset%
+    IF executable!=TRUE
+      unpacked_length%=LPEEK(file_start%+258)
+    ELSE
+      original$=SPACE$(4)
+      swapped$=SPACE$(4)
+      BMOVE file_end%-8,V:original$,4
+      out_index|=FALSE
+      index|=3
+      REPEAT
+        BYTE{out_index|+V:swapped$}=PEEK(index|+V:original$)
+        INC out_index|
+        DEC index|
+      UNTIL out_index|=4
+      unpacked_length%=LPEEK(V:swapped$)
+      original$=""
+      swapped$=""
+      index|=FALSE
+      out_index|=FALSE
+      spare|=FALSE
+    ENDIF
+  CASE powerpacker%
+    packed_length%=file_length%
+    background$=SPACE$(4)
+    temp_address%=V:background$
+    BMOVE file_end%-4,temp_address%,4
+    temp%=LPEEK(temp_address%)
+    unpacked_length%=SHR(temp%,8)
+  DEFAULT
+    packed_length%=LPEEK(file_start%+data_offset%+4)
+    unpacked_length%=LPEEK(file_start%+data_offset%+8)
+  ENDSELECT
+  ' A packed length beyond the end of the file: the file is cut short.
+  IF packed_length%>file_length%
+    ALERT 0,"File length is shorter than|it should be !!",2," Ignore | Cancel ",button|
+    IF button|=2
+      free_file_buffer
+      GOTO depack_done
+    ELSE
+      ALERT 0,"This might cause the depack|routines to bomb out !!!",1," Oh ... ",button|
+    ENDIF
+  ENDIF
+  depack_info_dialog  !OK or Cancel
+  IF abort!=TRUE
+    free_buffers
+    GOTO depack_done
+  ENDIF
+  clear_registers
+  old_stack%=GEMDOS(32,L:0)  !Super: the depack code changes the palette
+  old_colour0&=DPEEK(16745024)  !colour 0 ($FF8240), which the depackers flash
+  unpack_buffer%=GEMDOS(72,L:unpacked_length%)
+  IF unpack_buffer%=0  !no memory for the unpacked file
+    ALERT 0,"I'm afraid that there is|not enough memory in this|machine to depack this|file - Sorry !!",1," Oh .... ",button|
+    free_buffers
+    ~GEMDOS(32,L:old_stack%)
+    GOTO depack_done
+  ENDIF
+  ' Each depack routine wants its source, destination and lengths in its own
+  ' registers (registers%(8) is a0, registers%(9) a1 ...).
+  SELECT depacker%
+    '
+  CASE fire_v201%
+    BMOVE file_start%+data_offset%,unpack_buffer%,file_length%
+    registers%(8)=unpack_buffer%
+  CASE speed_v20%,speed_v30%
+    BMOVE file_start%+data_offset%,unpack_buffer%,file_length%
+    IF LPEEK(unpack_buffer%+4)=0
+      LONG{unpack_buffer%+4}=1383
+    ENDIF
+    registers%(8)=unpack_buffer%
+  CASE rnc%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+    registers%(10)=file_length%
+  CASE powerpacker%
+    registers%(8)=file_start%+file_length%
+    registers%(11)=unpack_buffer%
+    registers%(13)=file_start%+4
+    registers%(14)=16745024
+  CASE ice_v113%
+    BMOVE file_start%+data_offset%,unpack_buffer%,file_length%
+    registers%(8)=unpack_buffer%
+    registers%(0)=file_length%
+  CASE atomik_v31%
+    registers%(8)=file_start%+data_offset%
+    registers%(13)=unpack_buffer%
+  CASE jam_lzh%
+    registers%(13)=file_start%+data_offset%
+    registers%(14)=unpack_buffer%
+  CASE jam_lzw%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+  CASE txic%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+    registers%(0)=file_length%
+  CASE pawn%
+    BMOVE file_start%+data_offset%,unpack_buffer%,file_length%
+    registers%(8)=file_start%+data_offset%
+    registers%(6)=file_length%
+  CASE pompey_v19%
+    registers%(12)=file_end%
+    registers%(10)=unpack_buffer%
+  CASE fire_v101%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+    registers%(0)=file_length%
+  CASE sentry%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+    registers%(0)=file_length%
+  CASE automation_v501_chunked%,automation_v251_chunked%
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+    registers%(14)=file_start%+data_offset%
+  DEFAULT
+    registers%(8)=file_start%+data_offset%
+    registers%(9)=unpack_buffer%
+  ENDSELECT
+  RCALL depacker%,registers%()  !depack
+  CARD{16745024}=old_colour0&
+  ~GEMDOS(32,L:old_stack%)
+  IF NOT executable!
+    ' A depacked data file: offer to show it as a picture or a text.
+    check_picture
+    ALERT 0,"Do you want to view this|file as a text file ?",1," Yes | No ",button|
+    IF button|=1
+      view_text
+    ENDIF
+  ENDIF
+  ' Save the unpacked file.
+save_unpacked:
+  CLS
+  LOCATE 30,2
+  PRINT "pSelect unpacked file !!q"
+  FILESELECT save_path$+"*.*",default_name$,save_file$
+  IF save_file$=""
+    ALERT 0," Cancel was selected !! | | Returning to menu !!",1," OK !! ",button|
+    free_buffers
+    GOTO depack_done
+  ENDIF
+  IF EXIST(save_file$)
+    ALERT 0,"File already exists !!| | Overwrite or cancel ??? ",2,"Continue| Menu ",button|
+    IF button|=2
+      free_buffers
+      GOTO depack_done
+    ENDIF
+  ENDIF
+  OPEN "o",#1,save_file$
+  BPUT #1,unpack_buffer%,unpacked_length%
+  CLOSE #1
+  split_path(save_file$,drive$,folder$,file_name$,extension$)
+  save_path$=drive$+":"+folder$
+  drive$=""
+  folder$=""
+  file_name$=""
+  extension$=""
+depack_done:
+  LOCATE 30,2
+  PRINT "                        "
+  PUT dialog_x&,dialog_y&,background$
+RETURN
+' ---------------------------------------------------------------------------
+' The box describing the file: packer, type and the three lengths.  Cancel
+' sets abort!.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_info_dialog
+  OB_STATE(info_tree%,info_ok&)=BCLR(OB_STATE(info_tree%,info_ok&),0)
+  OB_STATE(info_tree%,info_cancel&)=BCLR(OB_STATE(info_tree%,info_cancel&),0)
+  CHAR{LONG{OB_SPEC(info_tree%,info_packer&)}}=packer_name$
+  IF executable!=TRUE
+    CHAR{LONG{OB_SPEC(info_tree%,info_type&)}}="Executable"
+  ELSE
+    CHAR{LONG{OB_SPEC(info_tree%,info_type&)}}="Data"
+  ENDIF
+  CHAR{LONG{OB_SPEC(info_tree%,info_file_length&)}}=STR$(file_length%)
+  CHAR{LONG{OB_SPEC(info_tree%,info_packed_length&)}}=STR$(packed_length%)
+  CHAR{LONG{OB_SPEC(info_tree%,info_unpacked_length&)}}=STR$(unpacked_length%)
+  open_dialog(info_tree%)
+  exit_object&=FORM_DO(info_tree%,0)
+  IF exit_object&=info_cancel&
+    abort!=TRUE
+    PUT dialog_x&,dialog_y&,background$
+  ENDIF
+RETURN
+' The free memory and TOS version box.
+PROCEDURE memory_dialog
+  temp%=GEMDOS(72,L:-1)  !Malloc(-1): the largest free block
+  OB_STATE(memory_tree%,memory_ok&)=BCLR(OB_STATE(memory_tree%,memory_ok&),0)
+  CHAR{LONG{OB_SPEC(memory_tree%,memory_free&)}}=STR$(temp%)+" bytes"
+  CHAR{LONG{OB_SPEC(memory_tree%,memory_tos&)}}=tos_version$
+  open_dialog(memory_tree%)
+  ~FORM_DO(memory_tree%,0)
+  PUT dialog_x&,dialog_y&,background$
+RETURN
+' The credits box, with the line of text centred in its 38 characters.
+PROCEDURE credits_dialog(credits_line_text$)
+  padding|=38-LEN(credits_line_text$)
+  padding|=padding| DIV 2
+  centred_text$=STRING$(padding|," ")+credits_line_text$+STRING$(padding|," ")
+  CHAR{OB_SPEC(credits_tree%,credits_line&)}=centred_text$
+  OB_STATE(credits_tree%,credits_ok&)=BCLR(OB_STATE(credits_tree%,credits_ok&),0)
+  open_dialog(credits_tree%)
+  ~FORM_DO(credits_tree%,0)
+  PUT dialog_x&,dialog_y&,background$
+RETURN
+' Gives both file buffers back to GEMDOS (Mfree).
+PROCEDURE free_buffers
+  ~GEMDOS(73,L:file_buffer%)
+  ~GEMDOS(73,L:unpack_buffer%)
+  clear_registers
+RETURN
+' Gives the packed file's buffer back to GEMDOS (Mfree).
+PROCEDURE free_file_buffer
+  ~GEMDOS(73,L:file_buffer%)
+  clear_registers
+RETURN
+' Clears the RCALL registers.
+PROCEDURE clear_registers
+  FOR index|=FALSE TO 15
+    registers%(index|)=0
+  NEXT index|
+RETURN
+' ---------------------------------------------------------------------------
+' Saves a part of the unpacked file as a file of its own.  Not called in this
+' version.
+' ---------------------------------------------------------------------------
+PROCEDURE save_split_file(split_length%,VAR split_address%)
+  CLS
+  LOCATE 28,2
+  PRINT "pSelect split-file !!q"
+  FILESELECT load_path$+"*.*","",load_file$
+  split_path(load_file$,drive$,folder$,file_name$,extension$)
+  load_path$=drive$+":"+folder$
+  default_name$=file_name$+"."+extension$
+  drive$=""
+  folder$=""
+  file_name$=""
+  extension$=""
+  IF load_file$=""
+    ALERT 0,"Cancel was selected !! | Try again, or quit ?",1," Retry | Quit ",button|
+    IF button|=2
+      error_handler
+    ELSE
+      abort!=TRUE
+      GOTO split_done
+    ENDIF
+  ENDIF
+  IF EXIST(load_file$)
+    ALERT 0,"File already exists !!",1," Oh ..",button|
+    abort!=TRUE
+    GOTO split_done
+  ENDIF
+  OPEN "o",#1,load_file$
+  BPUT #1,split_address%,split_length%
+  CLOSE #1
+  ALERT 0,"Split-file now saved OK|Please retry depack option !!",1," OK ",button|
+  LOCATE 28,2
+  PRINT "                    "
+split_done:
+RETURN
+' ---------------------------------------------------------------------------
+' The credits line, the load and save paths (the current drive and folder),
+' the TOS version and the RCALL register array.
+' ---------------------------------------------------------------------------
+PROCEDURE initialise
+  credits_text$="Spread by: MUG U.K¿ in 1993"
+  load_path$=CHR$(65+GEMDOS(25))+":"+DIR$(0)+"\"
+  save_path$=CHR$(65+GEMDOS(25))+":"+DIR$(0)+"\"
+  tos_version$=HEX$(DPEEK(LPEEK(1266)+2))  !_sysbase ($4F2) + 2: the TOS version word
+  temp_text$=LEFT$(tos_version$,1)+"."+RIGHT$(tos_version$,1)
+  tos_version$=temp_text$  !as "1.4"
+  temp_text$=""
+  DIM registers%(16)
+RETURN
+' Waits for a key or a mouse click.
+PROCEDURE wait_key_or_click
+  REPEAT
+    EXIT IF INKEY$<>""
+  UNTIL MOUSEK
+RETURN
+' ---------------------------------------------------------------------------
+' A depacked file that may be a picture: by its extension (Degas PI1 / PI2 /
+' PI3, Neochrome NEO) or by its length (32034, 32066 or 32128 bytes).  Offers
+' to show it.
+' ---------------------------------------------------------------------------
+PROCEDURE check_picture
+  IF (RIGHT$(load_file$,3)="PI1") OR (RIGHT$(load_file$,3)="PI2") OR (RIGHT$(load_file$,3)="PI3") OR (RIGHT$(load_file$,3)="NEO")
+    ALERT 0,"Save file or view picture ?",1," Save | View ",button|
+    IF button|=1
+      GOTO picture_done
+    ELSE
+      $S&
+      ' Where the palette and the picture start, and the picture's resolution.
+      SELECT RIGHT$(load_file$,3)
+        '
+      CASE "I1"
+        palette_offset%=2
+        picture_offset%=34
+        picture_rez&=0
+      CASE "I2"
+        palette_offset%=2
+        picture_offset%=34
+        picture_rez&=1
+      CASE "I3"
+        palette_offset%=2
+        picture_offset%=34
+        picture_rez&=2
+      CASE "EO"
+        palette_offset%=2
+        picture_offset%=128
+        picture_rez&=0
+      ENDSELECT
+      show_picture
+    ENDIF
+    GOTO picture_done
+  ELSE
+    GOTO check_picture_length
+  ENDIF
+  ' No picture extension: try the length.
+check_picture_length:
+  IF unpacked_length%=32034 OR unpacked_length%=32066 OR unpacked_length%=32128
+    ALERT 0,"Could be a picture file !!| |Save file or view picture ?",1," Save | View ",button|
+    IF button|=1
+      GOTO picture_done
+    ELSE
+      ' The 32066-byte Degas file is written as the string "}B" (32066).
+      SELECT unpacked_length%
+        '
+      CASE 32034
+        palette_offset%=2
+        picture_offset%=34
+        picture_rez&=DPEEK(unpack_buffer%)
+      CASE "}B"
+        palette_offset%=2
+        picture_offset%=34
+        picture_rez&=DPEEK(unpack_buffer%)
+      CASE 32128
+        palette_offset%=2
+        picture_offset%=128
+        picture_rez&=0
+      ENDSELECT
+      show_picture
+    ENDIF
+  ENDIF
+picture_done:
+  picture_rez&=0
+  palette_offset%=0
+  picture_offset%=0
+RETURN
+' ---------------------------------------------------------------------------
+' Shows the depacked picture: switches to its resolution, sets its palette,
+' copies it to the screen and waits for a key or a click.
+' ---------------------------------------------------------------------------
+PROCEDURE show_picture
+  screen_rez&=XBIOS(4)  !Getrez
+  IF picture_rez&=2 AND screen_rez&<>2
+    ALERT 0,"You cannot view mono|pictures in colour .. yet !",1," OK ",button|
+    GOTO save_unpacked
+  ENDIF
+  IF picture_rez&<2 AND screen_rez&=2
+    ALERT 0,"You cannot view colour|pictures in mono .. yet !",1," OK ",button|
+    GOTO save_unpacked
+  ENDIF
+  IF picture_rez&<>screen_rez&
+    ~XBIOS(5,L:-1,L:-1,picture_rez&)  !Setscreen: the picture's resolution
+  ENDIF
+  CLS
+  old_stack%=GEMDOS(32,L:0)
+  BMOVE 16745024,saved_palette%,32  !save the palette ($FF8240)
+  BMOVE unpack_buffer%+palette_offset%,16745024,32
+  BMOVE unpack_buffer%+picture_offset%,XBIOS(2),32000  !the picture to the screen (Physbase)
+  wait_key_or_click
+  BMOVE saved_palette%,16745024,32  !the palette back
+  ~GEMDOS(32,L:old_stack%)
+  ~XBIOS(5,L:-1,L:-1,screen_rez&)
+  CLS
+RETURN
+' ---------------------------------------------------------------------------
+' Shows the depacked file as text, a page (20 lines) at a time.  A linefeed
+' without a carriage return beside it gets one.  Esc stops.
+' ---------------------------------------------------------------------------
+PROCEDURE view_text
+  CLS
+  need_cr!=FALSE
+  line_count&=0
+  FOR text_address%=unpack_buffer% TO unpack_buffer%+unpacked_length%
+    char$=CHR$(PEEK(text_address%))
+    IF char$=CHR$(10)  !a linefeed
+      INC line_count&
+      IF PEEK(text_address%-1)<>13
+        need_cr!=TRUE
+      ENDIF
+      IF PEEK(text_address%+1)<>13
+        need_cr!=TRUE
+      ENDIF
+    ENDIF
+    IF need_cr!
+      PRINT char$;CHR$(13);
+    ELSE
+      PRINT char$;
+    ENDIF
+    need_cr!=FALSE
+    IF line_count&>20  !a page shown
+      line_count&=0
+      PRINT
+      PRINT "pPress any key for next page or ESC to exit in order to save fileq"
+    wait_for_key:
+      KEYTEST key_code|
+      IF key_code|=27  !Esc
+        abort!=TRUE
+      ENDIF
+      IF key_code|=0
+        GOTO wait_for_key
+      ENDIF
+      CLS
+    ENDIF
+    EXIT IF abort!=TRUE
+  NEXT text_address%
+  IF NOT abort!
+    PRINT
+    PRINT "pPress any key to exit in order to save fileq"
+    ~INP(2)  !wait for a key
+  ENDIF
+  abort!=FALSE
+  char$=""
+RETURN
+' Shows the unused dialog.  Not called.
+PROCEDURE unused_dialog
+  open_dialog(unused_tree%)
+  exit_object&=FORM_DO(unused_tree%,0)
+  PUT dialog_x&,dialog_y&,background$
+RETURN
