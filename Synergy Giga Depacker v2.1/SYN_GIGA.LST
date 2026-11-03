@@ -1,4 +1,4 @@
-'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ' ===========================================================================
 ' SYNERGY GIGA DEPACKER v2.1 (SYN_GIGA.PRG)  by Wingleader/Synergy, 1992/1993
 ' ---------------------------------------------------------------------------
@@ -14,9 +14,8 @@
 ' GFA_BCOM 3.6 it gives SYN_GIGA.PRG again.
 ' ===========================================================================
 '
-' Where a line of dashes or a comment with an odd character stands at the very
-' end, it is there for its length or that character only: it puts the pad byte
-' after the last string constant where the original has it.
+' The comment line of x's at the very top is there for its length only: it
+' puts the pad byte after the last string constant where the original has it.
 ' The program shows all its dialogs, one at a time, in a single GEM window.  The resource is built
 ' into the program (the INLINE block resource_data%) and fixed up in memory, so no .RSC file is
 ' needed.  The settings (the buffer size) are kept in \SYNERGYD.INF.
