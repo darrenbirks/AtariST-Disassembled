@@ -150,18 +150,18 @@ PROCEDURE load_resource
   ~@rsc_get_address(0,tree_print_block&,print_block_dialog%)
   ~@rsc_get_address(0,tree_function_popup&,function_popup_tree%)
   ~@rsc_get_address(0,tree_cycle_popup&,cycle_popup_tree%)
-  ~@func_90f76(about_tree%,-1)
-  ~@func_90f76(fn15_dialog_tree%,-1)
-  ~@func_90f76(overwrite_tree%,-1)
-  ~@func_90f76(print_program_dialog%,-1)
-  ~@func_90f76(block_functions_tree%,-1)
-  ~@func_90f76(print_tools_tree%,-1)
-  ~@func_90f76(format_dialog_tree%,-1)
-  ~@func_90f76(cutter_icon_tree%,-1)
-  ~@func_90f76(print_block_dialog%,-1)
-  ~@func_90f76(function_popup_tree%,-1)
-  ~@func_90f76(cycle_popup_tree%,-1)
-  ~@func_9033e(format_dialog_tree%)
+  ~@dial_fix_tree(about_tree%,-1)
+  ~@dial_fix_tree(fn15_dialog_tree%,-1)
+  ~@dial_fix_tree(overwrite_tree%,-1)
+  ~@dial_fix_tree(print_program_dialog%,-1)
+  ~@dial_fix_tree(block_functions_tree%,-1)
+  ~@dial_fix_tree(print_tools_tree%,-1)
+  ~@dial_fix_tree(format_dialog_tree%,-1)
+  ~@dial_fix_tree(cutter_icon_tree%,-1)
+  ~@dial_fix_tree(print_block_dialog%,-1)
+  ~@dial_fix_tree(function_popup_tree%,-1)
+  ~@dial_fix_tree(cycle_popup_tree%,-1)
+  ~@dial_center_tree(format_dialog_tree%)
   ' clears the six fields of the parameter output dialog
   CHAR{LONG{OB_SPEC(fn15_dialog_tree%,fn15_first_field&)}}=""
   CHAR{LONG{OB_SPEC(fn15_dialog_tree%,fn15_second_field&)}}=""
@@ -193,8 +193,8 @@ PROCEDURE shutdown_program
   ENDIF
   rsc_module_stop
   IF dialog_module_loaded!
-    ~@func_91172
-    ~@func_91040
+    ~@dial_module_stop
+    ~@dial_exit
   ENDIF
   ~GEMDOS(73,L:modul_one_block%)
   ~GEMDOS(73,L:modul_two_block%)
@@ -414,7 +414,7 @@ RETURN
 ' panel (panel_left&..panel_half_height&) and its shadow frame (shadow_left&..shadow_bottom&).
 PROCEDURE build_menu_and_window
   LOCAL axis_entry_count|,work_text$,inner_index|
-  RESTORE data_981ec
+  RESTORE menu_data
   axis_entry_count|=FALSE
   REPEAT
     READ work_text$
@@ -424,7 +424,7 @@ PROCEDURE build_menu_and_window
   DEC axis_entry_count|
   DIM menu_entries$(axis_entry_count|)
   DEC axis_entry_count|
-  RESTORE data_981ec
+  RESTORE menu_data
   FOR inner_index|=FALSE TO axis_entry_count|
     READ menu_entries$(inner_index|)
   NEXT inner_index|
@@ -956,7 +956,7 @@ PROCEDURE init_program_variables
   DEFLINE 1,1,0,0
   search_text$=""
   replace_text$=""
-  v0dfc=0
+  unused_start_value=0
   reference_point_x=0
   reference_point_y=0
   reference_point_z=0
@@ -1199,7 +1199,7 @@ PROCEDURE init_program_variables
   ' mouse form header: hot spot 7,9, planes, colours; then 16 mask and data words from the DATA lines
   tool_sprite$=MKI$(7)+MKI$(9)+MKI$(0)
   tool_sprite$=tool_sprite$+MKI$(0)+MKI$(1)
-  RESTORE data_98692
+  RESTORE tool_sprite_data
   FOR loop_index|=1 TO 16
     READ mouse_form_first_word%
     READ mouse_form_second_word%
@@ -1409,8 +1409,9 @@ RETURN
 ' Changes the number of elements of a one-dimensional array and keeps its contents. resize_array_address%:
 ' ARRPTR of the array; resize_new_count%: new element count; resize_reserve_bytes%: bytes that must stay free;
 ' VAR resize_result_code&: result. String arrays are copied by INLINE code (array_copy_code%, filled from
-' data_9871f when not yet there), the other types by a temporary array and BMOVE. Result: 0 done, 8 not enough
-' memory, 28 more than one dimension, 64 type not allowed, 15 array not DIMmed, 17 count not positive.
+' array_copy_code_data when not yet there), the other types by a temporary array and BMOVE. Result: 0 done, 8
+' not enough memory, 28 more than one dimension, 64 type not allowed, 15 array not DIMmed, 17 count not
+' positive.
 PROCEDURE resize_array_keep_data(resize_array_address%,resize_new_count%,resize_reserve_bytes%,VAR resize_result_code&)
   LOCAL resize_old_count%,resize_old_bytes%,resize_array_type%,resize_temp_data%,inline_byte_index%,inline_byte_value%
   IF resize_new_count%>0
@@ -1428,7 +1429,7 @@ PROCEDURE resize_array_keep_data(resize_array_address%,resize_new_count%,resize_
               INLINE array_copy_code%,56
               ' the copy code is filled in from the DATA lines the first time
               IF LPEEK(array_copy_code%)<>544145412
-                RESTORE data_9871f
+                RESTORE array_copy_code_data
                 inline_byte_index%=0
                 REPEAT
                   READ inline_byte_value%
@@ -3667,8 +3668,8 @@ PROCEDURE handle_menu_choice
           ENDIF
           rsc_module_stop
           IF dialog_module_loaded!
-            ~@func_91172
-            ~@func_91040
+            ~@dial_module_stop
+            ~@dial_exit
           ENDIF
           ~GEMDOS(73,L:modul_one_block%)
           ~GEMDOS(73,L:modul_two_block%)
@@ -5854,7 +5855,7 @@ PROCEDURE edit_settings
               scan_index&=baud_300_entry&
             ENDSELECT
             SHOWM
-            format_exit_object&=@func_90ae0(baud_popup_tree%,baud_popup_box&,0,0,scan_index&,-1,1,dialog_status&)
+            format_exit_object&=@dial_popup_menu(baud_popup_tree%,baud_popup_box&,0,0,scan_index&,-1,1,dialog_status&)
             DEFMOUSE 3
             IF dialog_status&=0
               ~FORM_DIAL(3,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&)
@@ -7075,7 +7076,7 @@ PROCEDURE print_tool_memory
     CHAR{LONG{OB_SPEC(print_tools_tree%,tool_print_comment_field&)}}=tool_print_comment$
     form_feed_state_backup&=OB_STATE(print_tools_tree%,tool_print_form_feed&)
     ~WIND_UPDATE(1)
-    format_exit_object&=@func_90e70(print_tools_tree%,0,-1,1,1,10,10,dialog_status&)
+    format_exit_object&=@dial_run(print_tools_tree%,0,-1,1,1,10,10,dialog_status&)
     ~WIND_UPDATE(0)
     IF dialog_status&=0
       ~FORM_DIAL(3,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&)
@@ -7214,7 +7215,7 @@ PROCEDURE show_about_dialog
   LOCAL dialog_status&
   DEFMOUSE 0
   ~WIND_UPDATE(1)
-  ~@func_90e70(about_tree%,0,-1,1,1,10,10,dialog_status&)
+  ~@dial_run(about_tree%,0,-1,1,1,10,10,dialog_status&)
   ~WIND_UPDATE(0)
   DEFMOUSE 3
   IF dialog_status&=0
@@ -7871,7 +7872,7 @@ PROCEDURE print_program
     ' show the last comment in the dialog
     CHAR{LONG{OB_SPEC(print_program_dialog%,print_comment_object&)}}=program_print_comment$
     ~WIND_UPDATE(1)
-    format_exit_object&=@func_90e70(print_program_dialog%,0,-1,1,1,10,10,dialog_status&)
+    format_exit_object&=@dial_run(print_program_dialog%,0,-1,1,1,10,10,dialog_status&)
     ~WIND_UPDATE(0)
     IF dialog_status&=0
       ~FORM_DIAL(3,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&)
@@ -8117,7 +8118,7 @@ PROCEDURE block_functions_dialog
   IF NOT field_edit_active!
     DEFMOUSE 0
     ~WIND_UPDATE(1)
-    format_exit_object&=@func_90e70(block_functions_tree%,0,-1,1,1,10,10,dialog_status&)
+    format_exit_object&=@dial_run(block_functions_tree%,0,-1,1,1,10,10,dialog_status&)
     ~WIND_UPDATE(0)
     DEFMOUSE 3
     IF dialog_status&=0
@@ -8312,7 +8313,7 @@ PROCEDURE print_marked_block
     CHAR{LONG{OB_SPEC(print_block_dialog%,block_comment_object&)}}=block_print_comment$
     form_feed_state_backup&=OB_STATE(print_block_dialog%,block_form_feed_object&)
     ~WIND_UPDATE(1)
-    format_exit_object&=@func_90e70(print_block_dialog%,0,-1,1,1,10,10,dialog_status&)
+    format_exit_object&=@dial_run(print_block_dialog%,0,-1,1,1,10,10,dialog_status&)
     ~WIND_UPDATE(0)
     IF dialog_status&=0
       ~FORM_DIAL(3,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&,desk_area_x&,desk_area_y&,desk_area_w&,desk_area_h&)
@@ -14771,11 +14772,11 @@ PROCEDURE format_disk_dialog
   ' sectors per track
   format_sectors&=VAL(CHAR{LONG{OB_SPEC(format_dialog_tree%,obj_sectors_text&)}})
   saved_format_sectors&=format_sectors&
-  ~@func_902a6(format_dialog_tree%,format_dialog_handle%)
-  ~@func_9037e(format_dialog_handle%)
+  ~@dial_start(format_dialog_tree%,format_dialog_handle%)
+  ~@dial_draw(format_dialog_handle%)
   REPEAT
     SHOWM
-    format_exit_object&=@func_901a4(format_dialog_handle%,obj_volume_label&)
+    format_exit_object&=@dial_do(format_dialog_handle%,obj_volume_label&)
     ' density: 1 double, 2 high
     format_density|=34-OB_STATE(format_dialog_tree%,obj_double_density&)
     SELECT format_exit_object&
@@ -14850,7 +14851,7 @@ PROCEDURE format_disk_dialog
     ' until format or cancel
   UNTIL format_exit_object&=format_cancel_button& OR format_exit_object&=obj_format_ok&
   ~OBJC_CHANGE(format_dialog_tree%,format_exit_object&,0,0,0,0,0,0,0)
-  ~@func_902fe(format_dialog_handle%)
+  ~@dial_end(format_dialog_handle%)
   DEFMOUSE 3
   GRAPHMODE 1
   IF format_exit_object&=obj_format_ok&
@@ -33219,7 +33220,7 @@ PROCEDURE show_fn15_values(program_line$)
   ENDIF
   DEFMOUSE 0
   ~WIND_UPDATE(1)
-  ~@func_90e70(fn15_dialog_tree%,0,-1,1,1,10,10,dialog_status&)
+  ~@dial_run(fn15_dialog_tree%,0,-1,1,1,10,10,dialog_status&)
   ~WIND_UPDATE(0)
   DEFMOUSE 3
   ' the background was not restored by the dialog
@@ -33915,7 +33916,7 @@ RETURN
 ' saved_contour_clockwise!(), saved_contour_side$() when a merge was done, and the mirrored corrections are
 ' swapped back. run_aborted! is set on an error, stop_requested! when the user cancels.
 PROCEDURE build_contour_pocket_paths
-  LOCAL alert_button|,line_index&,search_block&,crossing_element&,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,following_block_text$,v03a4,overlap_saved_arc_direction$,scan_index&,element_prefix$,last_element_was_line!,other_contour|,v03a8,contours_touch!,crossing_found!,contour_relation_code|,start_on_island!,max_merged_lines&,pair_table_bytes%,pair_table_stride&,text_length&,original_contour_count|,contours_merged!,x_axis_flag!,y_axis_flag!,z_axis_flag!,input_column&,input_row&,z_value_column&,file_byte|,loop_index|,item_count&,inner_index|,angle_offset,parsed_value,input_text$,work_text$,edit_work_text$,is_finished!,parse_column|,stay_on_contour!,change_contour!,merge_pass|
+  LOCAL alert_button|,line_index&,search_block&,crossing_element&,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,following_block_text$,unused_pocket_value,overlap_saved_arc_direction$,scan_index&,element_prefix$,last_element_was_line!,other_contour|,unused_pocket_offset,contours_touch!,crossing_found!,contour_relation_code|,start_on_island!,max_merged_lines&,pair_table_bytes%,pair_table_stride&,text_length&,original_contour_count|,contours_merged!,x_axis_flag!,y_axis_flag!,z_axis_flag!,input_column&,input_row&,z_value_column&,file_byte|,loop_index|,item_count&,inner_index|,angle_offset,parsed_value,input_text$,work_text$,edit_work_text$,is_finished!,parse_column|,stay_on_contour!,change_contour!,merge_pass|
   ' busy mouse
   DEFMOUSE 2
   ' contour pocket paths are being built
@@ -34260,7 +34261,7 @@ offset_contours_built:
                         contour_joined!(other_contour|)=TRUE
                         contour_visited!(other_contour|)=TRUE
                         ' the merged contour becomes a pocket
-                        IF contour_relation_code|=5 AND (NOT contour_is_pocket!(v1bda|))
+                        IF contour_relation_code|=5 AND (NOT contour_is_pocket!(unset_contour_index|))
                           merged_is_pocket!(merged_contour_count|)=TRUE
                         ELSE
                           ' the merged contour becomes an island
@@ -34633,7 +34634,7 @@ RETURN
 ' that are already recorded in crossing_table_x()/crossing_table_y(), the one the element started from, and the
 ' start point of the walk itself do not count.
 PROCEDURE find_nearest_contour_crossing(pair_table_stride&,VAR line_index&,crossing_found!,start_contour|,crossing_contour|,crossing_element&)
-  LOCAL other_element&,forward_direction!,previous_ended_on_crossing!,at_arc_start!,first_is_line!,second_is_line!,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,start_element&,arc_centre_x,arc_centre_y,rnd_arc_direction$,vector_x,vector_y,element_arc_radius,nearest_found!,other_contour_index|,other_start_element&,other_centre_x,other_centre_y,other_start_x,other_start_y,other_end_x,other_end_y,other_arc_direction$,direction_x,direction_y,next_line_dx,next_line_dy,crossing_point_x,crossing_point_y,line_parameter,point_distance,work_point_y,foot_position_x,discriminant,first_crossing_x,first_crossing_y,second_crossing_x,second_crossing_y,second_vector_x,second_vector_y,line_slope,line_intercept,basic_variables,segment_length,second_operand,quadratic_factor,first_vector_length,second_vector_length,arc_start_angle,arc_end_angle,point_angle,saved_radius,centre_distance_h,centre_distance_v,chord_length,chord_angle,centre_angle_offset,first_crossing_angle,second_crossing_angle,foot_offset_x,foot_offset_y,second_crossing_arc_angle,v03b8,first_crossing_sweep,second_crossing_sweep,crossing_distance_x,crossing_distance_y,test_pair!,current_line_slope,other_line_slope,angle_wraps!,pair_row&,pair_column&,previous_crossing_contour|,previous_crossing_element&
+  LOCAL other_element&,forward_direction!,previous_ended_on_crossing!,at_arc_start!,first_is_line!,second_is_line!,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,start_element&,arc_centre_x,arc_centre_y,rnd_arc_direction$,vector_x,vector_y,element_arc_radius,nearest_found!,other_contour_index|,other_start_element&,other_centre_x,other_centre_y,other_start_x,other_start_y,other_end_x,other_end_y,other_arc_direction$,direction_x,direction_y,next_line_dx,next_line_dy,crossing_point_x,crossing_point_y,line_parameter,point_distance,work_point_y,foot_position_x,discriminant,first_crossing_x,first_crossing_y,second_crossing_x,second_crossing_y,second_vector_x,second_vector_y,line_slope,line_intercept,basic_variables,segment_length,second_operand,quadratic_factor,first_vector_length,second_vector_length,arc_start_angle,arc_end_angle,point_angle,saved_radius,centre_distance_h,centre_distance_v,chord_length,chord_angle,centre_angle_offset,first_crossing_angle,second_crossing_angle,foot_offset_x,foot_offset_y,second_crossing_arc_angle,unused_crossing_value,first_crossing_sweep,second_crossing_sweep,crossing_distance_x,crossing_distance_y,test_pair!,current_line_slope,other_line_slope,angle_wraps!,pair_row&,pair_column&,previous_crossing_contour|,previous_crossing_element&
   ' the previous element ended on a crossing
   previous_ended_on_crossing!=crossing_found!
   ' contour of that crossing
@@ -38552,7 +38553,7 @@ FUNCTION select_file$(work_text$,program_directory$,selected_file_name$)
   IF INT{LONG{GB+4}}<320
     file_selector_result&=FSEL_INPUT(program_directory$,selected_file_name$,rect_width&)
   ELSE
-    file_selector_result&=@func_8f0fe(work_text$,program_directory$,selected_file_name$,rect_width&)
+    file_selector_result&=@file_selector_with_title(work_text$,program_directory$,selected_file_name$,rect_width&)
   ENDIF
   ~WIND_UPDATE(0)
   IF file_selector_result&=0 OR rect_width&=0
@@ -38561,11 +38562,14 @@ FUNCTION select_file$(work_text$,program_directory$,selected_file_name$)
   ' the folder of the path with the chosen name
   RETURN LEFT$(program_directory$,RINSTR(program_directory$,"\"))+selected_file_name$
 ENDFUNC
-FUNCTION func_8f0fe(work_text$,VAR program_directory$,selected_file_name$,rect_width&)
+' FSEL_EXINPUT (AES 91) by hand: title work_text$, path program_directory$ and file name selected_file_name$
+' (both given room to grow and read back as C strings). rect_width& gets the button, 0 for Cancel.
+FUNCTION file_selector_with_title(work_text$,VAR program_directory$,selected_file_name$,rect_width&)
   $F%
   work_text$=work_text$+CHR$(0)
   program_directory$=program_directory$+CHR$(0)+SPACE$(400)
   selected_file_name$=selected_file_name$+CHR$(0)+SPACE$(150)
+  ' FSEL_EXINPUT
   GCONTRL(0)=91
   GCONTRL(1)=0
   GCONTRL(2)=2
@@ -38578,6 +38582,7 @@ FUNCTION func_8f0fe(work_text$,VAR program_directory$,selected_file_name$,rect_w
   GEMSYS
   program_directory$=CHAR{V:program_directory$}
   selected_file_name$=CHAR{V:selected_file_name$}
+  ' the button (0 = Cancel)
   rect_width&=GINTOUT(1)
   RETURN GINTOUT(0)
 ENDFUNC
@@ -38599,8 +38604,8 @@ PROCEDURE release_system_resources
   reserve_memory_rounded(reserved_memory%)
   ' the dialog module is loaded
   IF dialog_module_loaded!
-    ~@func_91172
-    ~@func_91040
+    ~@dial_module_stop
+    ~@dial_exit
   ENDIF
   ON BREAK
 RETURN
@@ -38804,11 +38809,11 @@ PROCEDURE load_dialog_module
           dialog_module_entry%=LONG{dialog_module_block%+42}
           ' dialog module ready
           dialog_module_loaded!=TRUE
-          ~@func_9114c
+          ~@dial_module_start
           overlay_result%=0
-          v1b3e&=0
-          v1b40&=0
-          IF @func_90fd0(v1b3e&,overlay_result%,v1b40&)=0
+          dialog_init_word&=0
+          dialog_init_flags&=0
+          IF @dial_init(dialog_init_word&,overlay_result%,dialog_init_flags&)=0
             END
           ENDIF
         ENDIF
@@ -38955,28 +38960,43 @@ PROCEDURE rsc_module_stop
     module_call_result%=C:resource_module_entry%()
   ENDIF
 RETURN
-FUNCTION func_8ff26(v0ba4&,VAR v0ba8&,v0bac&,v0bb0&,v0bb4&)
+' Dialog module function 1: one word in, four words back. Not called; what it does was not worked out. Call to
+' the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs
+' and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module
+' is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_match_system_font(match_font_id&,VAR match_font_first_out&,match_font_second_out&,match_font_third_out&,match_font_fourth_out&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=1
-    CARD{dialog_module_block%+4}=v0ba4&
-    LONG{dialog_module_block%+20}=V:v0ba8&
-    LONG{dialog_module_block%+24}=V:v0bac&
-    LONG{dialog_module_block%+28}=V:v0bb0&
-    LONG{dialog_module_block%+32}=V:v0bb4&
+    CARD{dialog_module_block%+4}=match_font_id&
+    LONG{dialog_module_block%+20}=V:match_font_first_out&
+    LONG{dialog_module_block%+24}=V:match_font_second_out&
+    LONG{dialog_module_block%+28}=V:match_font_third_out&
+    LONG{dialog_module_block%+32}=V:match_font_fourth_out&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_8ffc8(v0bb8&,VAR v05b4%)
+' Dialog module function 2: one word in, a long back. Not called; not worked out. Call to the dialog module
+' MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to
+' +20.., then its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_find_cookie(cookie_id&,VAR cookie_value%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=2
-    LONG{dialog_module_block%+20}=v0bb8&
-    LONG{dialog_module_block%+24}=V:v05b4%
+    LONG{dialog_module_block%+20}=cookie_id&
+    LONG{dialog_module_block%+24}=V:cookie_value%
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90022(dial_tree%,dial_object&)
+' Dialog module function 3: the parent of object dial_object& in tree dial_tree%. Not called. Call to the dialog
+' module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and
+' addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module is
+' loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_get_parent_object(dial_tree%,dial_object&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=3
@@ -38985,7 +39005,12 @@ FUNCTION func_90022(dial_tree%,dial_object&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9007c(dial_tree%,dial_object&)
+' Dialog module function 4: the ob_spec of object dial_object& (of its user block for a user-defined object).
+' Not called. Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40},
+' words to +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does
+' anything when the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine
+' that follows (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_get_object_spec(dial_tree%,dial_object&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=4
@@ -38994,7 +39019,12 @@ FUNCTION func_9007c(dial_tree%,dial_object&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_900d6(dial_tree%,dial_object&,dial_spec_value%)
+' Dialog module function 5: sets the ob_spec of object dial_object& to dial_spec_value%. Not called. Call to the
+' dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and
+' addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module is
+' loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_set_object_spec(dial_tree%,dial_object&,dial_spec_value%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=5
@@ -39004,7 +39034,13 @@ FUNCTION func_900d6(dial_tree%,dial_object&,dial_spec_value%)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90148(dial_key_state&,dial_key_code&)
+' Dialog module function 6: turns key dial_key_code& with shift state dial_key_state& into the module's key
+' code. Not called. Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_normalise_key(dial_key_state&,dial_key_code&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=6
@@ -39013,7 +39049,13 @@ FUNCTION func_90148(dial_key_state&,dial_key_code&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_901a4(dial_info%,dial_start_object&)
+' Dialog module function 7: runs dialog dial_info% (the dialog info block) from edit object dial_start_object&
+' until an exit button. Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_do(dial_info%,dial_start_object&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=7
@@ -39022,7 +39064,12 @@ FUNCTION func_901a4(dial_info%,dial_start_object&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_901fe(dial_info%,screen_x&,screen_y&,dial_rect_width&,rect_height&)
+' Dialog module function 8: moves dialog dial_info% (it drags a box). Not called. Call to the dialog module
+' MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to
+' +20.., then its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_move(dial_info%,screen_x&,screen_y&,dial_rect_width&,rect_height&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=8
@@ -39034,7 +39081,12 @@ FUNCTION func_901fe(dial_info%,screen_x&,screen_y&,dial_rect_width&,rect_height&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_902a6(dial_tree%,dial_info%)
+' Dialog module function 9: starts tree dial_tree% as a dialog with info block dial_info%. Call to the dialog
+' module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and
+' addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module is
+' loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_start(dial_tree%,dial_info%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=9
@@ -39043,7 +39095,12 @@ FUNCTION func_902a6(dial_tree%,dial_info%)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_902fe(dial_info%)
+' Dialog module function 10: ends dialog dial_info% and gives the screen back. Call to the dialog module
+' MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to
+' +20.., then its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_end(dial_info%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=10
@@ -39051,7 +39108,12 @@ FUNCTION func_902fe(dial_info%)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9033e(dial_tree%)
+' Dialog module function 11: centres tree dial_tree% on the screen. Call to the dialog module MODUL2.OVL: the
+' function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its
+' entry dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!);
+' when it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is
+' harmless as the program ends without the module.
+FUNCTION dial_center_tree(dial_tree%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=11
@@ -39059,7 +39121,12 @@ FUNCTION func_9033e(dial_tree%)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9037e(dial_info%)
+' Dialog module function 12: draws dialog dial_info%. Call to the dialog module MODUL2.OVL: the function number
+' goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_draw(dial_info%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=12
@@ -39067,7 +39134,12 @@ FUNCTION func_9037e(dial_info%)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_903be(dial_tree%,dial_object&)
+' Dialog module function 13 (tree, object). Not called; not worked out. Call to the dialog module MODUL2.OVL:
+' the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then
+' its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_next_edit_line(dial_tree%,dial_object&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=13
@@ -39076,7 +39148,12 @@ FUNCTION func_903be(dial_tree%,dial_object&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90418(dial_tree%,dial_object&)
+' Dialog module function 14 (tree, object). Not called; not worked out. Call to the dialog module MODUL2.OVL:
+' the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then
+' its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_previous_edit_line(dial_tree%,dial_object&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=14
@@ -39085,42 +39162,63 @@ FUNCTION func_90418(dial_tree%,dial_object&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90472(dial_tree%,dial_object&,v0bd0&)
+' Dialog module function 15 (tree, object, word). Not called; not worked out. Call to the dialog module
+' MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to
+' +20.., then its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_template_to_text_position(dial_tree%,dial_object&,template_position&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=15
     CARD{dialog_module_block%+4}=dial_object&
-    CARD{dialog_module_block%+6}=v0bd0&
+    CARD{dialog_module_block%+6}=template_position&
     LONG{dialog_module_block%+20}=dial_tree%
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_904e6(dial_tree%,dial_start_object&,v0bd4&,dial_key_code&,dial_key_state&,VAR v0bd8&,v0bdc&)
+' Dialog module function 16: key and button handling for a form (FORM_KEYBD/FORM_BUTTON). Not called. Call to
+' the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs
+' and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module
+' is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_keyboard(dial_tree%,dial_start_object&,dial_edit_object&,dial_key_code&,dial_key_state&,VAR dial_next_object&,dial_key_out&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=16
     CARD{dialog_module_block%+4}=dial_start_object&
-    CARD{dialog_module_block%+6}=v0bd4&
+    CARD{dialog_module_block%+6}=dial_edit_object&
     CARD{dialog_module_block%+8}=dial_key_code&
     CARD{dialog_module_block%+10}=dial_key_state&
     LONG{dialog_module_block%+20}=dial_tree%
-    LONG{dialog_module_block%+24}=V:v0bd8&
-    LONG{dialog_module_block%+28}=V:v0bdc&
+    LONG{dialog_module_block%+24}=V:dial_next_object&
+    LONG{dialog_module_block%+28}=V:dial_key_out&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_905c0(dial_tree%,v0be0&,dial_key_state&,dial_key_code&)
+' Dialog module function 17: key handling for a tree. Not called. Call to the dialog module MODUL2.OVL: the
+' function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its
+' entry dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!);
+' when it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is
+' harmless as the program ends without the module.
+FUNCTION dial_find_shortcut_object(dial_tree%,shortcut_start_object&,dial_key_state&,dial_key_code&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=17
-    CARD{dialog_module_block%+4}=v0be0&
+    CARD{dialog_module_block%+4}=shortcut_start_object&
     CARD{dialog_module_block%+6}=dial_key_state&
     CARD{dialog_module_block%+8}=dial_key_code&
     LONG{dialog_module_block%+20}=dial_tree%
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9064e(dial_user_pointer%)
+' Dialog module function 18: hands the module a pointer dial_user_pointer% it keeps. Not called. Function 19
+' follows it at dial_get_user_pointer. Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_set_user_pointer(dial_user_pointer%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=18
@@ -39129,30 +39227,40 @@ FUNCTION func_9064e(dial_user_pointer%)
   ENDIF
 ENDFUNC
 $P<
-FUNCTION func_9068e
+FUNCTION dial_function_19
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=19
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_906b0(dial_form_tree%,v0be4&,v0be8&,v0bec&,VAR v0bf0&,v0bf4&,v0bf8&,v0bd4&,v0bfc&)
+' Dialog module function 20: the module's full form handler. Not called; its parameters were not worked out.
+' Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to
+' +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when
+' the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows
+' (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_form_do(dial_form_tree%,form_do_first_word&,form_do_second_word&,form_do_third_word&,VAR form_do_result&,form_do_fourth_word&,form_do_fifth_word&,dial_edit_object&,form_do_sixth_word&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=20
-    CARD{dialog_module_block%+4}=v0be4&
-    CARD{dialog_module_block%+6}=v0be8&
-    CARD{dialog_module_block%+8}=v0bec&
-    CARD{dialog_module_block%+10}=v0bf4&
-    CARD{dialog_module_block%+12}=v0bf8&
-    CARD{dialog_module_block%+14}=v0bfc&
+    CARD{dialog_module_block%+4}=form_do_first_word&
+    CARD{dialog_module_block%+6}=form_do_second_word&
+    CARD{dialog_module_block%+8}=form_do_third_word&
+    CARD{dialog_module_block%+10}=form_do_fourth_word&
+    CARD{dialog_module_block%+12}=form_do_fifth_word&
+    CARD{dialog_module_block%+14}=form_do_sixth_word&
     LONG{dialog_module_block%+20}=dial_form_tree%
-    LONG{dialog_module_block%+24}=V:v0bf0&
-    LONG{dialog_module_block%+28}=V:v0bd4&
+    LONG{dialog_module_block%+24}=V:form_do_result&
+    LONG{dialog_module_block%+28}=V:dial_edit_object&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_907be(alert_default_button&,alert_text$)
+' Dialog module function 21: an alert with text alert_text$ and default button alert_default_button&. Not
+' called. Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words
+' to +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything
+' when the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that
+' follows (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_alert(alert_default_button&,alert_text$)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=21
@@ -39162,20 +39270,30 @@ FUNCTION func_907be(alert_default_button&,alert_text$)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9082e(v05cc%,alert_text$,alert_default_button&,v0c04&,v0c08&)
+' Dialog module function 22: an alert with text alert_text$ and an image alert_image%. Not called. Call to the
+' dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and
+' addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module is
+' loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_alert_with_icon(alert_image%,alert_text$,alert_default_button&,alert_first_option&,alert_second_option&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=22
     alert_text$=alert_text$+CHR$(0)
     CARD{dialog_module_block%+4}=alert_default_button&
-    CARD{dialog_module_block%+6}=v0c04&
-    CARD{dialog_module_block%+8}=v0c08&
-    LONG{dialog_module_block%+20}=v05cc%
+    CARD{dialog_module_block%+6}=alert_first_option&
+    CARD{dialog_module_block%+8}=alert_second_option&
+    LONG{dialog_module_block%+20}=alert_image%
     LONG{dialog_module_block%+24}=V:alert_text$
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_908ec(dial_table_index&)
+' Dialog module function 23: returns entry dial_table_index& (0..12) of one of the module's tables. Not called.
+' Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to
+' +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when
+' the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows
+' (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_get_table_entry(dial_table_index&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=23
@@ -39183,10 +39301,18 @@ FUNCTION func_908ec(dial_table_index&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9092e(split_alert_text$,VAR alert_text_lines$(),alert_line_count&,alert_button_count&)
+' Dialog module function 24: splits an alert text split_alert_text$ into up to eight lines of 50 bytes in
+' alert_line_buffer|(). Not called; the copy into alert_text_lines$() after the call (copy_alert_text_lines) is
+' never reached. Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_split_alert_text(split_alert_text$,VAR alert_text_lines$(),alert_line_count&,alert_button_count&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=24
+    ' eight lines of 50 bytes
     DIM alert_line_buffer|(400)
     split_alert_text$=split_alert_text$+CHR$(0)
     LONG{dialog_module_block%+20}=V:split_alert_text$
@@ -39205,7 +39331,13 @@ FUNCTION func_9092e(split_alert_text$,VAR alert_text_lines$(),alert_line_count&,
     ERASE alert_line_buffer|()
   ENDIF
 ENDFUNC
-FUNCTION func_90ae0(dial_tree%,dial_object&,screen_x&,screen_y&,popup_current_item&,v0c1c&,v0c20&,VAR dialog_status&)
+' Dialog module function 25: a pop-up menu: tree dial_tree%, object dial_object&, at screen_x&,screen_y&, with
+' item popup_current_item& ticked. dialog_status& comes back 0 when the caller must redraw the background. Call
+' to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4..,
+' longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the
+' module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the
+' RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_popup_menu(dial_tree%,dial_object&,screen_x&,screen_y&,popup_current_item&,popup_first_option&,popup_second_option&,VAR dialog_status&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=25
@@ -39213,32 +39345,44 @@ FUNCTION func_90ae0(dial_tree%,dial_object&,screen_x&,screen_y&,popup_current_it
     CARD{dialog_module_block%+6}=screen_x&
     CARD{dialog_module_block%+8}=screen_y&
     CARD{dialog_module_block%+10}=popup_current_item&
-    CARD{dialog_module_block%+12}=v0c1c&
-    CARD{dialog_module_block%+14}=v0c20&
+    CARD{dialog_module_block%+12}=popup_first_option&
+    CARD{dialog_module_block%+14}=popup_second_option&
     LONG{dialog_module_block%+20}=dial_tree%
     LONG{dialog_module_block%+24}=V:dialog_status&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90bd6(v05d0%,v0c24&,v05d4%,dial_object&,v0c28&,v0c2c&,VAR dialog_status&)
+' Dialog module function 26: a pop-up menu opened from a button (it uses function 25). Not called. Call to the
+' dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and
+' addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module is
+' loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_button_popup(button_popup_tree%,button_popup_button&,button_popup_menu_tree%,dial_object&,button_popup_first_option&,button_popup_second_option&,VAR dialog_status&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=26
-    CARD{dialog_module_block%+4}=v0c24&
+    CARD{dialog_module_block%+4}=button_popup_button&
     CARD{dialog_module_block%+6}=dial_object&
-    CARD{dialog_module_block%+8}=v0c28&
-    CARD{dialog_module_block%+10}=v0c2c&
-    LONG{dialog_module_block%+20}=v05d0%
-    LONG{dialog_module_block%+24}=v05d4%
+    CARD{dialog_module_block%+8}=button_popup_first_option&
+    CARD{dialog_module_block%+10}=button_popup_second_option&
+    LONG{dialog_module_block%+20}=button_popup_tree%
+    LONG{dialog_module_block%+24}=button_popup_menu_tree%
     LONG{dialog_module_block%+28}=V:dialog_status&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90cb0(dial_tree%,v0c30&,screen_x&,screen_y&,dial_rect_width&,rect_height&,format_dialog_handle%)
+' Dialog module function 27: centres and starts tree dial_tree% as a dialog (info block format_dialog_handle%),
+' growing a box from the rectangle given. Not called. Call to the dialog module MODUL2.OVL: the function number
+' goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_open(dial_tree%,dial_open_mode&,screen_x&,screen_y&,dial_rect_width&,rect_height&,format_dialog_handle%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=27
-    CARD{dialog_module_block%+4}=v0c30&
+    CARD{dialog_module_block%+4}=dial_open_mode&
+    ' the grow-box rectangle x,y,w,h
     dial_rect_string$=MKI$(screen_x&)+MKI$(screen_y&)+MKI$(dial_rect_width&)+MKI$(rect_height&)
     LONG{dialog_module_block%+20}=dial_tree%
     LONG{dialog_module_block%+24}=V:dial_rect_string$
@@ -39246,23 +39390,39 @@ FUNCTION func_90cb0(dial_tree%,v0c30&,screen_x&,screen_y&,dial_rect_width&,rect_
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90d9c(v0c34&,screen_x&,screen_y&,dial_rect_width&,rect_height&,format_dialog_handle%)
+' Dialog module function 28: ends a dialog, shrinking a box to the rectangle given. It passes button_popup_tree%
+' where its parameter format_dialog_handle% was surely meant. Not called. Call to the dialog module MODUL2.OVL:
+' the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then
+' its entry dialog_module_entry% is called. It only does anything when the module is loaded
+' (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN stands
+' inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_close(dial_close_mode&,screen_x&,screen_y&,dial_rect_width&,rect_height&,format_dialog_handle%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=28
-    CARD{dialog_module_block%+4}=v0c34&
+    CARD{dialog_module_block%+4}=dial_close_mode&
+    ' the shrink-box rectangle x,y,w,h
     dial_rect_string$=MKI$(screen_x&)+MKI$(screen_y&)+MKI$(dial_rect_width&)+MKI$(rect_height&)
     LONG{dialog_module_block%+20}=V:dial_rect_string$
-    LONG{dialog_module_block%+24}=v05d0%
+    ' passes button_popup_tree%, not the parameter format_dialog_handle%
+    LONG{dialog_module_block%+24}=button_popup_tree%
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90e70(dial_tree%,dial_run_start_object&,v0c3c&,screen_x&,screen_y&,dial_rect_width&,rect_height&,VAR dialog_status&)
+' Dialog module function 29: a whole dialog: start (function 27), draw, run from object dial_run_start_object&
+' and end (function 28), with the grow/shrink rectangle given. dialog_status& comes back 0 when the caller must
+' redraw the background. Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_run(dial_tree%,dial_run_start_object&,dial_run_mode&,screen_x&,screen_y&,dial_rect_width&,rect_height&,VAR dialog_status&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=29
     CARD{dialog_module_block%+4}=dial_run_start_object&
-    CARD{dialog_module_block%+6}=v0c3c&
+    CARD{dialog_module_block%+6}=dial_run_mode&
+    ' the grow/shrink rectangle x,y,w,h
     dial_rect_string$=MKI$(screen_x&)+MKI$(screen_y&)+MKI$(dial_rect_width&)+MKI$(rect_height&)
     LONG{dialog_module_block%+20}=dial_tree%
     LONG{dialog_module_block%+24}=V:dial_rect_string$
@@ -39270,7 +39430,12 @@ FUNCTION func_90e70(dial_tree%,dial_run_start_object&,v0c3c&,screen_x&,screen_y&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90f76(dial_tree%,dial_fix_flag&)
+' Dialog module function 30: prepares tree dial_tree% for the module (called with -1 for every dialog tree at
+' start-up). Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40},
+' words to +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does
+' anything when the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine
+' that follows (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_fix_tree(dial_tree%,dial_fix_flag&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=30
@@ -39279,57 +39444,87 @@ FUNCTION func_90f76(dial_tree%,dial_fix_flag&)
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_90fd0(VAR v0c44&,v05d8%,v0c48&)
+' Dialog module function 31: sets up the module's dialog library; the result is left in d0 for the caller. Call
+' to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4..,
+' longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the
+' module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the
+' RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_init(VAR dial_init_word_out&,dial_init_address_out%,dial_init_flags_out&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=31
-    LONG{dialog_module_block%+28}=V:v0c44&
-    LONG{dialog_module_block%+32}=V:v05d8%
-    LONG{dialog_module_block%+36}=V:v0c48&
+    LONG{dialog_module_block%+28}=V:dial_init_word_out&
+    LONG{dialog_module_block%+32}=V:dial_init_address_out%
+    LONG{dialog_module_block%+36}=V:dial_init_flags_out&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_91040
+' Dialog module function 32: shuts the dialog library down. Function 33 follows it at dial_find_clipboard. Call
+' to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4..,
+' longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the
+' module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the
+' RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_exit
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=32
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_91062
+FUNCTION dial_function_33
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=33
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_91084(v05dc%)
+' Dialog module function 34: hands the module an address char_table_title_address%. Not called; not worked out.
+' Call to the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to
+' +4.., longs and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when
+' the module is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows
+' (the RETURN stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_set_char_table_title(char_table_title_address%)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=34
-    LONG{dialog_module_block%+20}=v05dc%
+    LONG{dialog_module_block%+20}=char_table_title_address%
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_910c4(v05e0%,v05e4%,VAR v0c4c&,v0c50&)
+' Dialog module function 35: works with the clipboard file (SCRAP). Not called; not worked out further. Call to
+' the dialog module MODUL2.OVL: the function number goes to CARD{dialog_module_block%+40}, words to +4.., longs
+' and addresses to +20.., then its entry dialog_module_entry% is called. It only does anything when the module
+' is loaded (dialog_module_loaded!); when it is not, the code runs on into the routine that follows (the RETURN
+' stands inside the IF), which is harmless as the program ends without the module.
+FUNCTION dial_find_menu_shortcut(menu_shortcut_tree%,menu_shortcut_key%,VAR menu_shortcut_title&,menu_shortcut_item&)
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=35
-    LONG{dialog_module_block%+20}=v05e0%
-    LONG{dialog_module_block%+24}=v05e4%
-    LONG{dialog_module_block%+28}=V:v0c4c&
-    LONG{dialog_module_block%+32}=V:v0c50&
+    LONG{dialog_module_block%+20}=menu_shortcut_tree%
+    LONG{dialog_module_block%+24}=menu_shortcut_key%
+    LONG{dialog_module_block%+28}=V:menu_shortcut_title&
+    LONG{dialog_module_block%+32}=V:menu_shortcut_item&
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_9114c
+' Starts the dialog module (function 128). Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_module_start
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=128
     RETURN C:dialog_module_entry%()
   ENDIF
 ENDFUNC
-FUNCTION func_91172
+' Stops the dialog module (function 129). Call to the dialog module MODUL2.OVL: the function number goes to
+' CARD{dialog_module_block%+40}, words to +4.., longs and addresses to +20.., then its entry
+' dialog_module_entry% is called. It only does anything when the module is loaded (dialog_module_loaded!); when
+' it is not, the code runs on into the routine that follows (the RETURN stands inside the IF), which is harmless
+' as the program ends without the module.
+FUNCTION dial_module_stop
   $F%
   IF dialog_module_loaded!
     CARD{dialog_module_block%+40}=129
@@ -39347,7 +39542,7 @@ PROCEDURE unused_resource_module_call
   LONG{resource_module_block%+20}=dial_tree%
   module_call_result%=C:resource_module_entry%()
 RETURN
-data_981ec:
+menu_data:
 DATA CNCPROFI,  ber das Programm ^V,-----------------------,1,2,3,4,5,6,,Datei,--------- Programm ---------
 DATA   laden...                N,  speichern...            A,  speichern als...       ^A ,--- Diskettenverwaltung ----
 DATA   Programm l”schen...,  Ordner anlegen...  ,  Diskette formatieren...,----------------------------,  PROGRAMM-ENDE...       ^Q
@@ -39359,9 +39554,9 @@ DATA   Maschinentyp...  , Klopp-Korradi UW10  ,----------------------,  Steueru
 DATA -- Werkzeugspeicher --,  Editieren...     E,  Laden...         N,  Speichern...     S,  Drucken...       D
 DATA   L”schen...       L,  Beenden...       B,,Hilfe,  Allgemein...      Help,  Tastenbelegung...    H 
 DATA   Datenbertragung... ^H ,,Geometrie,  zum Geometrie-Programm  ,,*
-data_98692:
+tool_sprite_data:
 DATA 0,0,0,0,0,0,0,4112,4112,10280,12312,19364,2720,14296,1728,4064,3808,8176,0,8176,3808,8176,1728,4064,2720
 DATA 14296,12312,19364,4112,10280,0,4112
-data_9871f:
+array_copy_code_data:
 DATA 32,111,0,4,34,111,0,8,118,254,120,0,32,24,34,25,176,129,101,2,32,1,36,88,180,196,103,22,50,24,52,1,82
 DATA 66,196,67,37,137,32,0,34,202,50,193,83,128,102,230,78,117,84,136,92,137,96,244
