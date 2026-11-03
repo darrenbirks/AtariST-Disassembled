@@ -1,0 +1,2108 @@
+' ===========================================================================
+' SYNERGY GIGA DEPACKER v2.1 (SYN_GIGA.PRG)  by Wingleader/Synergy, 1992/1993
+' ---------------------------------------------------------------------------
+' Shareware.  Depacks files made by a long list of Atari ST packers (data
+' files and packed programs, one file or a whole folder), with an optional
+' destination path and auto-save; the settings are kept in \SYNERGYD.INF.
+' The depack routines are machine code, held in the INLINE blocks below and
+' called with RCALL; the GEM resource is built into the program.
+'
+' Disassembled by Darren Birks, 3 November 2026.
+'
+' Source rebuilt from the compiled program (GFA BASIC 3.6); compiled with
+' GFA_BCOM 3.6 it gives SYN_GIGA.PRG again.
+' ===========================================================================
+'
+' Where a line of dashes or a comment with an odd character stands at the very
+' end, it is there for its length or that character only: it puts the pad byte
+' after the last string constant where the original has it.
+' The program shows all its dialogs, one at a time, in a single GEM window.  The resource is built
+' into the program (the INLINE block resource_data%) and fixed up in memory, so no .RSC file is
+' needed.  The settings (the buffer size) are kept in \SYNERGYD.INF.
+' Each depack routine is a small GEMDOS program file held whole in an INLINE block.  RCALL starts
+' at the file's header, whose first word ($601A, BRA.S) jumps over the 28-byte header to the code.
+' The routines take their addresses and lengths in registers%(): d0-d7 are registers%(0)-(7),
+' a0-a6 registers%(8)-(14).
+' There is no main loop.  open_dialog opens a dialog and runs the event loop for it, and a button
+' that leads to another dialog opens that one from inside the current loop, so the calls nest
+' deeper with every dialog shown.  The program ends through END in the quit code.
+' Break (Ctrl+Shift+Alt) and errors both show the error box.
+ON BREAK GOSUB error_handler
+ON ERROR GOSUB error_handler
+' The depack routines, one per packer, and the resource.
+INLINE atomik_v33%,458
+INLINE ice_v240%,426
+INLINE ice_v21%,656
+INLINE jam_lzw%,146
+INLINE jam_lzh%,826
+INLINE automation_v501%,404
+' The resource: six dialog trees, copied and fixed up by fix_resource.
+INLINE resource_data%,13022
+INLINE automation_v23%,382
+INLINE sentry_prg%,594
+INLINE sentry_data%,492
+INLINE pompey_v30%,276
+INLINE fire_v20%,442
+INLINE pompey_v19a%,262
+INLINE atomik_v35_prg%,56
+INLINE atomik_v35%,896
+INLINE speed_v20%,386
+INLINE speed_v30_data%,1628
+INLINE speed_v30_prg%,1674
+INLINE qpack_v32%,610
+' registers%() for RCALL, folder_list$() for the folder search, shortcut_keys%() for the
+' underlined letters, message_buffer%() for EVNT_MULTI (16 bytes, 8 words).
+DIM registers%(16)
+DIM folder_list$(200)
+DIM shortcut_keys%(20)
+DIM message_buffer%(3)
+DEFMOUSE 0
+' The AES message buffer and the DTA for Fsfirst/Fsnext.
+message_address%=V:message_buffer%(0)
+old_dta%=GEMDOS(47)  !Fgetdta: put back after a folder search
+dta_buffer$=STRING$(44,0)  !a 44-byte DTA of our own
+dta_address%=V:dta_buffer$
+' The file selector starts in the current folder (Dgetdrv, DIR$); so does the destination path.
+source_path$=CHR$(65+GEMDOS(25))+":"+DIR$(0)+"\*.*"
+dest_path$=source_path$
+chosen_dest_path$=dest_path$
+' The three lengths shown in the depack box.
+packed_length%=0
+unpacked_length%=0
+length_gained%=0
+save_button_text$="  Save  "
+get_screen_size  !the screen size
+~WIND_GET(0,4,desk_x&,desk_y&,desk_w&,desk_h&)  !WF_WORKXYWH of the desktop
+~FORM_DIAL(3,0,desk_y&,0,0,0,desk_y&,screen_width&,screen_height&)  !FMD_FINISH: redraw the whole screen
+' The window: NAME, CLOSER, MOVER and INFO (1+2+8+16), at most the size of the screen.
+window_handle&=WIND_CREATE(27,0,0,screen_width&,screen_height&)
+set_object_numbers  !object numbers, resource, defaults
+adapt_to_video_mode  !Falcon video modes, TOS and AES version
+set_up_buffer  !free memory, buffer, \SYNERGYD.INF
+open_main_dialog  !the main dialog: returns only to quit
+END
+' ---------------------------------------------------------------------------
+' Depack (main dialog).  In single-file mode (single_file_mode=1) asks for one packed file and
+' depacks it.  In folder mode asks for a folder and a name or mask, and depacks every matching
+' file in that folder and in all the folders below it.  Cancel goes back to the main dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE start_depack
+  ' Deselect the Depack button.  The state is read from object 2 (options_ok&, an object number of
+  ' the options tree), not from the Depack button.
+  OB_STATE(main_tree%,main_depack&)=BCLR(OB_STATE(main_tree%,options_ok&),0)
+  IF single_file_mode=1  !single-file mode
+    FILESELECT #"LOAD PACKED FILE",source_path$,"",file_path$
+    file_found=EXIST(file_path$)
+    ' No such file, or Cancel: back to the main dialog.
+    IF file_found=0
+      ' WF_NAME (2) and WF_INFO (3) take the address of the text as two words, high word first.
+      window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+      title_address%=V:window_title$
+      ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+      window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+      info_address%=V:window_info$
+      ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+      ~WIND_CLOSE(window_handle&)
+      open_dialog(main_tree%)
+    ENDIF
+    ' The event loop is to return after the first event (the redraw), so the work can go on.  Save,
+    ' Back and Next are greyed out (DISABLED, state bit 3) and the box shows the file name.
+    leave_event_loop!=TRUE
+    OB_STATE(depack_tree%,depack_save&)=BSET(OB_STATE(depack_tree%,depack_save&),3)
+    OB_STATE(depack_tree%,depack_back&)=BSET(OB_STATE(depack_tree%,depack_back&),3)
+    OB_STATE(depack_tree%,depack_next&)=BSET(OB_STATE(depack_tree%,depack_next&),3)
+    CHAR{LONG{OB_SPEC(depack_tree%,depack_file_name&)}}=file_path$
+    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Loading"
+    OB_SPEC(depack_tree%,depack_save&)=V:save_button_text$
+    window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+    title_address%=V:window_title$
+    ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+    window_info$="        Made By Wingleader/Synergy (c) 1992/1993  "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    packed_text$=STR$(packed_length%,7)
+    unpacked_text$=STR$(unpacked_length%,7)
+    gained_text$=STR$(length_gained%,7)
+    OB_SPEC(depack_tree%,depack_packed&)=V:packed_text$
+    OB_SPEC(depack_tree%,depack_unpacked&)=V:unpacked_text$
+    OB_SPEC(depack_tree%,depack_gained&)=V:gained_text$
+    ~WIND_CLOSE(window_handle&)
+    open_dialog(depack_tree%)
+    ' Meant to clear the buffer: DELETE only moves the whole buffer down by one byte.
+    DELETE file_buffer|(0)
+    current_tree%=depack_tree%  !the depack box is the current dialog
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(depack_tree%,0,10,work_x&,work_y&,work_w&,work_h&)
+    underline_shortcuts  !underline the shortcut letters
+    depack_file  !load, identify, depack
+  ELSE
+    ' Folder mode: the selected name (or mask) is looked for in this folder and all below it.
+    FILESELECT #"SELECT DRIVE, FOLDER",source_path$,"*.*",file_path$
+    IF file_path$=""
+      window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+      title_address%=V:window_title$
+      ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+      window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+      info_address%=V:window_info$
+      ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+      ~WIND_CLOSE(window_handle&)
+      open_dialog(main_tree%)
+    ENDIF
+    ' Split the selection at the last backslash.
+    FOR loop_index=LEN(file_path$) TO 0 STEP -1
+      EXIT IF MID$(file_path$,loop_index,1)="\"
+    NEXT loop_index
+    search_mask$=MID$(file_path$,1,loop_index)+"*.*"  !every entry of the folder
+    current_folder$=MID$(file_path$,1,loop_index)  !the folder with its backslash
+    selected_file$=file_path$
+    file_mask$=MID$(file_path$,loop_index+1,LEN(file_path$)-loop_index)  !the name or mask
+    file_path$=current_folder$
+    ~GEMDOS(26,L:dta_address%)  !Fsetdta: our own DTA
+    search_result%=FSFIRST(search_mask$,-1)  !all entries, folders included
+    OB_STATE(depack_tree%,depack_next&)=BSET(OB_STATE(depack_tree%,depack_next&),3)
+    OB_STATE(depack_tree%,depack_save&)=BSET(OB_STATE(depack_tree%,depack_save&),3)
+    OB_STATE(depack_tree%,depack_back&)=BSET(OB_STATE(depack_tree%,depack_back&),3)
+    OB_SPEC(depack_tree%,depack_save&)=V:save_button_text$
+    window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+    title_address%=V:window_title$
+    ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+    window_info$="        Made By Wingleader/Synergy (c) 1992/1993  "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    packed_text$=STR$(packed_length%,7)
+    unpacked_text$=STR$(unpacked_length%,7)
+    gained_text$=STR$(length_gained%,7)
+    OB_SPEC(depack_tree%,depack_packed&)=V:packed_text$
+    OB_SPEC(depack_tree%,depack_unpacked&)=V:unpacked_text$
+    OB_SPEC(depack_tree%,depack_gained&)=V:gained_text$
+    leave_event_loop!=TRUE
+    ~WIND_CLOSE(window_handle&)
+    open_dialog(depack_tree%)
+    DELETE file_buffer|(0)
+    current_tree%=depack_tree%
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(depack_tree%,0,10,work_x&,work_y&,work_w&,work_h&)
+    underline_shortcuts
+    find_folders  !collect the folders, then depack
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Loads the file file_path$ into file_buffer|(), finds out which packer made it, depacks it with
+' that packer's routine and shows the result (show_result).  In single-file mode a file that is
+' too large, or not packed, is reported in the depack box; in folder mode an unpacked file is
+' skipped.
+' A data file is known by the packer's identifier at the start of the file (a few at the end).
+' A program is known by the identifier inside its depack code, at the offset where each packer
+' puts it; data_offset% is then where the packed data starts in the buffer.  Before calling the
+' depack procedure, each branch shows "Depacking" and goes into supervisor mode (GEMDOS 32,
+' Super, old_stack); the depack procedure goes back to user mode.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_file
+  ' Only the length is needed here.
+  OPEN "i",#1,file_path$
+  packed_length%=LOF(1)
+  CLOSE #1
+  ' The file must fit in the buffer with 20% to spare.
+  IF packed_length%*1.2>buffer_size%
+    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="File is to large to fit in memory"
+    OB_STATE(depack_tree%,depack_save&)=BSET(OB_STATE(depack_tree%,depack_save&),3)
+    OB_STATE(depack_tree%,depack_next&)=BSET(OB_STATE(depack_tree%,depack_next&),3)
+    OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+    ' Show the message and wait in the event loop.  If the loop returns, the file is loaded anyway.
+    leave_event_loop!=FALSE
+    current_tree%=depack_tree%
+    CARD{message_address%}=20  !a made-up WM_REDRAW message
+    handle_message
+    event_loop
+  ENDIF
+  ' The file's folder becomes the file selector's path; its name is kept as the name to save under.
+  backslash_pos=LEN(file_path$)
+  DO
+    EXIT IF MID$(file_path$,backslash_pos,1)="\"
+    SUB backslash_pos,1
+  LOOP
+  source_path$=LEFT$(file_path$,backslash_pos)
+  source_path$=source_path$+"*.*"
+  loaded_name$=MID$(file_path$,backslash_pos+1)
+  ' Data files: the identifier at the start (or end) of the file.
+  BLOAD file_path$,V:file_buffer|(0)
+  IF PEEK(V:file_buffer|(0))=65 AND PEEK(V:file_buffer|(0)+1)=84 AND PEEK(V:file_buffer|(0)+2)=79 AND PEEK(V:file_buffer|(0)+3)=77  !"ATOM"
+    packer_name$="Atomik 3.3  (DATA)"
+    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+    old_stack=GEMDOS(32,L:0)
+    depack_atomik_v33
+    show_result
+  ELSE
+    IF PEEK(V:file_buffer|(0))=73 AND PEEK(V:file_buffer|(0)+1)=67 AND PEEK(V:file_buffer|(0)+2)=69  !"ICE"
+      packer_name$="Ice 2.40    (DATA)"
+      CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+      ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+      ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+      old_stack=GEMDOS(32,L:0)
+      depack_ice_v240
+      show_result
+    ELSE
+      IF PEEK(V:file_buffer|(0))=73 AND PEEK(V:file_buffer|(0)+1)=99 AND PEEK(V:file_buffer|(0)+2)=101  !"Ice"
+        packer_name$="Ice 2.1?    (DATA)"
+        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+        old_stack=GEMDOS(32,L:0)
+        depack_ice_v21
+        show_result
+      ELSE
+        IF PEEK(V:file_buffer|(0))=76 AND PEEK(V:file_buffer|(0)+1)=90 AND PEEK(V:file_buffer|(0)+2)=87  !"LZW"
+          packer_name$="Jam 4.0 LZW (DATA)"
+          CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+          ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+          ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+          old_stack=GEMDOS(32,L:0)
+          depack_jam_lzw
+          show_result
+        ELSE
+          IF PEEK(V:file_buffer|(0))=76 AND PEEK(V:file_buffer|(0)+1)=90 AND PEEK(V:file_buffer|(0)+2)=72  !"LZH"
+            packer_name$="Jam 4.0 LZH (DATA)"
+            CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+            ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+            ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+            old_stack=GEMDOS(32,L:0)
+            depack_jam_lzh
+            show_result
+          ELSE
+            IF PEEK(V:file_buffer|(0))=65 AND PEEK(V:file_buffer|(0)+1)=85 AND PEEK(V:file_buffer|(0)+2)=53  !"AU5"
+              packer_name$="AUTOM. 5.01 (DATA)"
+              CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+              ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+              ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+              old_stack=GEMDOS(32,L:0)
+              depack_automation_v501
+              show_result
+            ELSE
+              IF PEEK(V:file_buffer|(0))=76 AND PEEK(V:file_buffer|(0)+1)=83 AND PEEK(V:file_buffer|(0)+2)=68  !"LSD"
+                packer_name$="AUTOM. 2.3  (DATA)"
+                CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                old_stack=GEMDOS(32,L:0)
+                depack_automation_v23
+                show_result
+              ELSE
+                ' Sentry: "Snt2" in the last four bytes of the file.
+                IF PEEK(PRED(packed_length%+V:file_buffer|(0)))=50 AND PEEK(packed_length%+V:file_buffer|(0)-2)=116 AND PEEK(packed_length%+V:file_buffer|(0)-3)=110 AND PEEK(packed_length%+V:file_buffer|(0)-4)=83
+                  packer_name$="Sentry 2.?? (DATA)"
+                  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                  old_stack=GEMDOS(32,L:0)
+                  sentry_data_file!=TRUE  !the data-file depacker
+                  depack_sentry
+                  show_result
+                ELSE
+                  IF PEEK(V:file_buffer|(0))=70 AND PEEK(V:file_buffer|(0)+1)=73 AND PEEK(V:file_buffer|(0)+2)=82 AND PEEK(V:file_buffer|(0)+3)=69  !"FIRE"
+                    packer_name$="Pack Fire 2.0 (DATA)"
+                    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                    ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                    old_stack=GEMDOS(32,L:0)
+                    depack_fire_v20
+                    show_result
+                  ELSE
+                    IF PEEK(V:file_buffer|(0))=65 AND PEEK(V:file_buffer|(0)+1)=84 AND PEEK(V:file_buffer|(0)+2)=77 AND PEEK(V:file_buffer|(0)+3)=53  !"ATM5"
+                      packer_name$="Atomik 3.5 (DATA)"
+                      CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                      ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                      ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                      old_stack=GEMDOS(32,L:0)
+                      depack_atomik_v35_data
+                      show_result
+                    ELSE
+                      ' Pompey 1.9a: "POPI" in the last four bytes.  depack_pompey_v19a goes into supervisor mode itself.
+                      IF PEEK(packed_length%+V:file_buffer|(0)-4)=80 AND PEEK(packed_length%+V:file_buffer|(0)-3)=79 AND PEEK(packed_length%+V:file_buffer|(0)-2)=80 AND PEEK(PRED(packed_length%+V:file_buffer|(0)))=73
+                        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                        ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                        packer_name$="Pompey 1.9a (DATA)"
+                        depack_pompey_v19a
+                        show_result
+                      ELSE
+                        IF PEEK(V:file_buffer|(0))=83 AND PEEK(V:file_buffer|(0)+1)=80 AND PEEK(V:file_buffer|(0)+2)=50 AND PEEK(V:file_buffer|(0)+3)=48  !"SP20"
+                          packer_name$="Speed 2.0 (DATA)"
+                          CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                          ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                          ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                          speed_v20_file!=TRUE  !the Speed 2.0 depacker
+                          old_stack=GEMDOS(32,L:0)
+                          depack_speed
+                          show_result
+                        ELSE
+                          ' Speed 3.0: only "v3" at offset 2 is checked.
+                          IF PEEK(V:file_buffer|(0)+2)=118 AND PEEK(V:file_buffer|(0)+3)=51
+                            packer_name$="Speed 3.0 (DATA)"
+                            CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                            ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                            ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                            speed_v20_file!=FALSE
+                            old_stack=GEMDOS(32,L:0)
+                            depack_speed
+                            show_result
+                          ELSE
+                            IF PEEK(V:file_buffer|(0))=81 AND PEEK(V:file_buffer|(0)+1)=80 AND PEEK(V:file_buffer|(0)+2)=65 AND PEEK(V:file_buffer|(0)+3)=67  !"QPAC"
+                              length_offset%=16  !the unpacked length is at offset 16
+                              data_offset%=0
+                              packer_name$="Qpack 3.2 (DATA)"
+                              CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                              ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                              ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                              old_stack=GEMDOS(32,L:0)
+                              depack_qpack_v32
+                              show_result
+                            ELSE
+                              ' Programs: the identifier inside the depack code.  Ice 2.40: "ICE" at 442 or 448.
+                              IF PEEK(442+V:file_buffer|(0))=73 AND PEEK(443+V:file_buffer|(0))=67 AND PEEK(444+V:file_buffer|(0))=69 OR (PEEK(448+V:file_buffer|(0))=73 AND PEEK(449+V:file_buffer|(0))=67 AND PEEK(450+V:file_buffer|(0))=69)
+                                IF PEEK(442+V:file_buffer|(0))=73
+                                  data_offset%=442
+                                ELSE
+                                  data_offset%=448
+                                ENDIF
+                                packer_name$="Ice 2.40    (PRG)"
+                                CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                old_stack=GEMDOS(32,L:0)
+                                depack_ice_v240
+                                show_result
+                              ELSE
+                                ' Ice 2.1: "Ice" at 35.  data_offset% 1 makes depack_ice_v21 run the file's own depacker.
+                                IF PEEK(35+V:file_buffer|(0))=73 AND PEEK(36+V:file_buffer|(0))=99 AND PEEK(37+V:file_buffer|(0))=101
+                                  data_offset%=1
+                                  packer_name$="Ice 2.1?    (PRG)"
+                                  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                  old_stack=GEMDOS(32,L:0)
+                                  depack_ice_v21
+                                  show_result
+                                ELSE
+                                  IF PEEK(544+V:file_buffer|(0))=76 AND PEEK(545+V:file_buffer|(0))=90 AND PEEK(546+V:file_buffer|(0))=87  !"LZW" at 544
+                                    data_offset%=544
+                                    packer_name$="Jam 4.0 LZW (PRG)"
+                                    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                    ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                    old_stack=GEMDOS(32,L:0)
+                                    depack_jam_lzw
+                                    show_result
+                                  ELSE
+                                    IF PEEK(1194+V:file_buffer|(0))=76 AND PEEK(1195+V:file_buffer|(0))=90 AND PEEK(1196+V:file_buffer|(0))=72  !"LZH" at 1194
+                                      data_offset%=1194
+                                      packer_name$="Jam 4.0 LZH (PRG)"
+                                      CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                      ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                      ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                      old_stack=GEMDOS(32,L:0)
+                                      depack_jam_lzh
+                                      show_result
+                                    ELSE
+                                      IF PEEK(1170+V:file_buffer|(0))=76 AND PEEK(1171+V:file_buffer|(0))=90 AND PEEK(1172+V:file_buffer|(0))=72  !"LZH" at 1170
+                                        data_offset%=1170
+                                        packer_name$="Jam 3.0 LZH (PRG)"
+                                        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                        ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                        old_stack=GEMDOS(32,L:0)
+                                        depack_jam_lzh
+                                        show_result
+                                      ELSE
+                                        IF PEEK(1098+V:file_buffer|(0))=76 AND PEEK(1099+V:file_buffer|(0))=90 AND PEEK(1100+V:file_buffer|(0))=72  !"LZH" at 1098
+                                          data_offset%=1098
+                                          packer_name$="Jam/Vap LZH (PRG)"
+                                          CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                          ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                          ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                          old_stack=GEMDOS(32,L:0)
+                                          depack_jam_lzh
+                                          show_result
+                                        ELSE
+                                          IF PEEK(836+V:file_buffer|(0))=65 AND PEEK(837+V:file_buffer|(0))=85 AND PEEK(838+V:file_buffer|(0))=53  !"AU5" at 836
+                                            data_offset%=836
+                                            packer_name$="AUTOM. 5.01 (PRG)"
+                                            CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                            ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                            ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                            old_stack=GEMDOS(32,L:0)
+                                            depack_automation_v501
+                                            show_result
+                                          ELSE
+                                            ' Automation 2.3 ("LSD" at 822) or 2.2r ("LSD" at 836).  The closing bracket is misplaced: the
+                                            ' second half compares the whole AND chain with 68, which works because TRUE AND TRUE AND 68 is 68.
+                                            IF PEEK(822+V:file_buffer|(0))=76 AND PEEK(823+V:file_buffer|(0))=83 AND PEEK(824+V:file_buffer|(0))=68 OR (PEEK(836+V:file_buffer|(0))=76 AND PEEK(837+V:file_buffer|(0))=83 AND PEEK(838+V:file_buffer|(0)))=68
+                                              IF PEEK(822+V:file_buffer|(0))=76
+                                                packer_name$="AUTOM. 2.3  (PRG)"
+                                                data_offset%=822
+                                              ELSE
+                                                packer_name$="AUTOM. 2.2r  (PRG)"
+                                                data_offset%=836
+                                              ENDIF
+                                              CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                              ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                              ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                              old_stack=GEMDOS(32,L:0)
+                                              depack_automation_v23
+                                              show_result
+                                            ELSE
+                                              IF PEEK(758+V:file_buffer|(0))=76 AND PEEK(759+V:file_buffer|(0))=83 AND PEEK(760+V:file_buffer|(0))=68  !"LSD" at 758
+                                                data_offset%=758
+                                                packer_name$="Jam 4.0 V2  (PRG)"
+                                                CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                old_stack=GEMDOS(32,L:0)
+                                                depack_automation_v23
+                                                show_result
+                                              ELSE
+                                                IF PEEK(564+V:file_buffer|(0))=47 AND PEEK(565+V:file_buffer|(0))=77 AND PEEK(566+V:file_buffer|(0))=67 AND PEEK(567+V:file_buffer|(0))=83  !"/MCS" at 564
+                                                  data_offset%=564
+                                                  packer_name$="Atomik 3.3  (PRG)"
+                                                  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                  old_stack=GEMDOS(32,L:0)
+                                                  depack_atomik_v33
+                                                  show_result
+                                                ELSE
+                                                  IF PEEK(652+V:file_buffer|(0))=47 AND PEEK(653+V:file_buffer|(0))=77 AND PEEK(654+V:file_buffer|(0))=67 AND PEEK(655+V:file_buffer|(0))=83  !"/MCS" at 652
+                                                    packer_name$="Atomik 3.5  (PRG)"
+                                                    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                    ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                    old_stack=GEMDOS(32,L:0)
+                                                    depack_atomik_v35_prg
+                                                    show_result
+                                                  ELSE
+                                                    ' Sentry: the version number ("2.02", "2.05", "2.10", "2.11") in the depack code.
+                                                    IF PEEK(516+V:file_buffer|(0))=50 AND PEEK(517+V:file_buffer|(0))=46 AND PEEK(518+V:file_buffer|(0))=48 AND PEEK(519+V:file_buffer|(0))=50
+                                                      packer_name$="Sentry 2.02 (PRG)"
+                                                      CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                      ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                      ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                      old_stack=GEMDOS(32,L:0)
+                                                      sentry_data_file!=FALSE  !the program depacker
+                                                      depack_sentry
+                                                      show_result
+                                                    ELSE
+                                                      IF PEEK(522+V:file_buffer|(0))=50 AND PEEK(523+V:file_buffer|(0))=46 AND PEEK(524+V:file_buffer|(0))=48 AND PEEK(525+V:file_buffer|(0))=53
+                                                        packer_name$="Sentry 2.05 (PRG)"
+                                                        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                        ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                        old_stack=GEMDOS(32,L:0)
+                                                        sentry_data_file!=FALSE
+                                                        depack_sentry
+                                                        show_result
+                                                      ELSE
+                                                        IF PEEK(524+V:file_buffer|(0))=50 AND PEEK(525+V:file_buffer|(0))=46 AND PEEK(526+V:file_buffer|(0))=49 AND PEEK(527+V:file_buffer|(0))=48
+                                                          packer_name$="Sentry 2.10 (PRG)"
+                                                          CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                          ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                          ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                          old_stack=GEMDOS(32,L:0)
+                                                          sentry_data_file!=FALSE
+                                                          depack_sentry
+                                                          show_result
+                                                        ELSE
+                                                          IF PEEK(526+V:file_buffer|(0))=50 AND PEEK(527+V:file_buffer|(0))=46 AND PEEK(528+V:file_buffer|(0))=49 AND PEEK(529+V:file_buffer|(0))=49
+                                                            packer_name$="Sentry 2.11 (PRG)"
+                                                            CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                            ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                            ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                            old_stack=GEMDOS(32,L:0)
+                                                            sentry_data_file!=FALSE
+                                                            depack_sentry
+                                                            show_result
+                                                          ELSE
+                                                            ' Pompey: "POPI" eight bytes from the end.  depack_pompey_prg finds the version and the depacker.
+                                                            IF PEEK(packed_length%+V:file_buffer|(0)-8)=80 AND PEEK(packed_length%+V:file_buffer|(0)-7)=79 AND PEEK(packed_length%+V:file_buffer|(0)-6)=80 AND PEEK(packed_length%+V:file_buffer|(0)-5)=73
+                                                              CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                              ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                              ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                              depack_pompey_prg
+                                                              show_result
+                                                            ELSE
+                                                              IF PEEK(packed_length%+V:file_buffer|(0)-8)=112 AND PEEK(packed_length%+V:file_buffer|(0)-7)=111 AND PEEK(packed_length%+V:file_buffer|(0)-6)=112 AND PEEK(packed_length%+V:file_buffer|(0)-5)=105  !"popi" eight bytes from the end
+                                                                packer_name$="Pompey 3.0 (PRG)"
+                                                                CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                                ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                                ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                                old_stack=GEMDOS(32,L:0)
+                                                                depack_pompey_v30
+                                                                show_result
+                                                              ELSE
+                                                                IF PEEK(560+V:file_buffer|(0))=70 AND PEEK(561+V:file_buffer|(0))=73 AND PEEK(562+V:file_buffer|(0))=82 AND PEEK(563+V:file_buffer|(0))=69  !"FIRE" at 560
+                                                                  packer_name$="Pack Fire 2.0 (PRG)"
+                                                                  data_offset%=560
+                                                                  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                                  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                                  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                                  old_stack=GEMDOS(32,L:0)
+                                                                  depack_fire_v20
+                                                                  show_result
+                                                                ELSE
+                                                                  IF PEEK(226+V:file_buffer|(0))=83 AND PEEK(227+V:file_buffer|(0))=80 AND PEEK(228+V:file_buffer|(0))=50 AND PEEK(229+V:file_buffer|(0))=48  !"SP20" at 226
+                                                                    packer_name$="Speed 2.0 (PRG)"
+                                                                    data_offset%=230  !the packed data
+                                                                    length_offset%=542  !the unpacked length at 542+12
+                                                                    speed_v20_file!=TRUE
+                                                                    CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                                    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                                    ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                                    old_stack=GEMDOS(32,L:0)
+                                                                    depack_speed
+                                                                    show_result
+                                                                  ELSE
+                                                                    IF PEEK(30+V:file_buffer|(0))=118 AND PEEK(31+V:file_buffer|(0))=51  !"v3" at 30
+                                                                      packer_name$="Speed 3.0 (PRG)"
+                                                                      CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                                      ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                                      ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                                      old_stack=GEMDOS(32,L:0)
+                                                                      depack_speed_v30_prg
+                                                                      show_result
+                                                                    ELSE
+                                                                      IF PEEK(48+V:file_buffer|(0))=81 AND PEEK(49+V:file_buffer|(0))=80 AND PEEK(50+V:file_buffer|(0))=65 AND PEEK(51+V:file_buffer|(0))=67  !"QPAC" at 48
+                                                                        length_offset%=64
+                                                                        data_offset%=48
+                                                                        packer_name$="Qpack 3.2 (PRG)"
+                                                                        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+                                                                        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                                                                        ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+                                                                        old_stack=GEMDOS(32,L:0)
+                                                                        depack_qpack_v32
+                                                                        show_result
+                                                                      ELSE
+                                                                        ' Nothing found: in single-file mode say so; in folder mode the file is skipped.
+                                                                        IF single_file_mode=1
+                                                                          leave_event_loop!=FALSE
+                                                                          CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Not packed"
+                                                                          OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+                                                                          current_tree%=depack_tree%
+                                                                          CARD{message_address%}=20
+                                                                          handle_message
+                                                                        ENDIF
+                                                                      ENDIF
+                                                                    ENDIF
+                                                                  ENDIF
+                                                                ENDIF
+                                                              ENDIF
+                                                            ENDIF
+                                                          ENDIF
+                                                        ENDIF
+                                                      ENDIF
+                                                    ENDIF
+                                                  ENDIF
+                                                ENDIF
+                                              ENDIF
+                                            ENDIF
+                                          ENDIF
+                                        ENDIF
+                                      ENDIF
+                                    ENDIF
+                                  ENDIF
+                                ENDIF
+                              ENDIF
+                            ENDIF
+                          ENDIF
+                        ENDIF
+                      ENDIF
+                    ENDIF
+                  ENDIF
+                ENDIF
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Atomik 3.3 (data and program).  a0 = the packed data; the file is depacked in place.
+' The result is a program file, whose length is found by walking its relocation table: the text,
+' data and symbol lengths in its header give the start of the table, a first long gives the first
+' offset (0: no relocation), then each byte 1 steps 254 bytes and any other byte steps that far,
+' up to a 0 byte.  Each long reached gets relocation_base% added, but relocation_base% is never
+' set, so the walk changes nothing and only finds the end of the file.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_atomik_v33
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  RCALL atomik_v33%,registers%()
+  text_start%=28+registers%(8)  !the text segment, after the header
+  reloc_pointer%=text_start%+LPEEK(registers%(8)+2)+LPEEK(registers%(8)+6)+LPEEK(14+registers%(8))  !the relocation table
+  reloc_address%=text_start%
+  reloc_step%=LPEEK(reloc_pointer%)
+  ADD reloc_pointer%,4
+  IF reloc_step%
+    REPEAT
+      IF reloc_step%=1
+        reloc_address%=reloc_address%+254
+      ELSE
+        IF reloc_step%
+          reloc_address%=reloc_address%+reloc_step%
+          LONG{reloc_address%}=relocation_base%+LPEEK(reloc_address%)
+        ENDIF
+      ENDIF
+      reloc_step%=PEEK(reloc_pointer%)
+      INC reloc_pointer%
+    UNTIL reloc_step%=0
+  ENDIF
+  unpacked_length%=reloc_pointer%-registers%(8)  !up to the end of the table
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(8)
+  ~GEMDOS(32,L:old_stack)  !Super: back to user mode
+RETURN
+' Atomik 3.5 data file: a0 = the buffer; the unpacked length is the long at offset 4.  Depacked in
+' place.
+PROCEDURE depack_atomik_v35_data
+  registers%(8)=V:file_buffer|(0)
+  unpacked_length%=LONG{V:file_buffer|(0)+4}
+  RCALL atomik_v35%,registers%()
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=V:file_buffer|(0)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Shows the lengths and the packer's name in the depack box, with the status "Unpacked", and works
+' out where to save: the file's own folder, or the destination path when "destination path" is
+' ticked.  With manual save the buttons are enabled and the user saves; with auto-save the file is
+' saved at once under its own name and the buffer cleared.
+' ---------------------------------------------------------------------------
+PROCEDURE show_result
+  packed_text$=STR$(packed_length%,7)
+  unpacked_text$=STR$(unpacked_length%,7)
+  gained_text$=STR$(length_gained%,7)
+  OB_SPEC(depack_tree%,depack_packed&)=V:packed_text$
+  OB_SPEC(depack_tree%,depack_unpacked&)=V:unpacked_text$
+  OB_SPEC(depack_tree%,depack_gained&)=V:gained_text$
+  CHAR{LONG{OB_SPEC(depack_tree%,depack_packer&)}}=packer_name$
+  OB_SPEC(depack_tree%,depack_save&)=V:save_button_text$
+  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Unpacked"
+  IF (BTST(OB_STATE(main_tree%,main_dest_check&),0))=FALSE  !destination path not ticked
+    FOR loop_index=LEN(file_path$) TO 0 STEP -1
+      EXIT IF MID$(file_path$,loop_index,1)="\"
+    NEXT loop_index
+    dest_path$=MID$(file_path$,1,loop_index)
+  ELSE
+    dest_path$=chosen_dest_path$
+  ENDIF
+  ' Manual save: enable Save and Back (and Next in folder mode) and wait for the user.
+  IF manual_save=1
+    waiting_for_save!=TRUE
+    leave_event_loop!=FALSE
+    IF single_file_mode=1
+      OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),3)
+      OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+    ELSE
+      OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),0)
+      OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),3)
+      OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),3)
+      OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+    ENDIF
+  ELSE
+    ' Auto-save.
+    save_path$=dest_path$+loaded_name$
+    check_disk_space
+    BSAVE save_path$,depacked_address%,unpacked_length%
+    DELETE file_buffer|(0)  !moves the buffer by one byte, see start_depack
+    data_offset%=0
+    IF single_file_mode=1
+      OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+      leave_event_loop!=FALSE
+    ENDIF
+  ENDIF
+  ' Redraw the depack box.
+  current_tree%=depack_tree%
+  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+  ~OBJC_DRAW(depack_tree%,0,10,work_x&,work_y&,work_w&,work_h&)
+  underline_shortcuts
+RETURN
+' Ice 2.40: a0 = the packed data; returns the unpacked length in d0.  Depacked in place.
+PROCEDURE depack_ice_v240
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  RCALL ice_v240%,registers%()
+  unpacked_length%=registers%(0)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(8)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Ice 2.1.  A program (data_offset% 1) is depacked by its own depacker: the unpacked length is the
+' long at offset 56, an RTS ($4E75) is written at offset 64 so the depacker returns instead of
+' running the program, and the code at offset 38 is called; the result is at a6.  A data file:
+' a0 = the buffer, ice_v21 returns the length in d0 and depacks in place.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_ice_v21
+  IF data_offset%=1
+    unpacked_length%=LPEEK(56+V:file_buffer|(0))
+    SDPOKE 64+V:file_buffer|(0),20085
+    RCALL 38+V:file_buffer|(0),registers%()
+    length_gained%=unpacked_length%-packed_length%
+    depacked_address%=registers%(14)
+  ELSE
+    registers%(8)=V:file_buffer|(0)
+    RCALL ice_v21%,registers%()
+    unpacked_length%=registers%(0)
+    length_gained%=unpacked_length%-packed_length%
+    depacked_address%=registers%(8)
+  ENDIF
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' JAM 4.0 LZW: a0 = the packed data, a1 = the end of the file.  The result is written from a1; its
+' length is a3-a6 afterwards.
+PROCEDURE depack_jam_lzw
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  registers%(9)=packed_length%+V:file_buffer|(0)
+  RCALL jam_lzw%,registers%()
+  unpacked_length%=registers%(11)-registers%(14)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(9)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' Automation 2.3/2.2r and JAM 4.0 V2 ("LSD"): the unpacked length is the long 4 bytes into the
+' packed data.  a0 = the packed data, a1 = the end of the file, where the result is written.
+PROCEDURE depack_automation_v23
+  unpacked_length%=LONG{data_offset%+V:file_buffer|(0)+4}
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  registers%(9)=packed_length%+V:file_buffer|(0)
+  RCALL automation_v23%,registers%()
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(9)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' JAM LZH: a5 = the packed data, a6 = the end of the file, where the result is written.  The
+' unpacked length is the long 4 bytes into the packed data.
+PROCEDURE depack_jam_lzh
+  registers%(13)=data_offset%+V:file_buffer|(0)
+  registers%(14)=packed_length%+V:file_buffer|(0)
+  unpacked_length%=LONG{data_offset%+V:file_buffer|(0)+4}
+  RCALL jam_lzh%,registers%()
+  depacked_address%=registers%(14)
+  length_gained%=unpacked_length%-packed_length%
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' Automation 5.01: a0 = the packed data; returns the unpacked length in d0.  Depacked in place.
+PROCEDURE depack_automation_v501
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  RCALL automation_v501%,registers%()
+  unpacked_length%=registers%(0)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(8)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Sentry: d0 = the file length, a0 = the buffer, a1 = the end of the file, where the result is
+' written.  sentry_data_file! picks the data-file or the program depacker; d0 returns the length.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_sentry
+  registers%(0)=packed_length%
+  registers%(8)=V:file_buffer|(0)
+  registers%(9)=packed_length%+V:file_buffer|(0)
+  IF sentry_data_file!=FALSE
+    RCALL sentry_prg%,registers%()
+  ELSE
+    RCALL sentry_data%,registers%()
+  ENDIF
+  unpacked_length%=registers%(0)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=packed_length%+V:file_buffer|(0)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Pompey 1.9a data file: the unpacked length is the long 8 bytes from the end.  a2 = the start,
+' a4 = the end of the file; the result is at a3.  Shows "Depacking" again (the caller already has)
+' and switches to supervisor mode itself.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_pompey_v19a
+  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Depacking"
+  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+  unpacked_length%=LONG{packed_length%+V:file_buffer|(0)-8}
+  registers%(12)=packed_length%+V:file_buffer|(0)
+  registers%(10)=V:file_buffer|(0)
+  old_stack=GEMDOS(32,L:0)
+  RCALL pompey_v19a%,registers%()
+  ~GEMDOS(32,L:old_stack)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(11)
+RETURN
+' ---------------------------------------------------------------------------
+' Pompey program: runs the depacker inside the file itself.
+' The first long between 1 and 1999 at an even offset (normally the text length at offset 2)
+' gives a2: start + 28 + that = the program's data segment, which holds the packed data.  a4 = the
+' end of the file - 4.  Then the code is searched word by word:
+'   $4E71 (NOP) anywhere: a4 = the end - 8 instead
+'   $3F3C,$0009 (MOVE.W #9,-(SP), Cconws): the word before is the displacement of the text it
+'     prints, whose first 19 characters become the packer's name
+'   $204C (MOVEA.L A4,A0): the depacker's entry point
+'   $B7CA (CMPA.L A2,A3): the end of the depack loop, where the search stops (INT{} is signed,
+'     so HEX$ gives "FFFFB7CA")
+' The two words before $B7CA become NOPs and the word 4 bytes after it an RTS, so the depacker
+' returns to us.  The result is at a3; the unpacked length is the long 12 bytes from the end.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_pompey_prg
+  LOCAL loop_index,name_offset,entry_offset%
+  FOR loop_index=0 TO packed_length% STEP 2
+    EXIT IF LONG{V:file_buffer|(0)+loop_index}<2000 AND LONG{V:file_buffer|(0)+loop_index}>0
+  NEXT loop_index
+  registers%(10)=28+(V:file_buffer|(0)+LONG{V:file_buffer|(0)+loop_index})
+  registers%(12)=packed_length%+V:file_buffer|(0)-4
+  unpacked_length%=LONG{packed_length%+V:file_buffer|(0)-12}
+  pompey_name_unknown!=TRUE  !no name found yet
+  FOR loop_index=0 TO packed_length% STEP 2
+    IF HEX$(INT{V:file_buffer|(0)+loop_index})="4E71"
+      registers%(12)=packed_length%+V:file_buffer|(0)-8
+    ENDIF
+    IF HEX$(LONG{V:file_buffer|(0)+loop_index})="3F3C0009"
+      name_offset=loop_index+INT{loop_index+V:file_buffer|(0)-2}+4
+      packer_name$=MID$(CHAR{V:file_buffer|(0)+name_offset},0,19)
+      pompey_name_unknown!=FALSE
+    ENDIF
+    IF HEX$(INT{V:file_buffer|(0)+loop_index})="204C"
+      entry_offset%=loop_index
+    ENDIF
+    EXIT IF HEX$(INT{V:file_buffer|(0)+loop_index})="FFFFB7CA"
+  NEXT loop_index
+  IF pompey_name_unknown!=TRUE
+    packer_name$="Pompey Unknown (PRG)"
+  ENDIF
+  SDPOKE loop_index+V:file_buffer|(0)-2,20081  !$4E71 NOP
+  SDPOKE loop_index+V:file_buffer|(0)-4,20081
+  SDPOKE loop_index+V:file_buffer|(0)+4,20085  !$4E75 RTS
+  old_stack=GEMDOS(32,L:0)
+  RCALL entry_offset%+V:file_buffer|(0),registers%()
+  ~GEMDOS(32,L:old_stack)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(11)
+RETURN
+' Pompey 3.0 program: a4 = the end of the file - 4; the result is at a3, its length d0+d2.
+PROCEDURE depack_pompey_v30
+  registers%(12)=packed_length%+V:file_buffer|(0)-4
+  RCALL pompey_v30%,registers%()
+  depacked_address%=registers%(11)
+  unpacked_length%=registers%(0)+registers%(2)
+  length_gained%=unpacked_length%-packed_length%
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' Pack Fire 2.0: a0 = the packed data; returns the unpacked length in d0.  Depacked in place.
+PROCEDURE depack_fire_v20
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  RCALL fire_v20%,registers%()
+  unpacked_length%=registers%(0)
+  depacked_address%=registers%(8)
+  length_gained%=unpacked_length%-packed_length%
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Atomik 3.5 program: atomik_v35_prg runs the file's own depacker.  It writes an RTS at offset $56
+' of the file, calls the code at offset $4C, then copies the d6 bytes it depacked from a0 back to
+' the start of the buffer and returns the length in d0.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_atomik_v35_prg
+  registers%(8)=V:file_buffer|(0)
+  RCALL atomik_v35_prg%,registers%()
+  unpacked_length%=registers%(0)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=V:file_buffer|(0)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Speed 2.0 (data and program) and Speed 3.0 data: a0 = the packed data; the unpacked length is
+' the long at length_offset%+12.  speed_v20_file! picks the routine.  Depacked in place.
+' length_offset% is cleared afterwards.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_speed
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  unpacked_length%=LONG{length_offset%+(12+V:file_buffer|(0))}
+  IF speed_v20_file!=TRUE
+    RCALL speed_v20%,registers%()
+  ELSE
+    RCALL speed_v30_data%,registers%()
+  ENDIF
+  length_gained%=unpacked_length%-packed_length%
+  length_offset%=0
+  depacked_address%=registers%(8)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' Speed 3.0 program: a0 = the buffer; returns the unpacked length in d0.  Depacked in place.
+PROCEDURE depack_speed_v30_prg
+  registers%(8)=V:file_buffer|(0)
+  RCALL speed_v30_prg%,registers%()
+  unpacked_length%=registers%(0)
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=V:file_buffer|(0)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Qpack 3.2: the unpacked length is the long at length_offset% (16 in a data file, 64 in a
+' program).  a0 = the packed data, a1 = the end of the file, where the result is written.
+' length_offset% is not cleared, so a Speed data file depacked next in the same folder run reads
+' its length from the wrong place.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_qpack_v32
+  unpacked_length%=LPEEK(length_offset%+V:file_buffer|(0))
+  registers%(8)=data_offset%+V:file_buffer|(0)
+  registers%(9)=packed_length%+V:file_buffer|(0)
+  RCALL qpack_v32%,registers%()
+  length_gained%=unpacked_length%-packed_length%
+  depacked_address%=registers%(9)
+  ~GEMDOS(32,L:old_stack)
+RETURN
+' ---------------------------------------------------------------------------
+' Folder mode, first pass: reads the entries of the selected folder (start_depack has begun the
+' search) and of each folder found, and adds every sub-folder (attribute bit 4, but not "." and
+' "..") to folder_list$() as "path\*.*".  folder_list$() has room for 200.  Esc ends the run.
+' When all folders are read, depack_folders goes through them.  Does not return: the run ends in
+' end_folder_run, which opens the main dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE find_folders
+  folder_count=1
+  folder_index=0
+  ~WIND_UPDATE(1)  !BEG_UPDATE
+  SHOWM
+  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Searching for Sub-Directories"
+  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+next_folder_entry:
+  DO
+    IF search_result%=0
+      file_path$=file_path$+CHAR{dta_address%+30}  !the name from the DTA
+      IF BTST(BYTE{dta_address%+21},4)  !the attribute: a folder
+        temp_size%=LEN(file_path$)
+        IF (MID$(file_path$,temp_size%,1)=".") OR (MID$(file_path$,temp_size%-1,2)="..")
+        ELSE
+          folder_list$(folder_count)=file_path$+"\*.*"
+          INC folder_count
+        ENDIF
+      ENDIF
+      search_result%=GEMDOS(79)  !Fsnext
+      file_path$=current_folder$
+      IF INKEY$=CHR$(27)
+        end_folder_run
+      ENDIF
+      GOTO next_folder_entry
+    ENDIF
+    ' This folder is done: on to the next one in the list.
+    INC folder_index
+    IF folder_index>folder_count-1
+      depack_folders
+    ENDIF
+    search_result%=FSFIRST(folder_list$(folder_index),-1)
+    folder_entry_length%=LEN(folder_list$(folder_index))
+    current_folder$=MID$(folder_list$(folder_index),1,folder_entry_length%-3)
+    file_path$=current_folder$
+  LOOP
+RETURN
+' ---------------------------------------------------------------------------
+' Folder mode, second pass: looks for the selected name or mask in the selected folder and then
+' in every folder in folder_list$(), and depacks each file found (not folders, attribute bit 4,
+' or volume labels, bit 3).  With manual save the event loop runs after each file until Save,
+' Next or Back.  Esc, or the end of the list, ends the run (end_folder_run).
+' The first folder is taken from loop_index, still the backslash position from start_depack.
+' ---------------------------------------------------------------------------
+PROCEDURE depack_folders
+  search_result%=FSFIRST(selected_file$,-1)
+  file_path$=MID$(search_mask$,1,LEN(search_mask$)-3)
+  current_folder$=MID$(file_path$,1,loop_index)
+  folder_index=0
+  CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Loading"
+  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+  ~OBJC_DRAW(depack_tree%,depack_status&,7,work_x&,work_y&,work_w&,work_h&)
+next_file_entry:
+  DO
+    IF search_result%=0
+      file_path$=file_path$+CHAR{dta_address%+30}
+      IF BTST(BYTE{dta_address%+21},4)  !a folder: skip
+      ELSE
+        IF BTST(BYTE{dta_address%+21},3)  !a volume label: skip
+        ELSE
+          CHAR{LONG{OB_SPEC(depack_tree%,depack_file_name&)}}=MID$(file_path$,1,42)
+          ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+          ~OBJC_DRAW(depack_tree%,depack_file_name&,7,work_x&,work_y&,work_w&,work_h&)
+          depack_file  !load, identify, depack
+          IF waiting_for_save!=TRUE
+            event_loop
+            ~WIND_UPDATE(1)
+          ENDIF
+        ENDIF
+      ENDIF
+      search_result%=GEMDOS(79)
+      file_path$=current_folder$
+      IF INKEY$=CHR$(27)
+        end_folder_run
+      ENDIF
+      GOTO next_file_entry
+    ENDIF
+    INC folder_index
+    IF folder_index>folder_count-1
+      end_folder_run
+    ENDIF
+    search_result%=FSFIRST(MID$(folder_list$(folder_index),1,LEN(folder_list$(folder_index))-3)+file_mask$,-1)
+    folder_entry_length%=LEN(folder_list$(folder_index))
+    current_folder$=MID$(folder_list$(folder_index),1,folder_entry_length%-3)
+    file_path$=current_folder$
+  LOOP
+RETURN
+' ---------------------------------------------------------------------------
+' ON ERROR and ON BREAK handler: shows the error box with the error number, "A Fatal Error
+' Occured" or "An Error Occured".  It never RESUMEs: the error box runs its own event loop, whose
+' OK button goes back to the depack box (or quits after a fatal error, click_error).
+' ---------------------------------------------------------------------------
+PROCEDURE error_handler
+  ON ERROR GOSUB error_handler  !ON ERROR is cleared on each error
+  error_number_text$=STR$(ERR,3)
+  IF FATAL
+    ~WIND_CLOSE(window_handle&)
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_1&)}}=" A Fatal Error Occured "
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_2&)}}=" Error Number : "+error_number_text$
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_3&)}}=" Back to the Desktop "
+    window_info$="    Made By Wingleader/Synergy (c) 1992/1993    "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(error_tree%)
+  ELSE
+    ~WIND_CLOSE(window_handle&)
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_1&)}}=" An Error Occured "
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_2&)}}=" Error Number : "+error_number_text$
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_3&)}}=" Fix it and we will try it again!! "
+    window_info$="    Made By Wingleader/Synergy (c) 1992/1993    "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(error_tree%)
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Sets the object numbers of the dialogs, fixes up the resource and sets the defaults:
+' single-file mode and manual save.  Some numbers are set but never used.
+' ---------------------------------------------------------------------------
+PROCEDURE set_object_numbers
+  ' Tree 0, the main dialog.
+  main_root&=0
+  main_depack&=1  !Depack
+  main_options&=2  !Options
+  main_info&=3  !Info
+  main_manual_save&=5  !manual save (radio)
+  main_auto_save&=6  !auto-save (radio)
+  main_folder_label&=8
+  main_single_label&=9
+  main_folder_mode&=10  !folder mode (radio)
+  main_single_mode&=11  !single-file mode (radio)
+  main_auto_label&=12
+  main_manual_label&=13
+  main_dest_label&=15
+  main_dest_path&=16  !the destination path
+  main_dest_check&=17  !"destination path" tick box
+  ' Tree 1, the options: buffer size, free memory, TOS and AES version.
+  options_object_1&=1
+  options_ok&=2
+  options_buffer_size&=13  !the buffer size (editable)
+  options_free_memory&=15
+  options_save&=17  !Save (writes \SYNERGYD.INF)
+  options_tos_version&=18
+  options_aes_version&=19
+  ' Tree 2, the depack box.
+  depack_object_2&=2
+  depack_unpacked&=3
+  depack_packed&=5
+  depack_gained&=9
+  depack_status&=12
+  depack_file_name&=13
+  depack_packer&=17
+  depack_save&=19  !Save
+  depack_back&=22  !Back
+  depack_next&=23  !Next (folder mode)
+  ' Tree 3, the error box.
+  error_object_3&=3
+  error_ok&=3
+  error_line_1&=5
+  error_line_2&=6
+  error_line_3&=7
+  ' Tree 4, the info box.  Tree 5, the greetings, uses its numbers directly.
+  info_object_4&=4
+  info_ok&=1
+  info_object_2&=2
+  info_3d_object&=4
+  info_object_5&=5
+  ~@fix_resource  !copy and fix up the resource
+  single_file_mode=1  !single-file mode
+  manual_save=1  !manual save
+RETURN
+$F<
+' ---------------------------------------------------------------------------
+' Puts the address of the built-in resource in resource_address%.  The function has no RETURN,
+' and nothing calls init_resource, which follows it: compiled, the code runs on from here into
+' init_resource and returns from there.  This is how the dialog trees get their addresses.
+' ---------------------------------------------------------------------------
+FUNCTION fix_resource
+  $F%
+  resource_address%=resource_data%
+ENDFUNC
+' ---------------------------------------------------------------------------
+' Sets up the built-in resource (reached only from fix_resource): copies it, adds its address to
+' every pointer in it, gives its tree index to the AES, converts every object's position and size
+' from characters to pixels (RSRC_OBFIX) and gets the address of each of the six trees.
+' ---------------------------------------------------------------------------
+PROCEDURE init_resource
+  LOCAL item_index%
+  copy_resource(resource_address%)
+  relocate_resource(rsc_copy_address%)
+  set_tree_pointer(tree_index_address%)
+  FOR item_index%=0 TO object_count%-1
+    ~RSRC_OBFIX(object_array%,item_index%)
+  NEXT item_index%
+  ~RSRC_GADDR(0,0,main_tree%)
+  ~RSRC_GADDR(0,1,options_tree%)
+  ~RSRC_GADDR(0,2,depack_tree%)
+  ~RSRC_GADDR(0,3,error_tree%)
+  ~RSRC_GADDR(0,4,info_tree%)
+  ~RSRC_GADDR(0,5,greetings_tree%)
+RETURN
+' Takes the resource away from the AES again (before quitting).
+PROCEDURE release_resource
+  set_tree_pointer(0)
+RETURN
+' ---------------------------------------------------------------------------
+' Copies the resource at pointer_address% (rsh_rssize, its length, is the word at offset 34) into
+' rsc_copy%(), dimensioned the first time, and sets rsc_copy_address%.
+' ---------------------------------------------------------------------------
+PROCEDURE copy_resource(pointer_address%)
+  rsc_size%=CARD{pointer_address%+34}
+  IF DIM?(rsc_copy%())=0
+    DIM rsc_copy%(SUCC(rsc_size% DIV 4))
+  ENDIF
+  rsc_copy_address%=V:rsc_copy%(0)
+  BMOVE pointer_address%,rsc_copy_address%,rsc_size%
+RETURN
+' ---------------------------------------------------------------------------
+' Reads the resource header at rsc_start% (offsets of the tables and their counts) and adds the
+' resource's address to every pointer in it: the tree index, the three string pointers of each
+' TEDINFO (28 bytes), each object's ob_spec (24 bytes), each BITBLK's image (14 bytes), the three
+' pointers of each ICONBLK (34 bytes) and the free images.  The free strings are not fixed up.
+' ---------------------------------------------------------------------------
+PROCEDURE relocate_resource(rsc_start%)
+  LOCAL item_index%
+  rsc_version%=CARD{rsc_start%}
+  object_count%=CARD{rsc_start%+20}
+  object_array%=rsc_start%+CARD{rsc_start%+2}
+  tree_count%=CARD{rsc_start%+22}
+  tree_index_address%=rsc_start%+CARD{rsc_start%+18}
+  iconblk_count%=CARD{rsc_start%+26}
+  iconblk_array%=rsc_start%+CARD{rsc_start%+6}
+  bitblk_count%=CARD{rsc_start%+28}
+  bitblk_array%=rsc_start%+CARD{rsc_start%+8}
+  tedinfo_count%=CARD{rsc_start%+24}
+  tedinfo_array%=rsc_start%+CARD{rsc_start%+4}
+  image_count%=CARD{rsc_start%+32}
+  image_array%=rsc_start%+CARD{rsc_start%+16}
+  FOR item_index%=0 TO tree_count%-1
+    add_to_long(tree_index_address%+SHL(item_index%,2),rsc_start%)
+  NEXT item_index%
+  FOR item_index%=0 TO tedinfo_count%-1
+    add_to_three_longs(tedinfo_array%+item_index%*28,rsc_start%)
+  NEXT item_index%
+  FOR item_index%=0 TO object_count%-1
+    relocate_object(object_array%+item_index%*24,rsc_start%)
+  NEXT item_index%
+  FOR item_index%=0 TO bitblk_count%-1
+    add_to_long(bitblk_array%+item_index%*14,rsc_start%)
+  NEXT item_index%
+  FOR item_index%=0 TO iconblk_count%-1
+    add_to_three_longs(iconblk_array%+item_index%*34,rsc_start%)
+  NEXT item_index%
+  FOR item_index%=0 TO image_count%-1
+    add_to_long(image_array%+SHL(item_index%,2),rsc_start%)
+  NEXT item_index%
+RETURN
+' Adds add_value% to the long at pointer_address%.
+PROCEDURE add_to_long(pointer_address%,add_value%)
+  LONG{pointer_address%}=add_value%+LONG{pointer_address%}
+RETURN
+' Adds rsc_base% to the three longs at clicked_object% (here the address of a structure).
+PROCEDURE add_to_three_longs(clicked_object%,rsc_base%)
+  add_to_long(clicked_object%,rsc_base%)
+  add_to_long(clicked_object%+4,rsc_base%)
+  add_to_long(clicked_object%+8,rsc_base%)
+RETURN
+' ---------------------------------------------------------------------------
+' Fixes up the ob_spec of the object at clicked_object% (here an address).  ob_spec is a pointer
+' for every type but G_BOX (20), G_IBOX (25) and G_BOXCHAR (27), where it holds the colours.
+' ---------------------------------------------------------------------------
+PROCEDURE relocate_object(clicked_object%,rsc_base%)
+  LOCAL unused_local
+  $S&
+  SELECT BYTE(CARD{clicked_object%+6})
+  CASE 21,22,23,24,26,28,29,30,31,32
+    add_to_long(12+clicked_object%,rsc_base%)
+  CASE 20,25,27
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Puts pointer_address% in ap_ptree, the long at offset 10 of the AES global array (whose address
+' is at GB+4), so RSRC_GADDR finds the trees of the built-in resource.  0 removes it.
+' ---------------------------------------------------------------------------
+PROCEDURE set_tree_pointer(pointer_address%)
+  LONG{LONG{GB+4}+10}=pointer_address%
+RETURN
+' ---------------------------------------------------------------------------
+' Ends a folder run: puts the old DTA back (Fsetdta), enables Save and Back, sets the file
+' selector to the root of the drive and opens the main dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE end_folder_run
+  ~GEMDOS(26,L:old_dta%)  !Fsetdta
+  OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),3)
+  OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),3)
+  source_path$=MID$(current_folder$,0,2)+"\*.*"
+  ~WIND_CLOSE(window_handle&)
+  leave_event_loop!=FALSE
+  window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+  title_address%=V:window_title$
+  ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+  window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+  info_address%=V:window_info$
+  ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+  ~WIND_UPDATE(0)  !END_UPDATE
+  open_dialog(main_tree%)
+RETURN
+' ---------------------------------------------------------------------------
+' Gives 100000 bytes of free memory back to GEMDOS (RESERVE) and reads the buffer size from
+' \SYNERGYD.INF, which is made with "0100000" when it is not there.  Dimensions the buffer and
+' shows the free memory and the buffer size in the options dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE set_up_buffer
+  free_memory%=FRE(0)-100000  !the largest buffer allowed
+  RESERVE FRE(0)-100000
+  IF EXIST("\SYNERGYD.INF")=-1
+    OPEN "i",#1,"\SYNERGYD.INF"
+    INPUT #1,file_path$
+    CLOSE #1
+  ELSE
+    OPEN "o",#1,"\SYNERGYD.INF"
+    file_path$="0100000"
+    PRINT #1,file_path$
+    CLOSE #1
+  ENDIF
+  buffer_allocated%=VAL(file_path$)
+  DIM file_buffer|(buffer_allocated%)
+  buffer_size%=buffer_allocated%
+  CHAR{LONG{OB_SPEC(options_tree%,options_free_memory&)}}=STR$(free_memory%,7)+" Bytes"
+  CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}}=file_path$
+RETURN
+' ---------------------------------------------------------------------------
+' Checks that the drive of save_path$ has room for the depacked file (DFREE).  If not, shows
+' "Disk Full" in the error box; the second line has the last error number added to it by mistake.
+' ---------------------------------------------------------------------------
+PROCEDURE check_disk_space
+  CHDRIVE UPPER$(MID$(save_path$,0,3))
+  temp_size%=DFREE(0)
+  IF temp_size%<unpacked_length%
+    ~WIND_CLOSE(window_handle&)
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_1&)}}="Disk Full"
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_2&)}}="Please Insert Another Disk"+error_number_text$
+    CHAR{LONG{OB_SPEC(error_tree%,error_line_3&)}}="Thank you !!!"
+    window_info$="    Made By Wingleader/Synergy (c) 1992/1993    "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(error_tree%)
+  ENDIF
+RETURN
+' Sets the window's title and info line, shows the source path in the main dialog, gets the
+' character size (GRAF_HANDLE) and opens the main dialog.
+PROCEDURE open_main_dialog
+  window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+  title_address%=V:window_title$
+  ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+  window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+  info_address%=V:window_info$
+  ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+  CHAR{LONG{OB_SPEC(main_tree%,main_dest_path&)}}=MID$(source_path$,0,31)
+  ~GRAF_HANDLE(char_width&,char_height&,cell_width&,cell_height&)
+  open_dialog(main_tree%)
+RETURN
+' ---------------------------------------------------------------------------
+' Handles an AES message in message_buffer%(): WM_REDRAW, WM_TOPPED, WM_CLOSED and WM_MOVED.
+' The program also calls it with a made-up WM_REDRAW to redraw the current dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE handle_message
+  $S<
+  SELECT INT{message_address%}
+    '
+  CASE 20
+    ' WM_REDRAW (20): redraw each rectangle of the window's list (WF_FIRSTXYWH 11, WF_NEXTXYWH 12)
+    ' that meets the area in the message.  The edit cursor of the options dialog is hidden first
+    ' (OBJC_EDIT 3, ED_END) and shown again after (1, ED_INIT).
+    IF current_tree%=options_tree%
+      ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,3,edit_cursor&)
+    ENDIF
+    ~WIND_UPDATE(1)
+    ~WIND_GET(window_handle&,11,work_x&,work_y&,work_w&,work_h&)
+    WHILE work_w&<>0 AND work_h&<>0
+      IF RC_INTERSECT(INT{message_address%+8},INT{message_address%+10},INT{message_address%+12},INT{message_address%+14},work_x&,work_y&,work_w&,work_h&)=-1
+        ~OBJC_DRAW(current_tree%,0,7,work_x&,work_y&,work_w&,work_h&)
+      ENDIF
+      ~WIND_GET(window_handle&,12,work_x&,work_y&,work_w&,work_h&)
+    WEND
+    ~WIND_UPDATE(0)
+    IF current_tree%=options_tree%
+      ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,1,edit_cursor&)
+    ENDIF
+    underline_shortcuts
+  CASE 21
+    ' WM_TOPPED (21): WF_TOP.
+    ~WIND_SET(INT{message_address%+6},10,0,0,0,0)
+  CASE 22
+    ' WM_CLOSED (22): quit.
+    ALERT 1," Do You Really Want To Quit ",1," Yes | No ",clicked_object%
+    IF clicked_object%=1
+      ~WIND_CLOSE(window_handle&)
+      ~WIND_DELETE(window_handle&)
+      release_resource
+      ERASE file_buffer|()
+      ERASE folder_list$()
+      ERASE registers%()
+      ERASE shortcut_keys%()
+      ERASE message_buffer%()
+      RESERVE
+      END
+    ENDIF
+  CASE 28
+    ' WM_MOVED (28): keep the window below the menu bar and move the dialog with it.
+    ignore_input!=FALSE
+    ~WIND_GET(0,4,desk_x&,desk_y&,desk_w&,desk_h&)
+    IF desk_y&>INT{message_address%+10}
+      CARD{message_address%+10}=desk_y&
+    ENDIF
+    ~WIND_SET(window_handle&,5,INT{message_address%+8},INT{message_address%+10},INT{message_address%+12},INT{message_address%+14})
+    ~WIND_GET(window_handle&,4,moved_x&,moved_y&,moved_w&,moved_h&)
+    OB_X(current_tree%,0)=moved_x&
+    OB_Y(current_tree%,0)=moved_y&
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Handles a key in the current dialog.  The underlined letter of a button (shortcut_keys%(), in
+' capitals, or +32 for small letters) works that button.  Ctrl+Q quits in any dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE handle_key
+  IF mouse_button&<>1  !not while the left button is held
+    $S%
+    $S>
+    SELECT current_tree%
+    CASE main_tree%
+      ' Main dialog: the two mode pairs, Depack, Options, Info (or Help), destination path, G.
+      key_ascii%=key_code& MOD 256
+      IF key_ascii%=shortcut_keys%(0) OR key_ascii%=32+shortcut_keys%(0)
+        select_radio(main_single_mode&,main_folder_mode&)
+      ELSE
+        IF key_ascii%=shortcut_keys%(1) OR key_ascii%=32+shortcut_keys%(1)
+          select_radio(main_folder_mode&,main_single_mode&)
+        ELSE
+          IF key_ascii%=shortcut_keys%(2) OR key_ascii%=32+shortcut_keys%(2)
+            select_radio(main_manual_save&,main_auto_save&)
+          ELSE
+            IF key_ascii%=shortcut_keys%(3) OR key_ascii%=32+shortcut_keys%(3)
+              select_radio(main_auto_save&,main_manual_save&)
+            ELSE
+              ' Depack.
+              IF key_ascii%=shortcut_keys%(4) OR key_ascii%=32+shortcut_keys%(4)
+                OB_STATE(main_tree%,main_depack&)=BSET(OB_STATE(main_tree%,main_depack&),0)
+                ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                ~OBJC_DRAW(main_tree%,main_depack&,1,work_x&,work_y&,work_w&,work_h&)
+                IF BTST(OB_STATE(main_tree%,main_single_mode&),0)
+                  single_file_mode=1
+                ELSE
+                  single_file_mode=0
+                ENDIF
+                IF BTST(OB_STATE(main_tree%,main_manual_save&),0)
+                  manual_save=1
+                ELSE
+                  manual_save=0
+                ENDIF
+                start_depack
+              ELSE
+                ' Options.
+                IF key_ascii%=shortcut_keys%(5) OR key_ascii%=32+shortcut_keys%(5)
+                  OB_STATE(main_tree%,main_options&)=BSET(OB_STATE(main_tree%,main_options&),0)
+                  ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                  ~OBJC_DRAW(main_tree%,main_options&,1,work_x&,work_y&,work_w&,work_h&)
+                  ~WIND_CLOSE(window_handle&)
+                  window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+                  title_address%=V:window_title$
+                  ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+                  window_info$="             Made By Wingleader/Synergy (c) 1992/1993 "
+                  info_address%=V:window_info$
+                  ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+                  open_dialog(options_tree%)
+                ELSE
+                  ' Info, also on Help (scan code 98).
+                  IF key_ascii%=shortcut_keys%(6) OR key_ascii%=32+shortcut_keys%(6) OR 98=key_code& DIV 256
+                    OB_STATE(main_tree%,main_info&)=BSET(OB_STATE(main_tree%,main_info&),0)
+                    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+                    ~OBJC_DRAW(main_tree%,main_info&,1,work_x&,work_y&,work_w&,work_h&)
+                    ~WIND_CLOSE(window_handle&)
+                    OB_STATE(main_tree%,main_info&)=BCLR(OB_STATE(main_tree%,main_info&),0)
+                    window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+                    title_address%=V:window_title$
+                    ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+                    window_info$="                   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+                    info_address%=V:window_info$
+                    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+                    open_dialog(info_tree%)
+                  ELSE
+                    ' Destination path: ticks the box and asks for the path.
+                    IF key_ascii%=shortcut_keys%(7) OR key_ascii%=32+shortcut_keys%(7)
+                      OB_STATE(main_tree%,main_dest_check&)=BSET(OB_STATE(main_tree%,main_dest_check&),0)
+                      FILESELECT #"SELECT DEST. PATH",dest_path$,"",dest_path$
+                      IF dest_path$=""
+                        CHAR{LONG{OB_SPEC(main_tree%,main_dest_path&)}}=MID$(source_path$,0,31)
+                        dest_path$=source_path$
+                        CARD{message_address%}=20
+                        handle_message
+                      ELSE
+                        CHAR{LONG{OB_SPEC(main_tree%,main_dest_path&)}}=MID$(dest_path$,0,28)+"*.*"
+                        chosen_dest_path$=dest_path$
+                        CARD{message_address%}=20
+                        handle_message
+                      ENDIF
+                    ELSE
+                      ' G or g: the greetings.
+                      IF key_ascii%=103 OR key_ascii%=71
+                        ~WIND_CLOSE(window_handle&)
+                        OB_STATE(greetings_tree%,7)=BCLR(OB_STATE(greetings_tree%,7),0)
+                        open_dialog(greetings_tree%)
+                      ENDIF
+                    ENDIF
+                  ENDIF
+                ENDIF
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    CASE options_tree%
+      ' Options dialog: Save, the buffer-size field, OK or Return.
+      key_ascii%=key_code& MOD 256
+      IF key_ascii%=shortcut_keys%(1) OR key_ascii%=32+shortcut_keys%(1)
+        OB_STATE(options_tree%,options_save&)=BSET(OB_STATE(options_tree%,options_save&),0)
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(options_tree%,options_save&,1,work_x&,work_y&,work_w&,work_h&)
+        OPEN "o",#1,"\SYNERGYD.INF"
+        file_path$=CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}}
+        PRINT #1,file_path$
+        CLOSE #1
+        OB_STATE(options_tree%,options_save&)=BCLR(OB_STATE(options_tree%,options_save&),0)
+        current_tree%=options_tree%
+        CARD{message_address%}=20
+        handle_message
+      ENDIF
+      IF edit_started=0
+        edit_object&=options_buffer_size&
+        ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,1,edit_cursor&)
+        edit_started=1
+      ENDIF
+      keybd_result=FORM_KEYBD(options_tree%,edit_object&,key_code&,0,next_edit_object&,edit_char)
+      IF keybd_result<>0
+        IF next_edit_object&<=OB_TAIL(options_tree%,0)
+          ~OBJC_EDIT(options_tree%,edit_object&,edit_char,edit_cursor&,2,edit_cursor&)
+        ENDIF
+      ENDIF
+      IF key_ascii%=shortcut_keys%(0) OR key_ascii%=32+shortcut_keys%(0) OR key_ascii%=13
+        OB_STATE(options_tree%,options_ok&)=BSET(OB_STATE(options_tree%,options_ok&),0)
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(options_tree%,options_ok&,1,work_x&,work_y&,work_w&,work_h&)
+        OB_STATE(main_tree%,main_options&)=BCLR(OB_STATE(main_tree%,main_options&),0)
+        OB_STATE(options_tree%,options_ok&)=BCLR(OB_STATE(options_tree%,options_ok&),0)
+        ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,3,edit_cursor&)
+        ~WIND_CLOSE(window_handle&)
+        window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+        title_address%=V:window_title$
+        ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+        window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "
+        info_address%=V:window_info$
+        ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+        buffer_size%=VAL(CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}})
+        IF buffer_size%<>buffer_allocated% AND buffer_size%>=100000 AND buffer_size%<free_memory%
+          ERASE file_buffer|()
+          DIM file_buffer|(buffer_size%)
+          buffer_allocated%=buffer_size%
+        ELSE
+          IF buffer_size%<100000 OR buffer_size%>free_memory%
+            CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}}="0100000"
+          ENDIF
+        ENDIF
+        open_dialog(main_tree%)
+      ENDIF
+    CASE info_tree%
+      key_ascii%=key_code& MOD 256
+      ' Info box: Return.
+      IF key_ascii%=13
+        OB_STATE(info_tree%,info_ok&)=BSET(OB_STATE(info_tree%,info_ok&),0)
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(info_tree%,info_ok&,1,work_x&,work_y&,work_w&,work_h&)
+        OB_STATE(info_tree%,info_ok&)=BCLR(OB_STATE(info_tree%,info_ok&),0)
+        ~WIND_CLOSE(window_handle&)
+        window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+        title_address%=V:window_title$
+        ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+        window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+        info_address%=V:window_info$
+        ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+        open_dialog(main_tree%)
+      ENDIF
+    CASE depack_tree%
+      key_ascii%=key_code& MOD 256
+      ' Depack box: Save, Next, Back.
+      IF key_ascii%=shortcut_keys%(0) OR key_ascii%=32+shortcut_keys%(0)
+        IF (BTST(OB_STATE(depack_tree%,depack_save&),3))=FALSE
+          OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),0)
+          FILESELECT #"SAVE DEPACKED FILE",dest_path$,loaded_name$,save_path$
+          IF (save_path$="") AND single_file_mode=1
+            event_loop
+          ELSE
+            ' Unlike the click on Save, this runs for any name chosen, so a save from the keyboard always
+            ' goes to EMPTY.ERR in the destination folder.
+            save_path$=MID$(dest_path$,1,LEN(dest_path$))+"EMPTY.ERR"
+            waiting_for_save!=FALSE
+            event_loop
+          ENDIF
+          check_disk_space
+          BSAVE save_path$,depacked_address%,unpacked_length%
+          waiting_for_save!=FALSE
+        ENDIF
+      ELSE
+        IF key_ascii%=shortcut_keys%(1) OR key_ascii%=32+shortcut_keys%(1)
+          IF (BTST(OB_STATE(depack_tree%,depack_next&),3))=FALSE
+            IF single_file_mode=0
+              leave_event_loop!=TRUE
+              waiting_for_save!=FALSE
+              OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),0)
+              OB_STATE(depack_tree%,depack_next&)=BSET(OB_STATE(depack_tree%,depack_next&),3)
+              OB_STATE(depack_tree%,depack_save&)=BSET(OB_STATE(depack_tree%,depack_save&),3)
+              OB_STATE(depack_tree%,depack_back&)=BSET(OB_STATE(depack_tree%,depack_back&),3)
+              CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Loading"
+              ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+              ~OBJC_DRAW(depack_tree%,0,10,work_x&,work_y&,work_w&,work_h&)
+              underline_shortcuts
+              data_offset%=0
+              DELETE file_buffer|(0)
+            ENDIF
+          ENDIF
+        ELSE
+          IF key_ascii%=shortcut_keys%(2) OR key_ascii%=32+shortcut_keys%(2)
+            data_offset%=0
+            waiting_for_save!=FALSE
+            OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),0)
+            ~WIND_CLOSE(window_handle&)
+            window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+            title_address%=V:window_title$
+            ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+            window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+            info_address%=V:window_info$
+            ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+            open_dialog(main_tree%)
+          ENDIF
+        ENDIF
+      ENDIF
+    CASE error_tree%
+      key_ascii%=key_code& MOD 256
+      ' Error box: OK.
+      IF key_ascii%=shortcut_keys%(0) OR key_ascii%=32+shortcut_keys%(0)
+        ~WIND_CLOSE(window_handle&)
+        window_info$="        Made By Wingleader/Synergy (c) 1992/1993  "+CHR$(0)
+        info_address%=V:window_info$
+        ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+        CHAR{LONG{OB_SPEC(depack_tree%,depack_packer&)}}=packer_name$
+        open_dialog(depack_tree%)
+      ENDIF
+    CASE greetings_tree%
+      key_ascii%=key_code& MOD 256
+      ' Greetings: Return.
+      IF key_ascii%=13
+        OB_STATE(greetings_tree%,7)=BSET(OB_STATE(greetings_tree%,7),0)
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(greetings_tree%,7,1,work_x&,work_y&,work_w&,work_h&)
+        ~WIND_CLOSE(window_handle&)
+        open_dialog(main_tree%)
+      ENDIF
+    ENDSELECT
+  ENDIF
+  $S&
+  SELECT key_code& MOD 256
+  CASE 17
+    ' Ctrl+Q (17).
+    ALERT 1," Do You Really Want To Quit ",1," Yes | No ",clicked_object%
+    IF clicked_object%=1
+      ~WIND_CLOSE(window_handle&)
+      ~WIND_DELETE(window_handle&)
+      release_resource
+      ERASE file_buffer|()
+      ERASE folder_list$()
+      ERASE registers%()
+      ERASE shortcut_keys%()
+      ERASE message_buffer%()
+      RESERVE
+      END
+    ENDIF
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Handles a click in the main dialog: the mode radio pairs, the destination path (asks for it
+' with the file selector), its tick box, Info, Options and Depack.
+' ---------------------------------------------------------------------------
+PROCEDURE click_main
+  $S<
+  SELECT clicked_object%
+  CASE main_folder_mode&
+    select_radio(main_folder_mode&,main_single_mode&)
+  CASE main_single_mode&
+    select_radio(main_single_mode&,main_folder_mode&)
+  CASE main_auto_save&
+    select_radio(main_auto_save&,main_manual_save&)
+  CASE main_manual_save&
+    select_radio(main_manual_save&,main_auto_save&)
+  CASE main_dest_path&
+    FILESELECT #"SELECT DEST. PATH",dest_path$,"",dest_path$
+    OB_STATE(main_tree%,main_dest_check&)=BSET(OB_STATE(main_tree%,main_dest_check&),0)
+    IF dest_path$=""
+      CHAR{LONG{OB_SPEC(main_tree%,main_dest_path&)}}=MID$(source_path$,0,31)
+      dest_path$=source_path$
+      CARD{message_address%}=20
+      handle_message
+    ELSE
+      CHAR{LONG{OB_SPEC(main_tree%,main_dest_path&)}}=MID$(dest_path$,0,28)+"*.*"
+      chosen_dest_path$=dest_path$
+      CARD{message_address%}=20
+      handle_message
+    ENDIF
+  CASE main_dest_check&
+    IF BTST(OB_STATE(main_tree%,main_dest_check&),0)=-1
+      OB_STATE(main_tree%,main_dest_check&)=BCLR(OB_STATE(main_tree%,main_dest_check&),0)
+    ELSE
+      OB_STATE(main_tree%,main_dest_check&)=BSET(OB_STATE(main_tree%,main_dest_check&),0)
+    ENDIF
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,main_dest_check&,1,work_x&,work_y&,work_w&,work_h&)
+    PAUSE 10  !so one click toggles only once
+  CASE main_info&
+    OB_STATE(main_tree%,main_info&)=BSET(OB_STATE(main_tree%,main_info&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,main_info&,1,work_x&,work_y&,work_w&,work_h&)
+    ~WIND_CLOSE(window_handle&)
+    OB_STATE(main_tree%,main_info&)=BCLR(OB_STATE(main_tree%,main_info&),0)
+    window_info$="                    Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(info_tree%)
+  CASE main_options&
+    OB_STATE(main_tree%,main_options&)=BSET(OB_STATE(main_tree%,main_options&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,main_options&,1,work_x&,work_y&,work_w&,work_h&)
+    ~WIND_CLOSE(window_handle&)
+    window_info$="             Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(options_tree%)
+  CASE main_depack&
+    OB_STATE(main_tree%,main_depack&)=BSET(OB_STATE(main_tree%,main_depack&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,main_depack&,1,work_x&,work_y&,work_w&,work_h&)
+    IF BTST(OB_STATE(main_tree%,main_single_mode&),0)
+      single_file_mode=1
+    ELSE
+      single_file_mode=0
+    ENDIF
+    IF BTST(OB_STATE(main_tree%,main_manual_save&),0)
+      manual_save=1
+    ELSE
+      manual_save=0
+    ENDIF
+    start_depack
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Handles a click in the options dialog.  OK takes the buffer size: a new size from 100000 up to
+' the free memory dimensions the buffer again, and a size outside that range puts "0100000" back
+' in the field, but buffer_size% keeps the size typed.  Save writes the field to \SYNERGYD.INF.
+' A click on the field starts editing it.
+' ---------------------------------------------------------------------------
+PROCEDURE click_options
+  $S>
+  SELECT clicked_object%
+  CASE options_ok&
+    OB_STATE(options_tree%,options_ok&)=BSET(OB_STATE(options_tree%,options_ok&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(options_tree%,options_ok&,1,work_x&,work_y&,work_w&,work_h&)
+    OB_STATE(main_tree%,main_options&)=BCLR(OB_STATE(main_tree%,main_options&),0)
+    OB_STATE(options_tree%,options_ok&)=BCLR(OB_STATE(options_tree%,options_ok&),0)
+    ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,3,edit_cursor&)
+    ~WIND_CLOSE(window_handle&)
+    window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+    title_address%=V:window_title$
+    ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+    window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    buffer_size%=VAL(CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}})
+    IF buffer_size%<>buffer_allocated% AND buffer_size%>=100000 AND buffer_size%<free_memory%
+      ERASE file_buffer|()
+      DIM file_buffer|(buffer_size%)
+      buffer_allocated%=buffer_size%
+    ELSE
+      IF buffer_size%<100000 OR buffer_size%>free_memory%
+        CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}}="0100000"
+      ENDIF
+    ENDIF
+    open_dialog(main_tree%)
+  CASE options_save&
+    OB_STATE(options_tree%,options_save&)=BSET(OB_STATE(options_tree%,options_save&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(options_tree%,options_save&,1,work_x&,work_y&,work_w&,work_h&)
+    OPEN "o",#1,"\SYNERGYD.INF"
+    file_path$=CHAR{LONG{OB_SPEC(options_tree%,options_buffer_size&)}}
+    PRINT #1,file_path$
+    CLOSE #1
+    OB_STATE(options_tree%,options_save&)=BCLR(OB_STATE(options_tree%,options_save&),0)
+    current_tree%=options_tree%
+    CARD{message_address%}=20
+    handle_message
+  CASE options_buffer_size&
+    IF edit_started=0
+      edit_object&=options_buffer_size&
+      ~OBJC_EDIT(options_tree%,edit_object&,0,edit_cursor&,1,edit_cursor&)
+      edit_started=1
+    ENDIF
+    keybd_result=FORM_KEYBD(options_tree%,edit_object&,key_code&,0,next_edit_object&,edit_char)
+    IF keybd_result<>0
+      IF next_edit_object&<=OB_TAIL(options_tree%,0)
+        ~OBJC_EDIT(options_tree%,edit_object&,edit_char,edit_cursor&,2,edit_cursor&)
+      ENDIF
+    ENDIF
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Handles a click in the depack box.  Save asks for the name and saves the depacked file; with
+' Cancel in single-file mode it waits in the event loop, and in folder mode it saves as EMPTY.ERR
+' in the destination folder.  Back goes to the main dialog.  Next (folder mode) leaves the event
+' loop so depack_folders goes on with the next file.
+' ---------------------------------------------------------------------------
+PROCEDURE click_depack
+  SELECT clicked_object%
+  CASE depack_save&
+    IF (BTST(OB_STATE(depack_tree%,depack_save&),3))=FALSE
+      FILESELECT #"SAVE DEPACKED FILE",dest_path$,loaded_name$,save_path$
+      OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),0)
+      IF (save_path$="") AND single_file_mode=1
+        event_loop
+      ELSE
+        IF save_path$=""
+          save_path$=MID$(dest_path$,1,LEN(dest_path$))+"EMPTY.ERR"
+          waiting_for_save!=FALSE
+          event_loop
+        ENDIF
+      ENDIF
+      check_disk_space
+      BSAVE save_path$,depacked_address%,unpacked_length%
+      waiting_for_save!=FALSE
+    ENDIF
+  CASE depack_back&
+    data_offset%=0
+    waiting_for_save!=FALSE
+    OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),0)
+    ~WIND_CLOSE(window_handle&)
+    window_title$=" Synergy Giga Depacker Version 2.1 "+CHR$(0)
+    title_address%=V:window_title$
+    ~WIND_SET(window_handle&,2,CARD(SWAP(title_address%)),CARD(title_address%),0,0)
+    window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(main_tree%)
+  CASE depack_next&
+    IF (BTST(OB_STATE(depack_tree%,depack_next&),3))=FALSE
+      IF single_file_mode=0
+        leave_event_loop!=TRUE
+        waiting_for_save!=FALSE
+        OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),0)
+        OB_STATE(depack_tree%,depack_next&)=BSET(OB_STATE(depack_tree%,depack_next&),3)
+        OB_STATE(depack_tree%,depack_save&)=BSET(OB_STATE(depack_tree%,depack_save&),3)
+        OB_STATE(depack_tree%,depack_back&)=BSET(OB_STATE(depack_tree%,depack_back&),3)
+        CHAR{LONG{OB_SPEC(depack_tree%,depack_status&)}}="Loading"
+        ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+        ~OBJC_DRAW(depack_tree%,0,10,work_x&,work_y&,work_w&,work_h&)
+        underline_shortcuts
+        data_offset%=0
+        DELETE file_buffer|(0)
+      ENDIF
+    ENDIF
+  ENDSELECT
+RETURN
+' Handles a click in the info box: OK goes back to the main dialog.
+PROCEDURE click_info
+  IF clicked_object%=info_ok&
+    OB_STATE(info_tree%,info_ok&)=BSET(OB_STATE(info_tree%,info_ok&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(info_tree%,info_ok&,1,work_x&,work_y&,work_w&,work_h&)
+    OB_STATE(info_tree%,info_ok&)=BCLR(OB_STATE(info_tree%,info_ok&),0)
+    ~WIND_CLOSE(window_handle&)
+    window_info$="   Made By Wingleader/Synergy (c) 1992/1993 "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    open_dialog(main_tree%)
+  ENDIF
+RETURN
+' Handles a click in the greetings: OK (object 7) goes back to the main dialog.
+PROCEDURE click_greetings
+  IF clicked_object%=7
+    OB_STATE(greetings_tree%,7)=BSET(OB_STATE(greetings_tree%,7),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(greetings_tree%,7,1,work_x&,work_y&,work_w&,work_h&)
+    ~WIND_CLOSE(window_handle&)
+    open_dialog(main_tree%)
+  ENDIF
+RETURN
+' Handles a click in the error box: OK goes back to the depack box, or quits after a fatal error.
+PROCEDURE click_error
+  IF clicked_object%=error_ok& AND (NOT FATAL)
+    ~WIND_CLOSE(window_handle&)
+    window_info$="        Made By Wingleader/Synergy (c) 1992/1993  "+CHR$(0)
+    info_address%=V:window_info$
+    ~WIND_SET(window_handle&,3,CARD(SWAP(info_address%)),CARD(info_address%),0,0)
+    CHAR{LONG{OB_SPEC(depack_tree%,depack_packer&)}}=packer_name$
+    open_dialog(depack_tree%)
+  ELSE
+    IF FATAL
+      ~WIND_CLOSE(window_handle&)
+      ~WIND_DELETE(window_handle&)
+      release_resource
+      RESERVE
+      END
+    ENDIF
+  ENDIF
+RETURN
+' Gets the screen size from the VDI (WORK_OUT 0 and 1).
+PROCEDURE get_screen_size
+  screen_width&=WORK_OUT(0)+1
+  screen_height&=WORK_OUT(1)+1
+RETURN
+' ---------------------------------------------------------------------------
+' Selects radio_on& and deselects radio_off& in the main dialog, and draws both.  The test is
+' true only when radio_on&'s state is 0: OB_STATE is compared with the BTST result first.
+' ---------------------------------------------------------------------------
+PROCEDURE select_radio(radio_on&,radio_off&)
+  IF OB_STATE(main_tree%,radio_on&)=(BTST(OB_STATE(main_tree%,radio_on&),0))=-1
+    OB_STATE(main_tree%,radio_on&)=BSET(OB_STATE(main_tree%,radio_on&),0)
+    OB_STATE(main_tree%,radio_off&)=BCLR(OB_STATE(main_tree%,radio_off&),0)
+    ~WIND_GET(window_handle&,4,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,radio_on&,1,work_x&,work_y&,work_w&,work_h&)
+    ~OBJC_DRAW(main_tree%,radio_off&,1,work_x&,work_y&,work_w&,work_h&)
+  ENDIF
+RETURN
+' ---------------------------------------------------------------------------
+' Opens the dialog current_tree% in the window: centres it (FORM_CENTER), works out the window
+' size around it (WIND_CALC 0, WC_BORDER), keeps it below the menu bar, opens the window and runs
+' the event loop.
+' ---------------------------------------------------------------------------
+PROCEDURE open_dialog(current_tree%)
+  ~FORM_CENTER(current_tree%,dialog_x&,dialog_y&,dialog_w&,dialog_h&)
+  ~WIND_CALC(0,27,dialog_x&,dialog_y&,dialog_w&,dialog_h&,work_x&,work_y&,work_w&,work_h&)
+  ~WIND_GET(0,4,desk_x&,desk_y&,desk_w&,desk_h&)
+  IF work_y&<desk_y&
+    OB_Y(current_tree%,0)=desk_y&+(OB_Y(current_tree%,0)-work_y&)
+    work_y&=desk_y&
+  ENDIF
+  ~WIND_OPEN(window_handle&,work_x&,work_y&,work_w&,work_h&)
+  event_loop
+RETURN
+' ---------------------------------------------------------------------------
+' The event loop: waits for a key, a left click or a message (EVNT_MULTI 19 = MU_KEYBD, MU_BUTTON,
+' MU_MESAG) and hands it to the current dialog.  Returns after an event when leave_event_loop! is
+' TRUE.  A key with a mouse button held and no click sets ignore_input!, which shuts out keys and
+' clicks until the window is moved.
+' ---------------------------------------------------------------------------
+PROCEDURE event_loop
+  ~WIND_UPDATE(0)
+  DO
+    events%=EVNT_MULTI(19,1,1,1,0,0,0,0,0,0,0,0,0,0,message_address%,0,mouse_x&,mouse_y&,mouse_button&,event_dummy%,key_code&,event_dummy%)
+    IF BTST(events%,4)=-1
+      handle_message
+    ENDIF
+    IF BTST(events%,0)=-1 AND (NOT ignore_input!)
+      ~GRAF_MKSTATE(held_x&,held_y&,held_button&,held_kstate&)
+      IF held_button&<>0 AND key_code&<>0 AND (NOT BTST(events%,1))
+        ignore_input!=TRUE
+      ENDIF
+      handle_key
+    ENDIF
+    IF BTST(events%,1)=-1 AND (NOT ignore_input!)
+      clicked_object%=OBJC_FIND(current_tree%,0,17,mouse_x&,mouse_y&)  !the object clicked
+      $S%
+      SELECT current_tree%
+      CASE main_tree%
+        click_main
+      CASE options_tree%
+        click_options
+      CASE depack_tree%
+        click_depack
+      CASE info_tree%
+        click_info
+      CASE error_tree%
+        click_error
+      CASE greetings_tree%
+        click_greetings
+      ENDSELECT
+    ENDIF
+    EXIT IF leave_event_loop!=TRUE
+  LOOP
+RETURN
+' ---------------------------------------------------------------------------
+' Underlines the shortcut letter of each button in the current dialog and keeps the letters in
+' shortcut_keys%().  The high byte of each object's ob_type (the extended type) holds the
+' letter's pixel offset; DIV 8 gives its place in the text.  Buttons hold their text in ob_spec,
+' the other objects through their TEDINFO.
+' ---------------------------------------------------------------------------
+PROCEDURE underline_shortcuts
+  LOCAL loop_index
+  DEFLINE 1,2,0,0  !solid, 2 pixels wide
+  $S<
+  SELECT current_tree%
+  CASE main_tree%
+    FOR loop_index=0 TO 7
+      $S&
+      SELECT loop_index
+      CASE 0
+        shortcut_object&=main_single_label&
+      CASE 1
+        shortcut_object&=main_folder_label&
+      CASE 2
+        shortcut_object&=main_manual_label&
+      CASE 3
+        shortcut_object&=main_auto_label&
+      CASE 4
+        shortcut_object&=main_depack&
+      CASE 5
+        shortcut_object&=main_options&
+      CASE 6
+        shortcut_object&=main_info&
+      CASE 7
+        shortcut_object&=main_dest_label&
+      ENDSELECT
+      ~OBJC_OFFSET(main_tree%,shortcut_object&,object_x%,object_y%)
+      shortcut_offset%=PEEK(OB_ADR(main_tree%,shortcut_object&)+6)
+      SELECT loop_index
+      CASE 0,1,2,3,7
+        shortcut_keys%(loop_index)=ASC(UPPER$(MID$(CHAR{LONG{OB_SPEC(main_tree%,shortcut_object&)}},SUCC(shortcut_offset% DIV 8),1)))
+      CASE 4,5,6
+        shortcut_keys%(loop_index)=BYTE{OB_SPEC(main_tree%,shortcut_object&)+(shortcut_offset% DIV 8)}
+      ENDSELECT
+      DRAW object_x%+shortcut_offset%,PRED(object_y%+char_height&),object_x%+shortcut_offset%+char_width&,PRED(object_y%+char_height&)
+    NEXT loop_index
+  CASE options_tree%
+    FOR loop_index=0 TO 1
+      SELECT loop_index
+      CASE 0
+        shortcut_object&=options_ok&
+      CASE 1
+        shortcut_object&=options_save&
+      ENDSELECT
+      ~OBJC_OFFSET(options_tree%,shortcut_object&,object_x%,object_y%)
+      shortcut_offset%=PEEK(OB_ADR(options_tree%,shortcut_object&)+6)
+      SELECT loop_index
+      CASE 0
+        shortcut_keys%(loop_index)=ASC(UPPER$(MID$(CHAR{LONG{OB_SPEC(options_tree%,shortcut_object&)}},SUCC(shortcut_offset% DIV 8),1)))
+      CASE 1
+        shortcut_keys%(loop_index)=BYTE{OB_SPEC(options_tree%,shortcut_object&)+(shortcut_offset% DIV 8)}
+      ENDSELECT
+      DRAW object_x%+shortcut_offset%,PRED(object_y%+char_height&),object_x%+shortcut_offset%+char_width&,PRED(object_y%+char_height&)
+    NEXT loop_index
+  CASE depack_tree%
+    FOR loop_index=0 TO 2
+      SELECT loop_index
+      CASE 0
+        shortcut_object&=depack_save&
+      CASE 1
+        shortcut_object&=depack_next&
+      CASE 2
+        shortcut_object&=depack_back&
+      ENDSELECT
+      ~OBJC_OFFSET(depack_tree%,shortcut_object&,object_x%,object_y%)
+      shortcut_offset%=PEEK(OB_ADR(depack_tree%,shortcut_object&)+6)
+      shortcut_keys%(loop_index)=BYTE{OB_SPEC(depack_tree%,shortcut_object&)+(shortcut_offset% DIV 8)}
+      DRAW object_x%+shortcut_offset%,PRED(object_y%+char_height&),object_x%+shortcut_offset%+char_width&,PRED(object_y%+char_height&)
+    NEXT loop_index
+  CASE info_tree%
+  CASE error_tree%
+    ~OBJC_OFFSET(error_tree%,error_ok&,object_x%,object_y%)
+    shortcut_offset%=PEEK(OB_ADR(error_tree%,error_ok&)+6)
+    shortcut_keys%(loop_index)=BYTE{OB_SPEC(error_tree%,error_ok&)+(shortcut_offset% DIV 8)}
+    DRAW object_x%+shortcut_offset%,PRED(object_y%+char_height&),object_x%+shortcut_offset%+char_width&,PRED(object_y%+char_height&)
+  ENDSELECT
+RETURN
+' ---------------------------------------------------------------------------
+' Adapts the dialogs to the Falcon video mode (XBIOS 88, VsetMode(-1)): mode bits 0-2 the colours,
+' 4 VGA, 7 ST-compatible, 8 the vertical flag.  Clears the 3D flag (FL3DIND, flag bit 9) or the
+' SHADOWED state (bit 5) of buttons for some modes.  VAL reads BIN$ back as a decimal number, so
+' "000" and "001" (2 and 4 colours) are the ones below 2.
+' Then shows the TOS version (word 2: the start of the ROM is seen at address 0) and the AES
+' version (the first word of the AES global array) in the options dialog.
+' ---------------------------------------------------------------------------
+PROCEDURE adapt_to_video_mode
+  IF VAL(BIN$(XBIOS(88,L:-1),3))<2
+    OB_FLAGS(info_tree%,info_3d_object&)=BCLR(OB_FLAGS(info_tree%,info_3d_object&),9)
+    OB_FLAGS(options_tree%,options_save&)=BCLR(OB_FLAGS(options_tree%,options_save&),9)
+    OB_FLAGS(options_tree%,options_ok&)=BCLR(OB_FLAGS(options_tree%,options_ok&),9)
+  ENDIF
+  IF BTST(XBIOS(88,L:-1),8)=-1 AND (BTST(XBIOS(88,L:-1),7))=FALSE
+    OB_STATE(main_tree%,main_depack&)=BCLR(OB_STATE(main_tree%,main_depack&),5)
+    OB_STATE(main_tree%,main_options&)=BCLR(OB_STATE(main_tree%,main_options&),5)
+    OB_STATE(main_tree%,main_info&)=BCLR(OB_STATE(main_tree%,main_info&),5)
+    OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),5)
+    OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),5)
+    OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),5)
+  ELSE
+    IF BTST(XBIOS(88,L:-1),8)=-1 AND BTST(XBIOS(88,L:-1),7)=-1
+      OB_FLAGS(main_tree%,main_depack&)=BCLR(OB_FLAGS(main_tree%,main_depack&),9)
+      OB_FLAGS(main_tree%,main_options&)=BCLR(OB_FLAGS(main_tree%,main_options&),9)
+      OB_FLAGS(main_tree%,main_info&)=BCLR(OB_FLAGS(main_tree%,main_info&),9)
+      OB_FLAGS(depack_tree%,depack_save&)=BCLR(OB_FLAGS(depack_tree%,depack_save&),9)
+      OB_FLAGS(depack_tree%,depack_next&)=BCLR(OB_FLAGS(depack_tree%,depack_next&),9)
+      OB_FLAGS(depack_tree%,depack_back&)=BCLR(OB_FLAGS(depack_tree%,depack_back&),9)
+      OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),5)
+      OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),5)
+      OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),5)
+      OB_FLAGS(options_tree%,options_save&)=BCLR(OB_FLAGS(options_tree%,options_save&),9)
+      OB_FLAGS(options_tree%,options_ok&)=BCLR(OB_FLAGS(options_tree%,options_ok&),9)
+      OB_STATE(options_tree%,options_save&)=BSET(OB_STATE(options_tree%,options_save&),5)
+      OB_FLAGS(info_tree%,info_3d_object&)=BCLR(OB_FLAGS(info_tree%,info_3d_object&),9)
+    ELSE
+      IF (BTST(XBIOS(88,L:-1),8))=FALSE AND BTST(XBIOS(88,L:-1),7)=-1
+        OB_FLAGS(main_tree%,main_depack&)=BCLR(OB_FLAGS(main_tree%,main_depack&),9)
+        OB_FLAGS(main_tree%,main_options&)=BCLR(OB_FLAGS(main_tree%,main_options&),9)
+        OB_FLAGS(main_tree%,main_info&)=BCLR(OB_FLAGS(main_tree%,main_info&),9)
+        OB_FLAGS(depack_tree%,depack_save&)=BCLR(OB_FLAGS(depack_tree%,depack_save&),9)
+        OB_FLAGS(depack_tree%,depack_next&)=BCLR(OB_FLAGS(depack_tree%,depack_next&),9)
+        OB_FLAGS(depack_tree%,depack_back&)=BCLR(OB_FLAGS(depack_tree%,depack_back&),9)
+        OB_FLAGS(options_tree%,options_save&)=BCLR(OB_FLAGS(options_tree%,options_save&),9)
+        OB_FLAGS(options_tree%,options_ok&)=BCLR(OB_FLAGS(options_tree%,options_ok&),9)
+        OB_STATE(options_tree%,options_save&)=BSET(OB_STATE(options_tree%,options_save&),5)
+        OB_FLAGS(info_tree%,info_3d_object&)=BCLR(OB_FLAGS(info_tree%,info_3d_object&),9)
+      ELSE
+        IF (BTST(XBIOS(88,L:-1),8))=FALSE AND (BTST(XBIOS(88,L:-1),7))=FALSE AND (BTST(XBIOS(88,L:-1),4))=FALSE
+          OB_STATE(main_tree%,main_depack&)=BCLR(OB_STATE(main_tree%,main_depack&),5)
+          OB_STATE(main_tree%,main_options&)=BCLR(OB_STATE(main_tree%,main_options&),5)
+          OB_STATE(main_tree%,main_info&)=BCLR(OB_STATE(main_tree%,main_info&),5)
+          OB_STATE(depack_tree%,depack_save&)=BCLR(OB_STATE(depack_tree%,depack_save&),5)
+          OB_STATE(depack_tree%,depack_next&)=BCLR(OB_STATE(depack_tree%,depack_next&),5)
+          OB_STATE(depack_tree%,depack_back&)=BCLR(OB_STATE(depack_tree%,depack_back&),5)
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  CHAR{LONG{OB_SPEC(options_tree%,options_tos_version&)}}=MID$(HEX$(DPEEK(2)),1,1)+"."+MID$(HEX$(DPEEK(2)),2,2)
+  CHAR{LONG{OB_SPEC(options_tree%,options_aes_version&)}}=MID$(HEX$(DPEEK(LONG{GB+4})),1,1)+"."+MID$(HEX$(DPEEK(LONG{GB+4})),2,2)
+RETURN
