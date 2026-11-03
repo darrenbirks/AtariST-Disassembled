@@ -1,4 +1,4 @@
-; GFA_BCOM.PRG  -  GFA BASIC 2.02 compiler
+; GFA_BCOM.PRG  -  GFA BASIC Compiler 2.02 GB
 ;
 ; Devpac source of the compiler, disassembled by Darren Birks, 3 November 2026.  Assembled, it gives
 ; GFA_BCOM.PRG byte for byte, relocations included:
