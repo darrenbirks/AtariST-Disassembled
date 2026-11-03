@@ -99,16 +99,18 @@ PROCEDURE init_application
   INLINE format_dialog_handle%,36
 RETURN
 ' Loads CNCPROFI.RSC from the program folder, or lets the user find it with the file selector when it is
-' missing; an RSC that cannot be loaded ends the program. Fetches the addresses of the trees (icons icon_tree%,
-' about about_tree%, parameter output fn15_dialog_tree%, overwrite overwrite_tree%, print program
+' missing; an RSC that cannot be loaded ends the program. Fetches the addresses of the trees (icons
+' icon_tree%, about about_tree%, parameter output fn15_dialog_tree%, overwrite overwrite_tree%, print program
 ' print_program_dialog%, block functions block_functions_tree%, print tool memory print_tools_tree%, format
 ' format_dialog_tree%, cutter icon cutter_icon_tree%, print block print_block_dialog%, baud rate pop-up
 ' baud_popup_tree%, parameter function pop-up function_popup_tree%, cycle pop-up cycle_popup_tree%), prepares
 ' the dialogs with dial_fix_tree, clears the parameter output fields and the print comments, and writes "
-' CNCPROFI.PRG Version 1.02 " into the about dialog.
+' CNCPROFI.PRG   Version 1.03 " (version_text$, set at the start of the program) into the about dialog.
 PROCEDURE load_resource
   LOCAL rsc_result|
   ' memory kept free for GEM and the runtime
+  ' (reserved_memory% is only ever added to, in allocate_graphic_buffers; nothing reads it, so no memory is
+  ' actually kept back)
   reserved_memory%=42000
   IF resource_module_loaded!
     DIM overlay_word_table&(15)
@@ -847,6 +849,8 @@ PROCEDURE calculate_text_layout
   small_char_height|=8
   char_cell_height|=16
   prompt_row|=DIV(work_h&,char_cell_height|)
+  ' text columns of the window: the first column of the centred prompt texts, 38 columns left of the window
+  ' centre and never below column 0
   text_column&=MAX(0,PRED(work_w&/2/char_width|)-37)
   ' line height: twice the text height
   listing_row_height&=MUL(line_text_height|,2)
@@ -1001,6 +1005,7 @@ PROCEDURE init_program_variables
   contour_cycle_active!=FALSE
   wireframe_view!=FALSE
   zoom_active!=FALSE
+  ' no zoom window chosen yet (select_zoom_window sets it, run_graphic_simulation clears it)
   zoom_window_chosen!=FALSE
   blank_form_drawn!=FALSE
   program_run_mode!=FALSE
@@ -1501,10 +1506,11 @@ PROCEDURE resize_array_keep_data(resize_array_address%,resize_new_count%,resize_
   ENDIF
 RETURN
 ' Sets the parameters (settings_texts$() texts, axis_limits() axis limits, program size, depth levels, font,
-' tool memory file, geometry program, controller type) to their defaults or loads them from CNCPROFI.INF (one
-' value per line), puts the controller name into the menu, loads the tool memory file into tool_memory_lines$()
-' and the printer definition DRUCKER.INF (printer name, graphic resolutions and ten control code lines; NEC
-' P6/P7 codes when missing).
+' tool memory file, geometry program, controller and machine type) to their defaults or loads them from
+' CNCPROFI.INF in the program folder (one value per line), puts the machine name and the controller name into
+' the menu, loads the tool memory file into tool_memory_lines$() and the printer definition DRUCKER.INF from
+' the current folder (printer name, graphic resolutions and ten control code lines; NEC P6/P7 codes when
+' missing).
 PROCEDURE load_settings_files
   LOCAL loop_index|,work_text$,lines_loaded%,printer_code_index|,text_length&
   settings_last_entry|=22
@@ -1546,6 +1552,7 @@ PROCEDURE load_settings_files
   depth_levels_max|=8
   first_depth_pattern|=SUCC(depth_levels_max|)
   depth_levels_max_less_one|=PRED(depth_levels_max|)
+  ' parameters from the INF file in the program folder, one value a line
   IF EXIST(program_folder$+"\cncprofi.inf")<>0
     OPEN "i",#2,program_folder$+"\cncprofi.inf"
     loop_index|=FALSE
@@ -1646,12 +1653,14 @@ PROCEDURE load_settings_files
     text_height|=13
     line_text_height|=12
   ENDIF
+  ' machine name in the menu (Anpassung > Maschinentyp, machine type): 0 Klopp-Korradi UW10, 1 Mikron WF 31 D
   SELECT machine_type|
   CASE 0
     menu_entries$(45)=" Klopp-Korradi UW10  "
   CASE 1
     menu_entries$(45)=" Mikron WF 31 D      "
   ENDSELECT
+  ' controller name in the menu
   SELECT controller_type|
   CASE 0
     menu_entries$(48)=" Heidenhain TNC355  "
@@ -1949,6 +1958,8 @@ PROCEDURE click_run_mode
             PAUSE 15
             GRAPHMODE 1
             PBOX message_box_x1&,message_box_y1&,message_box_x2&,message_box_y2&
+            ' a zoom window was chosen in the last simulation: the simulation is run again (start_graphic_simulation);
+            ' otherwise the saved picture is redrawn (redraw_simulation_view)
             IF zoom_window_chosen!
               start_graphic_simulation
             ELSE
@@ -2578,8 +2589,10 @@ PROCEDURE click_tool_memory
   ENDIF
 RETURN
 ' Key handler in manual mode (ON MENU KEY): MENU(14) holds scan code and ASCII code, MENU(13) the shift state.
-' Function keys switch the mode (F7 test, F8 single block, F9 sequence, F10 input), letters choose the manual
-' functions, Control-Q quits, Insert shows or hides the icon pad, Alternate-E opens the tool memory.
+' Function keys switch the mode (F7 test, F8 single block, F9 sequence, F10 input; Shift-F8 and Shift-F9 test
+' the program first and run it from its first block), letters choose the manual functions, Shift-Insert shows
+' or hides the icon pad, Control-Q quits and Alternate-E opens the tool memory. Unshifted and shifted keys
+' without a function say so (show_key_without_function).
 PROCEDURE key_manual_mode
   LOCAL key_scan_code&,key_shift_state&
   editor_mode!=FALSE
@@ -2770,6 +2783,8 @@ PROCEDURE key_run_mode
       IF blank_form_drawn!
         GRAPHMODE 1
         PBOX message_box_x1&,message_box_y1&,message_box_x2&,message_box_y2&
+        ' a zoom window was chosen in the last simulation: the simulation is run again (start_graphic_simulation);
+        ' otherwise the saved picture is redrawn (redraw_simulation_view)
         IF zoom_window_chosen!
           start_graphic_simulation
         ELSE
@@ -2826,6 +2841,7 @@ PROCEDURE key_run_mode
   CASE 1,2
     SELECT key_scan_code&
     CASE 80
+      ' Shift: cursor down and up move a page, Clr/Home goes to the last block, Insert shows or hides the icon pad
       cursor_down_lines(visible_lines&)
       draw_program_listing
     CASE 72
@@ -3208,6 +3224,8 @@ PROCEDURE key_edit_mode
       enter_manual_mode
       drawn_cursor_line&=-2
     CASE 72
+      ' Shift: cursor up and down move a page, Insert shows or hides the icon pad, Delete deletes the line and
+      ' Clr/Home goes to the last block
       cursor_up_lines(visible_lines&)
     CASE 80
       cursor_down_lines(visible_lines&)
@@ -3295,7 +3313,13 @@ PROCEDURE key_edit_mode
   pending_input_text$=""
   input_exit_code&=-1
 RETURN
-' Key handler in tool memory mode; with no entries only help, TOOL DEF and the Control and Alternate keys work.
+' Key handler in tool memory mode. With no entries only Help and H (help), T (TOOL DEF), Control-Q (quit),
+' Control-H (help) and Alternate N, B and L (load, leave, clear) work. With entries, digits, the decimal point
+' and Q go to the field being entered; the cursor keys, Clr/Home, Return, S (select) and M (settings) work on
+' the list; Shift-cursor up and down move a page, Shift-Clr/Home goes to the last entry, Shift-Insert shows or
+' hides the icon pad (ending the field input) and Shift-Delete deletes the entry; Control-Q quits, Control-H
+' opens the help; Alternate S, D, N, B and L save, print, load, leave and clear the tool memory. T only shows
+' the alert of enter_tool_def_block_demo. Most keys without a function say so (show_key_without_function).
 PROCEDURE key_tool_memory
   LOCAL key_scan_code&,key_shift_state&,key_ascii&,tool_key_spare_value
   key_scan_code&=SHR(MENU(14),8)
@@ -3519,15 +3543,18 @@ PROCEDURE key_help_window
     ENDSELECT
   ENDSELECT
 RETURN
-' Menu handler (ON MENU GOSUB): MENU(0) is the chosen entry of menu_entries$(). In tool memory mode only the
-' tool memory and help entries work; otherwise every menu entry is dispatched (file, transfer, print, graphic,
-' settings, tool memory, help, geometry program). Leaving for the geometry program frees everything and passes
-' its path in the basepage command line.
+' Menu handler (ON MENU GOSUB): MENU(0) is the chosen entry of menu_entries$(). It acts only while the
+' program window (window 1) is the top window. In tool memory mode only the tool memory and help entries work;
+' otherwise every menu entry is dispatched (file, transfer, print, graphic, settings, tool memory, help,
+' geometry program); Anpassung > Steuerungstyp (control type) only shows the alert of
+' select_control_type_demo. Leaving for the geometry program frees everything and passes its path in the
+' basepage command line.
 PROCEDURE handle_menu_choice
   LOCAL menu_entry|,loop_index|,file_byte|
   MENU OFF
   ' the chosen menu entry
   menu_entry|=MENU(0)
+  ' WF_TOP: the handle of the top window into screen_x&; the menu choice is only handled when that is window 1
   ~WIND_GET(1,10,screen_x&,screen_y&,screen_y&,screen_y&)
   IF W_INDEX(#screen_x&)=1
     ' can never be true (below 58 and above 60), so this block is never executed
@@ -3723,7 +3750,8 @@ PROCEDURE handle_menu_choice
     ENDIF
   ENDIF
 RETURN
-' Menu handler while the help window is open: only the about and help entries.
+' Menu handler while the help window is on top: only the about entry, PROGRAMM-ENDE (quit) and the three help
+' entries.
 PROCEDURE handle_help_menu_choice
   LOCAL menu_entry|
   MENU OFF
@@ -4260,6 +4288,7 @@ PROCEDURE resize_window_message
     help_old_h&=help_window_h&
     help_window_x&=MENU(5)
     help_window_y&=MENU(6)
+    ' at least 100 pixels and at most 67 characters wide
     help_window_w&=MAX(100,MIN(MENU(7),MUL(char_width|,67)))
     help_window_h&=MAX(100,MENU(8))
     OPENW #2,help_window_x&,help_window_y&,help_window_w&,help_window_h&,511
@@ -4952,6 +4981,8 @@ PROCEDURE test_program
       error_count|=FALSE
       blank_form_min_seen!=FALSE
       blank_form_max_seen!=FALSE
+      ' a tool memory with at least two lines counts as tools defined from the start, so cutting blocks before
+      ' the first TOOL DEF are no error then
       IF tool_last_line&>0
         tool_defined!=TRUE
       ELSE
@@ -5545,10 +5576,14 @@ PROCEDURE edit_settings
             ENDIF
             REPEAT
             UNTIL NOT (INKEY$<>"")
+            ' polls the AES until a mouse button is held or a key comes (bit 0 of event_flags&); event_key& has the scan
+            ' code in its high byte. mouse_x& is passed for the x, y and click-count results and mouse_y& for none, so the
+            ' position used for OBJC_FIND below is not where the mouse was clicked
             event_key&=0
             REPEAT
               event_flags&=EVNT_MULTI(3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,mouse_x&,mouse_x&,event_button&,event_shift_state&,event_key&,mouse_x&)
             UNTIL event_button& OR BTST(event_flags&,0)
+            ' a click with the icon pad hidden gives key_scan_code& 0 and does nothing
             IF event_button&>0 AND icon_pad_shown!
               mouse_x&=mouse_x&+work_x&
               mouse_y&=mouse_y&+work_y&
@@ -5764,6 +5799,7 @@ PROCEDURE edit_settings
             DIM tool_path_elements$(max_called_programs|,max_program_lines&*2)
           CASE 3
             ALERT 1,"Bitte wÑhlen Sie mit der|Fileselektorbox Ihr ge-|wÅnschtes Verzeichnis aus!",1," Weiter ",alert_button|
+            ' ON MENU after this and the other file selectors handles the window messages (redraws) they leave behind
             selected_file$=@select_file$("Aktuelles Verzeichnis",program_directory$+"*.*","")
             ON MENU
             DEFMOUSE 3
@@ -7304,6 +7340,7 @@ PROCEDURE load_help_text
       ALERT 3,"Der HILFE-Text konnte|nicht vollstÑndig|geladen werden!",1," Weiter ",alert_button|
     ENDIF
     help_line_height&=char_cell_height|+3
+    ' the help window: 67 characters wide at the right edge of the screen, from y 50 to 250
     help_window_x&=screen_width&-MUL(char_width|,67)
     help_window_y&=50
     help_window_right&=screen_width&
@@ -7315,8 +7352,10 @@ PROCEDURE load_help_text
   ENDIF
 RETURN
 ' Opens the help window on a topic. aux_m_function|: 0 general help, 1 key help of the current mode, 2 data
-' transfer. Removes a marked help icon, opens the help window (or tops it when open), lays it out and installs
-' the help handlers; the icons of the icon pad then choose help topics (click_help_window).
+' transfer, which only shows the alert "Diese Funktion ist nur in der WERKSTATTVERSION aktiv!" (this function
+' is only active in the workshop version). Removes a marked help icon, opens the help window (or tops it when
+' open), lays it out and installs the help handlers; the icons of the icon pad then choose help topics
+' (click_help_window).
 PROCEDURE open_help_window(aux_m_function|)
   LOCAL alert_button|,window_handle|,redraw_x&,redraw_y&,redraw_width&,redraw_height&,rectangle_hit!
   IF aux_m_function|=2
@@ -7358,6 +7397,7 @@ PROCEDURE open_help_window(aux_m_function|)
           ENDIF
         ELSE
           IF aux_m_function|=2
+            ' never reached: data transfer help (2) ends at the alert at the start
             help_topic_first&=help_topic_starts&(68)
             help_topic_last&=help_topic_starts&(69)-1
           ENDIF
@@ -8095,10 +8135,12 @@ PROCEDURE print_all_programs
     DEFMOUSE 3
   ENDIF
 RETURN
-' Keypad ^B: the block functions dialog (tree 2). Copy and save are disabled in the demo. Move copies the marked
-' block to the cursor (copy_block_to_cursor) and deletes the original; Laden loads a .BLK file at the cursor;
-' Deaktivieren removes the block marking; Loeschen deletes the block after a confirmation; Umdrehen reverses the
-' block (reverse_marked_block); Drucken prints it. Not available while a field is being edited.
+' Keypad ^B: the block functions dialog (tree 2). Kopieren (copy) only shows the alert "Diese Funktion ist nur
+' in der VOLLVERSION aktiv!" (this function is only active in the full version); Laden (load) and Speichern
+' (save) call load_or_save_block_demo, which shows the same alert, and redraw the list. Move copies the marked
+' block to the cursor (copy_block_to_cursor) and deletes the original; Deaktivieren removes the block marking;
+' Loeschen deletes the block after a confirmation; Umdrehen reverses the block (reverse_marked_block); Drucken
+' prints it. Not available while a field is being edited.
 PROCEDURE block_functions_dialog
   LOCAL format_exit_object&,dialog_status&,line_index&,block_copy_ok!
   ' not while a field is edited
@@ -8139,6 +8181,7 @@ PROCEDURE block_functions_dialog
           ENDIF
         ENDIF
       CASE block_load_button&
+        ' Laden (load), and Speichern (save) below with 0: load_or_save_block_demo only shows the full-version alert
         load_or_save_block_demo(-1)
         IF drawn_cursor_line&=-2
           DEC drawn_cursor_line&
@@ -10042,8 +10085,9 @@ PROCEDURE lbl_call_entry_demo
   LOCAL alert_button|
   ALERT 3,"Diese Funktion ist nur|in der VOLLVERSION aktiv!",1," Weiter ",alert_button|
 RETURN
-' Keypad S: STOP block. In manual mode asks for the M function on the prompt line and shows it; in the editor
-' starts the entry of a STOP line with its M field.
+' Keypad S: STOP block. In manual mode asks for the M function on the prompt line and shows it. In the editor
+' (no field being edited) it only shows the alert "Diese Funktion ist nur in der VOLLVERSION aktiv!" (this
+' function is only active in the full version): STOP lines cannot be entered in the demo version.
 PROCEDURE enter_stop_block
   LOCAL screen_x&,screen_y&,alert_button|
   ~WIND_UPDATE(1)
@@ -10074,8 +10118,9 @@ PROCEDURE enter_tool_def_block_demo
   LOCAL alert_button|
   ALERT 3,"Diese Funktion ist nur|in der VOLLVERSION aktiv!",1," Weiter ",alert_button|
 RETURN
-' Keypad ^T: TOOL CALL. In manual mode asks for the spindle speed; in the editor asks for the tool number, the
-' tool axis X/Y/Z (keypad or key) and the speed S.
+' Keypad ^T: TOOL CALL. In manual mode asks for the spindle speed and shows it. In the editor (no field being
+' edited) it only shows the alert "Diese Funktion ist nur in der VOLLVERSION aktiv!" (this function is only
+' active in the full version): TOOL CALL lines cannot be entered in the demo version.
 PROCEDURE enter_tool_call_block
   LOCAL screen_x&,screen_y&,work_text$,mouse_x&,mouse_y&,inner_index|,key_event%,key_scan_code&,loop_index|,clicked_icon&,search_done!,alert_button|
   GRAPHMODE 1
@@ -11868,6 +11913,8 @@ PROCEDURE input_block_field(other_contour|,limit_index|)
   DEFTEXT 1,1,0,text_height|
   layout_position&=1
   loop_index|=FALSE
+  ' angle_wraps! marks the block types whose value fields have no sign column: cycle 11.1 (28), RND (15),
+  ' L without coordinates (7), the single-value cycles (38), CALL PGM (40) and cycle 12.1 (29)
   IF block_type|=28 OR block_type|=15 OR block_type|=7 OR block_type|=38 OR block_type|=40 OR block_type|=29
     angle_wraps!=TRUE
   ELSE
@@ -11982,6 +12029,7 @@ PROCEDURE input_block_field(other_contour|,limit_index|)
       ENDIF
       input_field_value(field_width|-4,3,field_text_x&,box_bottom_y&-4,-1,limit_index|,0)
       IF NOT block_end_pressed!
+        ' a Q parameter was entered: Q follows the sign, or comes first in a field without a sign column
         IF (MID$(input_text$,2,1)="Q") AND (NOT angle_wraps!) OR ((MID$(input_text$,1,1)="Q") AND angle_wraps!)
           IF field_edit_active!
             IF angle_wraps!
@@ -12242,6 +12290,8 @@ PROCEDURE input_field_value(int_digits|,frac_digits|,screen_x&,screen_y&,input_s
     DEFTEXT ,,,6
     field_signed!=TRUE
   ELSE
+    ' fields without a sign: cycle 11.1 (28), RND (15), L without coordinates (7), the single-value cycles (38),
+    ' CALL PGM (40) and cycle 12.1 (29)
     IF block_type|=28 OR block_type|=15 OR block_type|=7 OR block_type|=38 OR block_type|=40 OR block_type|=29
       field_signed!=FALSE
     ELSE
@@ -12380,6 +12430,10 @@ PROCEDURE input_field_value(int_digits|,frac_digits|,screen_x&,screen_y&,input_s
       UNTIL NOT (INKEY$<>"")
       event_key&=0
       REPEAT
+        ' polls the AES until a mouse button is held or a key comes (bit 0 of event_flags&); event_key& has the
+        ' scan code in its high byte and the ASCII code in its low byte, event_shift_state& the Shift/Control/Alt
+        ' keys. mouse_x& is passed for the x, y and click-count results and mouse_y& for none, so the position used
+        ' for OBJC_FIND below is not where the mouse was clicked
         event_flags&=EVNT_MULTI(3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,mouse_x&,mouse_x&,event_button&,event_shift_state&,event_key&,mouse_x&)
       UNTIL event_button& OR BTST(event_flags&,0)
       flush_key_events
@@ -12462,6 +12516,7 @@ PROCEDURE input_field_value(int_digits|,frac_digits|,screen_x&,screen_y&,input_s
           ENDIF
         ENDIF
         ' Control Delete: cancel the input
+        ' (the key is Shift Delete: key_shift_state& 1 or 2 is the right or left Shift key)
         IF clicked_icon&=12 OR (key_scan_code&=83 AND (key_shift_state&=1 OR key_shift_state&=2)) AND editor_mode! AND (NOT search_replace_active!) AND (NOT input_in_dialog!)
           input_exit_code&=4
           input_exit_state|=1
@@ -12510,6 +12565,8 @@ PROCEDURE input_field_value(int_digits|,frac_digits|,screen_x&,screen_y&,input_s
                   block_end_pressed!=TRUE
                   input_exit_state|=1
                 ELSE
+                  ' Return in an empty field from column 43 on (radius correction, feed, M function) takes the value from the
+                  ' previous line, except in BLK FORM 0.1/0.2 (3, 4) and the FN 9-12 jumps (34)
                   IF parse_column|>=43 AND block_type|<>34 AND block_type|<>3 AND block_type|<>4 AND LEN(input_text$)=0 AND (NOT search_replace_active!) AND (NOT input_in_dialog!) AND (NOT manual_mode!) AND (NOT settings_input_active!)
                     GRAPHMODE 1
                     take_value_from_previous_line(-1)
@@ -12554,6 +12611,8 @@ PROCEDURE input_field_value(int_digits|,frac_digits|,screen_x&,screen_y&,input_s
                   ENDIF
                 ELSE
                   ' Backspace
+                  ' inner_index| (the mouse button in these tests) is never set and stays 0, so a click on icon 48 neither
+                  ' deletes a character nor clears the field; only the Backspace and Esc keys do
                   IF clicked_icon&=48 AND inner_index|=1 OR key_scan_code&=14
                     IF q_parameter_entry! AND field_text_length|>2
                       input_text$=LEFT$(input_text$,LEN(input_text$)-1)
@@ -13860,9 +13919,12 @@ PROCEDURE save_program_as_demo
   LOCAL alert_button|
   ALERT 3,"Diese Funktion ist nur|in der VOLLVERSION aktiv!",1," Weiter ",alert_button|
 RETURN
-' Keypad N / Datei > laden: loads a CNC program chosen in the file selector, or starts a new one when the file
-' does not exist (BEGIN PGM / END PGM lines). Reads plain text or the CNCPROFI format (see print_all_programs),
-' checks memory and the line limit, then resets the editor state, block marking and search texts.
+' Keypad N / Datei > laden: after an alert asking for the program to load or create, loads the CNC program
+' chosen in the file selector (mask *.CNC), or starts a new one when the file does not exist (BEGIN PGM / END
+' PGM lines). Only the CNCPROFI format (see print_all_programs) is read: any other file gets the alert "Die
+' angew‰hlte Datei liegt nicht in dem CNCPROFI-Format vor und kann deshalb nicht geladen werden!" (the chosen
+' file is not in the CNCPROFI format and so cannot be loaded) and leaves no program, which goes to manual
+' mode. Checks memory and the line limit, then resets the editor state, block marking and search texts.
 PROCEDURE load_program
   LOCAL program_was_loaded!,ask_search_text!,edit_work_text$,program_file_path$,scan_index&,cipher_seed%,seed_top_byte|,seed_second_byte|,cipher_key|,work_text$,file_byte|,line_index&
   IF field_edit_active!
@@ -13922,6 +13984,7 @@ PROCEDURE load_program
           DEFMOUSE 2
           OPEN "i",#1,program_file_path$
           INPUT #1,edit_work_text$
+          ' not a CNCPROFI file: the old program is already cleared, last_line& 0 means nothing loaded
           IF edit_work_text$<>"CNCPROFI"
             ALERT 3,"Die angewÑhlte Datei liegt|nicht in dem CNCPROFI-Format|vor und kann deshalb nicht|geladen werden!",1,"Abbruch",alert_button|
             last_line&=0
@@ -14168,9 +14231,10 @@ PROCEDURE create_folder
     ENDIF
   ENDIF
 RETURN
-' Menu: delete CNC programs ("PROGRAMM-LOESCHEN"). Not allowed in program entry mode (field_edit_active!). After
-' a warning alert it lets the user pick *.cnc files in the file selector one after the other and Fdeletes each
-' one, until the selector is cancelled; then the window title of the current mode is put back.
+' Menu: delete programs ("PROGRAMM-L÷SCHEN"). Not allowed in program entry mode (field_edit_active!). After
+' a warning alert that any program on the mass storage can now be deleted, it lets the user pick files (mask
+' *.*, so not only CNC programs) in the file selector one after the other and Fdeletes each one, until the
+' selector is cancelled; then the window title of the current mode is put back.
 PROCEDURE delete_cnc_programs
   LOCAL selected_file$,alert_button|
   ' not in program entry
@@ -14454,9 +14518,11 @@ PROCEDURE format_disk_double_sided(volume_label$,format_density|,format_drive|,f
     write_disk_directory(format_density|,volume_label$,format_sectors&,fat_sector_count&,disk_sector_total&,media_descriptor|,cluster_sectors|,protobt_disk_type|,format_drive|,screen_y&)
   ENDIF
 RETURN
-' Formats a single-sided disk track by track (Flopfmt side 0 only), with the progress bar over the whole panel;
-' Space asks whether to cancel. When all tracks are done it calls write_disk_directory with the one-sided
-' geometry. Parameters as format_disk_double_sided.
+' Formats a single-sided disk track by track (Flopfmt side 0 only), with the progress bar over the whole
+' panel; Space asks whether to cancel. write_disk_directory (with the one-sided geometry) is called only when
+' scan_index& ends equal to arc_end_layer&, the last track number: after all tracks it is one higher, so a
+' finished format writes no boot sector, FATs or root directory, and only a cancel during the second-last
+' track does. Parameters as format_disk_double_sided.
 PROCEDURE format_disk_single_sided(volume_label$,format_density|,format_drive|,format_tracks&,format_sectors&,progress_bar_left&,progress_bar_top&,progress_bar_right&,progress_bar_bottom&,screen_y&)
   LOCAL corner_text_h$,screen_x&,arc_end_layer&,format_spare_word&,scan_index&,search_done!,alert_button|,disk_sector_total&,fat_sector_count&,cluster_sectors|,protobt_disk_type|,media_descriptor|
   corner_text_h$=SPACE$(25000)
@@ -14482,6 +14548,7 @@ PROCEDURE format_disk_single_sided(volume_label$,format_density|,format_drive|,f
     ENDIF
     INC scan_index&
   UNTIL scan_index&>arc_end_layer& OR search_done!
+  ' true only after a cancel during the second-last track, not after the last track
   IF scan_index&=arc_end_layer&
     disk_sector_total&=format_tracks&*format_sectors&
     fat_sector_count&=INT(disk_sector_total&*.0029296875)+1
@@ -14500,9 +14567,11 @@ RETURN
 ' Writes the file system of a freshly formatted disk: builds a boot sector by hand (BPB: 512 bytes a sector,
 ' cluster_sectors| sectors a cluster, 1 reserved sector, 2 FATs, 112/224 root entries, disk_sector_total&
 ' sectors, media byte media_descriptor|, fat_sector_count& sectors a FAT, format_sectors& sectors a track,
-' sides), lets Protobt give it a serial number, patches the BPB words for the chosen geometry and writes it with
-' Flopwr; then clears the FATs and root directory with Rwabs, putting the volume label volume_label$ in. Finally
-' shows the free space and waits for a key or click.
+' sides), lets Protobt give it a serial number, patches the BPB words for the chosen geometry and writes it
+' with Flopwr, then calls Dfree so GEMDOS takes in the new disk. Clears the FATs and root directory with
+' Rwabs, putting the volume label volume_label$ in. Finally asks Dfree for the disk size and, when that
+' works, shows "Die Diskette hat ... BYTE Speicherplatz!" (the disk has ... bytes of space) and waits for a
+' key or click.
 PROCEDURE write_disk_directory(format_density|,volume_label$,format_sectors&,fat_sector_count&,disk_sector_total&,media_descriptor|,cluster_sectors|,protobt_disk_type|,format_drive|,screen_y&)
   LOCAL boot_sector_data$,work_text$,basic_variables,cipher_seed%,memory_extra_needed%,screen_x&
   boot_sector_data$=SPACE$(512)
@@ -14563,9 +14632,11 @@ PROCEDURE write_disk_directory(format_density|,volume_label$,format_sectors&,fat
   MID$(boot_sector_data$,23,2)=(MKI$(ROL&(fat_sector_count&,8)))
   ' Flopwr the boot sector (track 0, side 0, sector 1)
   ~XBIOS(9,L:V:boot_sector_data$,L:0,format_drive|,L:65536,L:1)
+  ' Dfree on the drive, result unused: GEMDOS reads the new boot sector before the FATs are written
   ~DFREE(SUCC(format_drive|))
   work_text$=CHR$(media_descriptor|)+"ˇˇ"+STRING$(fat_sector_count&*512-3,0)
   work_text$=work_text$+work_text$
+  ' disk_sector_total& now holds Rwabs sector numbers: here the count of both FATs, written from sector 1
   disk_sector_total&=fat_sector_count&*2
   ~BIOS(4,3,L:V:work_text$,disk_sector_total&,1,format_drive|)
   IF volume_label$<>""
@@ -14575,12 +14646,15 @@ PROCEDURE write_disk_directory(format_density|,volume_label$,format_sectors&,fat
   ELSE
     work_text$=STRING$(3584,0)
   ENDIF
+  ' the root directory: 7 sectors from the first sector after the FATs
   disk_sector_total&=SUCC(fat_sector_count&*2)
   ~BIOS(4,3,L:V:work_text$,7,disk_sector_total&,format_drive|)
   work_text$=SPACE$(20)
+  ' Dfree into work_text$: free clusters, total clusters, bytes a sector, sectors a cluster (4 long words)
   basic_variables=GEMDOS(54,L:V:work_text$,format_drive|+1)
   cipher_seed%=V:work_text$
   IF basic_variables=0
+    ' the disk size in bytes: total clusters * sectors a cluster * bytes a sector
     memory_extra_needed%=LPEEK(cipher_seed%+4)*LPEEK(12+cipher_seed%)*LPEEK(cipher_seed%+8)
     screen_x&=panel_left&+panel_half_width&
     SUB screen_x&,22*char_width|
@@ -16221,6 +16295,8 @@ PROCEDURE select_zoom_window(zoom_in!)
           UNTIL alert_button|=1 OR alert_button|=3
           ' accepted: scale and frame for the new window
           IF alert_button|=1
+            ' remembered so that the next redraw of the view runs the simulation again in the new window instead of
+            ' restoring the saved picture of the old one
             zoom_window_chosen!=TRUE
             blank_top=blank_max_point(depth_axis|)
             blank_bottom=blank_min_point(depth_axis|)
@@ -17341,10 +17417,12 @@ PROCEDURE draw_depth_legend(legend_even_bands!,legend_to_window!)
   ~XBIOS(5,L:logical_screen%,L:physical_screen%,-1)
 RETURN
 ' Checks the program before a simulation: a TOOL DEF and a TOOL CALL must come before the first cutting block
-' (RND, C.., L.. with coordinates), and BLK FORM 0.1 and 0.2 must both be there. Errors go to the error line
-' error_blocks&(0) / error_messages$(0) with run_aborted! set.
+' (RND, C.., L.. with coordinates), and BLK FORM 0.1 and 0.2 must both be there. A tool memory with at least
+' two lines (tool_last_line& above 0) counts as tools defined from the start, so then only the TOOL CALL is
+' needed. Errors go to the error line error_blocks&(0) / error_messages$(0) with run_aborted! set.
 PROCEDURE check_tool_and_blank
   LOCAL tool_defined!,tool_called!,blank_form_min_seen!,blank_form_max_seen!,line_index&,program_line$,rnd_block_text$,lookahead_third_block_text$
+  ' tools in the tool memory count as defined
   IF tool_last_line&>0
     tool_defined!=TRUE
   ELSE
@@ -17417,6 +17495,8 @@ PROCEDURE run_graphic_simulation
   ON MENU IBOX 1,work_x&,work_bottom&+-130,work_w&,130 GOSUB main
   simulation_running!=TRUE
   graphic_view_active!=TRUE
+  ' cleared at every run; select_zoom_window sets it when a new window is chosen, and the redraw then runs the
+  ' simulation again
   zoom_window_chosen!=FALSE
   window_handle|=W_HAND(#1)
   ' width of the status line
@@ -17462,6 +17542,7 @@ PROCEDURE run_graphic_simulation
   pair_table_stride&=0
   current_contour|=FALSE
   function_code|=255
+  ' the larger side of the view area, used by simulate_arc_move to find arcs too large to draw as circles
   simulation_view_size=MAX(area_max_h-area_min_h,area_max_v-area_min_v)
   current_block&=0
   current_draw_block&=0
@@ -19449,10 +19530,13 @@ RETURN
 ' compensated_end() of the path offset by the tool radius tool_radius to the left or right (compensation_side$
 ' before, radius_correction$ now), then the corner with the block before: the intersection of the two offset
 ' paths (line-line, arc-line, line-arc, arc-arc), stored in move_compensated_end(), or a corner arc
-' (corner_arc_needed!, direction corner_arc_direction$) when the corner is on the outside. offset_circle_radius
-' is the offset radius of a previous circle, arc_direction$ the arc direction, previous_is_line! TRUE when the
-' block before is a line, move_is_line! returns whether compensation is on. Impossible geometry gives an alert
-' and run_aborted!.
+' (corner_arc_needed!, direction corner_arc_direction$) when the corner is on the outside. Where an offset arc
+' and an offset line already meet (ends less than 0.001 apart), that point is taken as the corner.
+' offset_circle_radius is the offset radius of a previous circle, arc_direction$ the arc direction,
+' previous_is_line! TRUE when the block before is a line, move_is_line! returns whether compensation is on.
+' Impossible geometry gives an alert and run_aborted!. In the rough-out cycle (rough_out_cycle_active!) an arc
+' whose offset radius comes out negative (the tool does not fit inside it) sets run_aborted! with
+' error_blocks&(0)=-10 and no alert, so that offset_element_at_corner can pass over that arc.
 PROCEDURE compensate_tool_radius(line_index&,offset_circle_radius,arc_direction$,previous_is_line!,move_is_line!)
   LOCAL search_done!,prev_direction_h,prev_direction_v,direction_x,direction_y,element_arc_radius,centre_distance_h,centre_distance_v,prev_arc_clockwise!,this_arc_clockwise!,tool_right_of_contour!,prev_arc_larger!,alert_button|,offset_scale,normal_direction_x,normal_direction_y,point_distance,work_point_y,basic_variables,segment_length,second_operand,discriminant,quadratic_factor,end_side_factor,line_parameter,foot_position_y,foot_position_x,first_crossing_x,first_crossing_y,second_crossing_x,second_crossing_y,vector_y,cosine_snapped,end_point_angle,two_intersections!,vector_x,second_vector_x,second_vector_y,line_slope,line_intercept,first_vector_length,second_vector_length,programmed_radius,chord_x,chord_y,chord_length,chord_angle,centre_angle_offset,first_crossing_angle,second_crossing_angle,radius_dot_product,normal_spare,normal_h,normal_v,normal_x,normal_y,compensation_starts!,centre_line_vertical!,arcs_need_corner!,prev_side_undefined!,this_side_undefined!
   ' direction of the block before
@@ -19767,6 +19851,8 @@ PROCEDURE compensate_tool_radius(line_index&,offset_circle_radius,arc_direction$
                     two_intersections!=TRUE
                   ENDIF
                 ELSE
+                  ' the offset line already starts where the offset arc before it ends: that point is the corner, without
+                  ' solving the quadratic, which can miss it through rounding
                   IF .001>ABS(compensated_start(first_plane_axis|)-move_compensated_end(first_plane_axis|)) AND .001>ABS(compensated_start(second_plane_axis|)-move_compensated_end(second_plane_axis|))
                     first_crossing_x=compensated_start(first_plane_axis|)
                     first_crossing_y=compensated_start(second_plane_axis|)
@@ -19871,6 +19957,8 @@ PROCEDURE compensate_tool_radius(line_index&,offset_circle_radius,arc_direction$
             ENDIF
           ENDIF
         ENDIF
+        ' rough-out: the tool does not fit inside this arc; -10 marks the error for offset_element_at_corner, which
+        ' clears it and takes the element after this arc instead
         IF rough_out_cycle_active! AND element_arc_radius<0
           run_aborted!=TRUE
           error_blocks&(0)=-10
@@ -19979,6 +20067,8 @@ PROCEDURE compensate_tool_radius(line_index&,offset_circle_radius,arc_direction$
                   two_intersections!=TRUE
                 ENDIF
               ELSE
+                ' the offset arc already starts where the offset line before it ends: that point is the corner, without
+                ' solving the quadratic
                 IF .001>ABS(compensated_start(first_plane_axis|)-move_compensated_end(first_plane_axis|)) AND .001>ABS(compensated_start(second_plane_axis|)-move_compensated_end(second_plane_axis|))
                   first_crossing_x=compensated_start(first_plane_axis|)
                   first_crossing_y=compensated_start(second_plane_axis|)
@@ -21817,13 +21907,17 @@ PROCEDURE simulate_line_move(line_index&,arc_direction$,move_is_line!)
 RETURN
 ' Draws the pending arc from previous_block_start() to move_end() around the centre previous_centre() in
 ' direction move_arc_direction$ ("+"/"-"). Checks the arc first: a zero radius ("Kreisradius muss groesser als
-' Null sein"), start and end at different distances from the centre, a compensated radius smaller than the tool
-' radius (+ finishing allowance in contour mode), and compensation or rotation in a side plane; errors set
-' run_aborted! and error_messages$(0). An arc in a side plane (first_plane_axis|<>tool_first_axis|) goes to
-' simulate_side_plane_arc, one that changes depth (helix) to simulate_helix_arc. Otherwise the compensated arc
-' is drawn: in the wireframe view as a circle arc, else filled into the layer bitmap of its depth, and the view
-' and window updated as in simulate_line_move. Handles the rounding (rounding_active!) and the outside corner
-' (corner_arc_needed!).
+' Null sein", the circle radius must be greater than zero), start and end at different distances from the
+' centre, a compensated radius smaller than the tool radius (in contour mode, in_subprogram_call!, tool_radius
+' already includes the finishing allowance, so the alert there says "Fraeserradius + Aufmass" [tool radius +
+' allowance]), and compensation or rotation in a side plane; errors set run_aborted! and error_messages$(0).
+' An arc in a side plane (first_plane_axis|<>tool_first_axis|) goes to simulate_side_plane_arc, one that
+' changes depth (helix) to simulate_helix_arc. Otherwise the compensated arc is drawn, its screen coordinates
+' held in 32-bit integers so that a very large radius does not overflow: in the wireframe view as a circle
+' arc, else filled into the layer bitmap of its depth, and the view and window updated as in
+' simulate_line_move. An arc whose radius is more than four times simulation_view_size and whose sweep is
+' under 2 degrees is filled as a straight line from its start to its end instead, with the tool disc at both
+' ends. Handles the rounding (rounding_active!) and the outside corner (corner_arc_needed!).
 PROCEDURE simulate_arc_move(line_index&,arc_direction$,move_is_line!)
   LOCAL vector_x,vector_y,second_vector_x,second_vector_y,element_arc_radius,uncompensated_radius,screen_x&,screen_y&,arc_radius,cut_layer|,angle_offset,parsed_value,centre_angle_offset,draw_end_angle,arc_end_x_pixels%,arc_end_y_pixels%,stripe_left_dx&,arc_start_angle,arc_end_angle,point_angle,arc_centre_x_pixels%,arc_centre_y_pixels%,arc_outer_radius_pixels%,arc_inner_radius_pixels%,module_call_result%,box_height&,box_width&,spare_left&,spare_top&,spare_right&,spare_bottom&,window_left&,window_top&,window_right&,window_bottom&,bitmap_left&,bitmap_top&,bitmap_right&,bitmap_bottom&,rnd_first_axis|,rnd_second_axis|,rnd_infeed_axis|,start_tenths&,end_tenths&,alert_button|,loop_index|,line_index&,work_text$,full_circle!,chamfer_saved_correction$,saved_compensation$,window_handle|,rect_width&,rect_height&,redraw_x&,redraw_y&,redraw_width&,redraw_height&
   ON MENU
@@ -22078,6 +22172,10 @@ PROCEDURE simulate_arc_move(line_index&,arc_direction$,move_is_line!)
                 ENDIF
                 ~XBIOS(5,L:offscreen_buffer%,L:physical_screen%,-1)
                 CLIP view_left&,view_top& TO view_right&,view_bottom& OFFSET work_offset_x&,work_offset_y&
+                ' the arc in screen pixels: start file_search_result%/arc_start_y_pixels%, end arc_end_x_pixels%/
+                ' arc_end_y_pixels%, centre arc_centre_x_pixels%/arc_centre_y_pixels%, the outer and inner edge of the cut
+                ' arc_outer_radius_pixels%/arc_inner_radius_pixels%, and module_call_result% = half the size of the update box
+                ' (tool centre radius + tool radius + 4)
                 file_search_result%=ROUND(view_scale*move_compensated_start(first_plane_axis|))-origin_x_pixels&
                 arc_start_y_pixels%=-ROUND(view_scale*move_compensated_start(second_plane_axis|))-origin_y_pixels&
                 arc_end_x_pixels%=ROUND(view_scale*move_compensated_end(first_plane_axis|))-origin_x_pixels&
@@ -22091,6 +22189,8 @@ PROCEDURE simulate_arc_move(line_index&,arc_direction$,move_is_line!)
                 ' start and end angle in tenths of a degree for CIRCLE/PCIRCLE
                 start_tenths&=ROUND(centre_angle_offset*tenths_per_radian)
                 end_tenths&=ROUND(draw_end_angle*tenths_per_radian)
+                ' the update box round the centre, each side clamped to the work bitmap before it goes into the word variables
+                ' box_left&, box_top&, box_right&, box_bottom&
                 IF arc_centre_x_pixels%-module_call_result%<work_min_x&
                   box_left&=work_min_x&
                 ELSE
@@ -22153,6 +22253,8 @@ PROCEDURE simulate_arc_move(line_index&,arc_direction$,move_is_line!)
                     ' solid: fill the ring segment the tool sweeps and the tool circles at both ends
                     layer_used!(cut_layer|)=TRUE
                     IF .002<ABS(point_angle) AND (NOT full_circle!)
+                      ' a very large arc with a sweep under 2 degrees (20 tenths) is nearly straight and its pixel radius is too
+                      ' large for PCIRCLE: draw it as a line from start to end with the tool disc at both ends
                       IF element_arc_radius>simulation_view_size*4 AND ABS(start_tenths&-end_tenths&)<20
                         DRAW file_search_result%,arc_start_y_pixels%,arc_end_x_pixels%,arc_end_y_pixels%
                         PCIRCLE file_search_result%,arc_start_y_pixels%,tool_radius_pixels&
@@ -25209,6 +25311,8 @@ PROCEDURE simulate_cycle_call
             allowance_changed!=FALSE
           ENDIF
           previous_allowance=finishing_allowance
+          ' the paths are built with the allowance in tool_radius; it is cleared so that it is not added again during
+          ' the passes, and previous_allowance keeps it so that the paths are only rebuilt when it changes
           finishing_allowance=0
           IF (NOT stop_requested!) AND (NOT run_aborted!)
             ' rough-out running; reset all transformations for the contour
@@ -25243,6 +25347,7 @@ PROCEDURE simulate_cycle_call
             ENDIF
             rough_out_cycle_active!=FALSE
           ENDIF
+          ' back to the real tool radius
           tool_radius=contour_tool_radius
         ENDIF
       CASE 15
@@ -25251,6 +25356,7 @@ PROCEDURE simulate_cycle_call
           ALERT 3,"Die Kontur kann nur im|normalen Darstellungsmodus|betrachtet werden!",1,"Abbruch",alert_button|
           stop_requested!=TRUE
         ELSE
+          ' pilot drilling: the paths are built with the tool radius plus the finishing allowance, as for cycle 6
           contour_tool_radius=tool_radius
           tool_radius=tool_radius+finishing_allowance
           IF finishing_allowance<>previous_allowance
@@ -25260,6 +25366,7 @@ PROCEDURE simulate_cycle_call
             allowance_changed!=FALSE
           ENDIF
           previous_allowance=finishing_allowance
+          ' cleared for the passes, as for cycle 6
           finishing_allowance=0
           IF (NOT stop_requested!) AND (NOT run_aborted!)
             datum_shift_on!=FALSE
@@ -27060,6 +27167,8 @@ PROCEDURE simulate_contour_cycle_pass(other_contour|,contour_tool_radius,cut_dep
               REPEAT
                 INC screen_x&
                 ' free pixel
+                ' the off-screen buffer stays the logical screen for the whole scan, so POINT tests the same picture that FILL
+                ' paints
                 IF POINT(screen_x&,screen_y&)=0
                   FILL screen_x&,screen_y&
                   search_done!=TRUE
@@ -29629,11 +29738,12 @@ PROCEDURE round_arc_to_arc(program_line$)
 RETURN
 ' Chamfer (Fase: an L block without coordinates between two lines) after the line program_line$:
 ' chamfer_without_moves! TRUE only computes, FALSE also simulates the moves. The chamfer length (column 9 of
-' block next_block&, plus the allowance finishing_allowance in the fill pass in_subprogram_call!) must be
-' positive and shorter than the line. With radius compensation the corner points of both lines are first moved
-' by the tool radius tool_radius to the correction side (compensation_side$ before, radius_correction$ after)
-' and intersected, and a chamfer that the tool cannot reach is refused. The first line is simulated up to the
-' chamfer start, then the chamfer to its end on the second line.
+' block next_block&) must be positive and shorter than the line; in contour mode (in_subprogram_call!) it is
+' used as programmed, the finishing allowance being already in tool_radius. With radius compensation the
+' corner points of both lines are first moved by the tool radius tool_radius to the correction side
+' (compensation_side$ before, radius_correction$ after) and intersected, and a chamfer that the tool cannot
+' reach is refused. The first line is simulated up to the chamfer start, then the chamfer to its end on the
+' second line.
 PROCEDURE chamfer_line_corner(program_line$,chamfer_without_moves!)
   LOCAL chamfer_length,arc_radius,remaining_line_length,first_line_factor,second_line_factor,search_block&,chamfer_saved_correction$,alert_button|,line_parameter,crossing_point_x,crossing_point_y,element_start_x,element_start_y,element_end_x,element_end_y,other_start_x,other_start_y,other_end_x,other_end_y,first_vector_length,corner_intersection_found!,direction_x,direction_y,next_line_dx,next_line_dy,segment_length,offset_scale,chamfer_start_x,chamfer_start_y,chamfer_end_x,chamfer_end_y,corner_on_positive_side!,line_vector_x,line_vector_y,line_vector_z,rnd_block_text$,following_block_text$,work_text$,edit_work_text$,result_text$,cycle_saved_first_axis|,cycle_saved_second_axis|,saved_infeed_axis|
   ' chamfer length
@@ -33271,14 +33381,16 @@ PROCEDURE check_contour_cycle
   current_block&=saved_program_line&
   radius_correction$=contour_saved_correction$
 RETURN
-' Builds the tool paths of a contour pocket from the sub-contours checked by check_contour_cycle. First pass:
-' for each sub-contour current_contour| (LBL contour_label&(current_contour|)) the radius correction is swapped
-' when an odd number of axes is mirrored (mirror_reverses_direction!), the start point is set up
+' Builds the tool paths of a contour pocket from the sub-contours checked by check_contour_cycle. tool_radius
+' already includes the finishing allowance (simulate_cycle_call adds it before the call). First pass: for each
+' sub-contour current_contour| (LBL contour_label&(current_contour|)) the radius correction is swapped when an
+' odd number of axes is mirrored (mirror_reverses_direction!), the start point is set up
 ' (offset_element_at_corner, store_generated_line) and run_program_blocks writes the tool-centre (offset)
 ' contour into offset_contour_elements$(current_contour|,..), its last line index into
-' offset_contour_last_line&(current_contour|). With a depth step (finishing_allowance>0) and a contour that
-' needs it (corner_arc_needed!) the first element is copied to the end of the subprogram for the offset run and
-' deleted again afterwards. Second pass: pockets and islands whose offset contours cross are merged.
+' offset_contour_last_line&(current_contour|). When the closing corner of the sub-contour is an outside corner
+' (closing_corner_arc_needed!, from offset_element_at_corner) its corner arc is added at the end of the
+' offset contour by
+' draw_corner_transition_arc. Second pass: pockets and islands whose offset contours cross are merged.
 ' classify_contour_nesting gives the relation of two contours (contour_relation|(,)),
 ' find_nearest_contour_crossing finds the next intersection on a contour (point in
 ' nearest_crossing_x/nearest_crossing_y); the walk follows one contour and switches to the other at each
@@ -33290,7 +33402,7 @@ RETURN
 ' saved_contour_clockwise!(), saved_contour_side$() when a merge was done, and the mirrored corrections are
 ' swapped back. run_aborted! is set on an error, stop_requested! when the user cancels.
 PROCEDURE build_contour_pocket_paths
-  LOCAL alert_button|,line_index&,search_block&,crossing_element&,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,following_block_text$,unused_pocket_value,overlap_saved_arc_direction$,scan_index&,element_prefix$,last_element_was_line!,other_contour|,unused_pocket_offset,contours_touch!,crossing_found!,contour_relation_code|,start_on_island!,max_merged_lines&,pair_table_bytes%,pair_table_stride&,text_length&,original_contour_count|,contours_merged!,x_axis_flag!,y_axis_flag!,z_axis_flag!,input_column&,input_row&,z_value_column&,file_byte|,loop_index|,item_count&,inner_index|,angle_offset,parsed_value,input_text$,work_text$,edit_work_text$,is_finished!,parse_column|,stay_on_contour!,change_contour!,merge_pass|
+  LOCAL alert_button|,line_index&,search_block&,crossing_element&,element_start_x,element_start_y,element_end_x,element_end_y,program_line$,following_block_text$,unused_pocket_value,closing_corner_arc_direction$,scan_index&,element_prefix$,last_element_was_line!,other_contour|,unused_pocket_offset,contours_touch!,crossing_found!,contour_relation_code|,start_on_island!,max_merged_lines&,pair_table_bytes%,pair_table_stride&,text_length&,original_contour_count|,contours_merged!,x_axis_flag!,y_axis_flag!,z_axis_flag!,input_column&,input_row&,z_value_column&,file_byte|,loop_index|,item_count&,inner_index|,angle_offset,parsed_value,input_text$,work_text$,edit_work_text$,is_finished!,parse_column|,stay_on_contour!,change_contour!,merge_pass|
   ' busy mouse
   DEFMOUSE 2
   ' contour pocket paths are being built
@@ -33321,9 +33433,10 @@ PROCEDURE build_contour_pocket_paths
     ENDIF
     ' start point of the sub-contour
     offset_element_at_corner(0)
-    overlap_needed!=corner_arc_needed!
-    ' saved, restored after the overlap run
-    overlap_saved_arc_direction$=corner_arc_direction$
+    ' TRUE when the closing corner (last element back to the first) needs an outside corner arc, added after the
+    ' run below
+    closing_corner_arc_needed!=corner_arc_needed!
+    closing_corner_arc_direction$=corner_arc_direction$
     ' save the start positions
     element_start_x=move_compensated_end(first_plane_axis|)
     element_start_y=move_compensated_end(second_plane_axis|)
@@ -33376,14 +33489,15 @@ PROCEDURE build_contour_pocket_paths
             store_generated_arc(line_index&,compensated_start(first_plane_axis|),compensated_start(second_plane_axis|),circle_centre(first_plane_axis|),circle_centre(second_plane_axis|),arc_direction$)
           ENDIF
         ENDIF
-        IF overlap_needed!
+        ' the closing corner arc from the end of the last offset element to the start of the first
+        IF closing_corner_arc_needed!
           move_compensated_end(first_plane_axis|)=element_start_x
           move_compensated_end(second_plane_axis|)=element_start_y
           compensated_start(first_plane_axis|)=element_end_x
           compensated_start(second_plane_axis|)=element_end_y
           move_end(first_plane_axis|)=end_point(first_plane_axis|)
           move_end(second_plane_axis|)=end_point(second_plane_axis|)
-          corner_arc_direction$=overlap_saved_arc_direction$
+          corner_arc_direction$=closing_corner_arc_direction$
           draw_corner_transition_arc
         ENDIF
         offset_contour_last_line&(current_contour|)=PRED(path_line_index&)
@@ -34471,6 +34585,8 @@ PROCEDURE find_nearest_contour_crossing(pair_table_stride&,VAR line_index&,cross
                     second_crossing_y=SQR(discriminant)+arc_centre_y
                   ENDIF
                 ELSE
+                  ' the other line starts where the arc ends: that shared point is taken as both candidates, without solving the
+                  ' quadratic, which can miss it through rounding
                   IF .001>ABS(other_start_x-element_end_x) AND .001>ABS(other_start_y-element_end_y)
                     first_crossing_x=element_end_x
                     first_crossing_y=element_end_y
@@ -34720,6 +34836,7 @@ PROCEDURE find_nearest_contour_crossing(pair_table_stride&,VAR line_index&,cross
                       second_crossing_y=SQR(discriminant)+other_centre_y
                     ENDIF
                   ELSE
+                    ' the current line starts where the other arc ends: that shared point is taken as both candidates
                     IF .001>ABS(element_start_x-other_end_x) AND .001>ABS(element_start_y-other_end_y)
                       first_crossing_x=other_end_x
                       first_crossing_y=other_end_y
@@ -35895,6 +36012,7 @@ PROCEDURE count_ray_path_crossings(test_point_x,test_point_y,ray_end_x,ray_end_y
               second_crossing_y=SQR(discriminant)+arc_centre_y
             ENDIF
           ELSE
+            ' the arc ends at the ray's end point: that point is taken as both cuts, without solving the quadratic
             IF .001>ABS(ray_end_x-element_end_x) AND .001>ABS(ray_end_y-element_end_y)
               first_crossing_x=ray_end_x
               first_crossing_y=ray_end_y
@@ -36108,17 +36226,20 @@ PROCEDURE count_ray_path_crossings(test_point_x,test_point_y,ray_end_x,ray_end_y
   ENDIF
 RETURN
 ' Reads the elements around a corner of contour current_contour| and works out where the tool centre is at the
-' start and end of the corner element, offset by the tool radius tool_radius to the correction side, then hands
-' the corner to compensate_tool_radius. corner_from_path!=TRUE: the corner at element path_line_index& of the
-' tool path tool_path_elements$(current_contour|,...) (the element before it, or the last one when
-' path_line_index&=0, and the element itself). corner_from_path!=FALSE: the closing corner of the contour in the
-' NC program program_lines$, from the last element of block contour_label&(current_contour|) back to its first.
-' Element kinds (first two characters): "L " line, "LP" polar line, "CC" circle centre followed by "C " arc,
-' "CP" polar arc, "CR" arc by radius, "CT"/"CTP" tangential arcs. Lines that end in "}" are skipped
-' (skip_to_next_block). Leaves previous_block_start()/move_end() = start/end of the element, previous_centre() =
-' arc centre, move_compensated_start()/move_compensated_end() = offset start/end, compensation_side$ =
-' correction side ("L"/"R"), move_arc_direction$/arc_direction$ = arc direction ("+"/"-"),
-' first_is_line!/second_is_line! = the element / the next element is a line.
+' start and end of the corner element, offset by the tool radius tool_radius to the correction side, then
+' hands the corner to compensate_tool_radius. corner_from_path!=TRUE: the corner at element path_line_index&
+' of the tool path tool_path_elements$(current_contour|,...) (the element before it, or the last one when
+' path_line_index&=0, and the element itself). corner_from_path!=FALSE: the closing corner of the contour in
+' the NC program program_lines$, from the last element of block contour_label&(current_contour|) back to its
+' first. Element kinds (first two characters): "L " line, "LP" polar line, "CC" circle centre followed by "C "
+' arc, "CP" polar arc, "CR" arc by radius, "CT"/"CTP" tangential arcs. Lines that end in "}" are skipped
+' (skip_to_next_block). When compensate_tool_radius reports with error_blocks&(0)=-10 that the tool does not
+' fit inside the arc after the corner (rough-out only), the error is cleared, the element after that arc is
+' read as the next element and the corner is worked out again, until it succeeds or another error stops it.
+' Leaves previous_block_start()/move_end() = start/end of the element, previous_centre() = arc centre,
+' move_compensated_start()/move_compensated_end() = offset start/end, compensation_side$ = correction side
+' ("L"/"R"), move_arc_direction$/arc_direction$ = arc direction ("+"/"-"), first_is_line!/second_is_line! =
+' the element / the next element is a line.
 PROCEDURE offset_element_at_corner(corner_from_path!)
   LOCAL arc_end_layer&,line_index&,program_line$,following_block_text$,first_is_line!,second_is_line!,loop_index|,segment_length,offset_scale,element_arc_radius,uncompensated_radius,vector_x,vector_y,point_distance,work_point_y,direction_x,direction_y,search_found!
   ' a corner of the tool path
@@ -36378,6 +36499,7 @@ PROCEDURE offset_element_at_corner(corner_from_path!)
     ENDIF
     radius_correction$=compensation_side$
   ENDIF
+  ' repeated while the element after the corner has to be passed over (the -10 check at the end)
   search_found!=FALSE
   REPEAT
     current_block&=line_index&
@@ -36528,9 +36650,12 @@ PROCEDURE offset_element_at_corner(corner_from_path!)
         compensate_tool_radius(line_index&,element_arc_radius,arc_direction$,0,second_is_line!)
       ENDIF
     ENDIF
+    ' the tool does not fit inside the arc after the corner: clear the error (-1: none) and read the element after
+    ' it as the next element, then work out the corner again
     IF run_aborted! AND error_blocks&(0)=-10
       run_aborted!=FALSE
       error_blocks&(0)=-1
+      ' in the tool path; with path_line_index&=0 this reads element 1 again, the same element as before
       IF corner_from_path!
         IF path_line_index&=0
           line_index&=1
@@ -36570,6 +36695,7 @@ PROCEDURE offset_element_at_corner(corner_from_path!)
           ENDIF
         ENDIF
       ELSE
+        ' in the NC program: on to the next contour element
         skip_to_next_block(line_index&)
         program_line$=program_lines$(line_index&)
         following_block_text$=LEFT$(program_line$,2)
@@ -36611,6 +36737,7 @@ PROCEDURE offset_element_at_corner(corner_from_path!)
       ENDIF
       radius_correction$=compensation_side$
     ELSE
+      ' the corner is done
       search_found!=TRUE
     ENDIF
   UNTIL search_found!
@@ -37036,13 +37163,14 @@ FUNCTION file_selector_with_title(work_text$,VAR program_directory$,selected_fil
   rect_width&=GINTOUT(1)
   RETURN GINTOUT(0)
 ENDFUNC
-' Program clean-up, not called anywhere: puts the starting screen back, frees the extra screen buffer, the
-' resource (END if that fails), stops the resource module, gives back the reserved memory and, when loaded,
-' stops and shuts down the dialog module.
+' Program clean-up, not called anywhere: puts the starting screen back, frees the extra screen buffer and the
+' resource (END if that fails), stops the resource module and, when loaded, stops and shuts down the dialog
+' module.
 PROCEDURE release_system_resources
   ' Setscreen back to the screen the program started with
   ~XBIOS(5,L:logical_screen%,L:physical_screen%,-1)
   IF work_memory_block%>0
+    ' free the extra screen buffer
     ~GEMDOS(73,L:work_memory_block%)
   ENDIF
   ' free the resource
@@ -37303,7 +37431,8 @@ FUNCTION file_found(third_block_text$)
     ENDIF
   ENDIF
 ENDFUNC
-' RESERVE with the size reserve_size% rounded up to whole 256 bytes (a negative size gives memory back).
+' RESERVE with the size reserve_size% rounded up to whole 256 bytes (a negative size gives memory back). Nothing
+' calls it: the program's memory is fixed by $m800000 and is not given back.
 PROCEDURE reserve_memory_rounded(reserve_size%)
   LOCAL negative_size!
   ' a negative size gives memory back
