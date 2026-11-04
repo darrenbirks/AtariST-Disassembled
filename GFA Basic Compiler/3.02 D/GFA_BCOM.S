@@ -12,6 +12,9 @@
 ; Registers through most of the compiler: a5 reads the source tokens, a4 writes the IR, a1 writes the
 ; generated code, a6 holds the branch list, a3 the end of the IR.  The names of the library routines
 ; are the 8-byte table at library_name_table (routine n at +n*8).
+;
+; 3.03 D came with this same program (it names itself 3.02 D there too) and the same GL.PRG; only its
+; GFA3BLIB is its own.
 
 
 	section	text

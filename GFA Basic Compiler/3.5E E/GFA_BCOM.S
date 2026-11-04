@@ -12,6 +12,12 @@
 ; Registers through most of the compiler: a5 reads the source tokens, a4 writes the IR, a1 writes the
 ; generated code, a6 holds the branch list, a3 the end of the IR.  The names of the library routines
 ; are the 8-byte table at library_name_table (routine n at +n*8).
+;
+; A Swedish release of 3.5E E is this program with its messages in Swedish, each text kept to the length
+; of the English one ("Programmet har strukturfel." for "Program has stucture errors"); its GL.PRG is the
+; 3.5E E linker with its messages translated the same way, and its GFA3BLIB.NDX is the same file.  Its
+; GFA3BLIB differs in one byte: the rts ending CVDSTR.O ($4e75 at code offset $e) reads $4c75, one bit
+; changed, which looks like damage to that copy rather than a change by GFA.
 
 
 	section	text
