@@ -1,0 +1,3474 @@
+' The main program.  Shows the title screen and reads the tables, then makes one character after another: rolls
+' the abilities (roll_abilities), chooses sex, race and class (choose_race_and_class), alignment and the rest
+' (choose_alignment), and shows the result (show_character_summary).
+' The player may buy the character's equipment (visit_equipment_store), keep the character and print a character
+' sheet (print_character_sheet), and then make another one or quit.  alert_answer% holds each alert answer;
+' THINK waits three seconds and asks again.
+Cls  ! clear the screen
+Hidem  ! hide the mouse pointer
+@Show_title_screen  ! title screen, then read all the tables from the DATA
+Void Fre(0)  ! tidy up the string memory
+Do
+  @Roll_abilities  ! roll the six abilities, comeliness and social class until the player keeps them
+  @Choose_race_and_class  ! choose sex, race, class and work out the ability bonuses
+  @Choose_alignment  ! choose alignment, then hit points, age, money and the rest
+  @Show_character_summary  ! show the new character
+  Ask_buy_equipment:
+  Work_text$="Do you want this character|enough to buy their supplies|and equipment?"  ! ask whether the character is worth equipping
+  Alert 0,Work_text$,3," YES | NO | THINK ",Alert_answer%
+  If Alert_answer%=1  ! the player answered YES
+    @Visit_equipment_store  ! go shopping in the price lists
+  Endif
+  If Alert_answer%=2  ! the player answered NO
+  Else
+    If Alert_answer%=3  ! the player answered THINK
+      Pause 150  ! wait three seconds, then ask again
+      Goto Ask_buy_equipment
+    Endif
+    @Show_character_summary  ! show the character again after shopping
+    Ask_keep_character:
+    Work_text$=" DO YOU WANT THIS CHARACTER? | |"  ! ask whether to keep the character
+    Work_text$=Work_text$+"A 'YES' response at this time|will print a character sheet."
+    Alert 0,Work_text$,3," YES | NO | THINK ",Alert_answer%
+    If Alert_answer%=1  ! YES: keep it
+      @Print_character_sheet  ! print the full character sheet
+    Endif
+    If Alert_answer%=3  ! THINK
+      Pause 150  ! wait three seconds, then ask again
+      Goto Ask_keep_character
+    Endif
+  Endif
+  Alert 2,"Do you want another|character?",1," YES | NO ",Alert_answer%  ! ask whether to make another character
+  Exit If Alert_answer%=2  ! NO: leave the main loop
+Loop  ! back for the next character
+Cls  ! clear the screen before leaving
+End  ! end of the program
+' Races, read by Restore at start-up into race_names$, race_ability_limits%, race_percentile_limit%.
+' First the number of races (race%, 17).  Then one record per race:
+'   name, padded with spaces (trailing spaces removed, into race_names$(race))
+'   6 pairs of minimum, maximum, in ability order Strength, Intelligence, Wisdom, Dexterity, Constitution,
+'     Charisma (race_ability_limits%(race,ability,1,sex) and race_ability_limits%(race,ability,2,sex), copied to
+' both sexes)
+'   female Strength maximum (race_ability_limits%(race,1,2,2), replaces the copied value)
+'   female and male maximum exceptional Strength percentage, 00 = none (race_percentile_limit%(race,2),
+' race_percentile_limit%(race,1))
+Data 17,"Gray Dwarf    ",08,18,03,18,03,18
+Data 03,17,11,19,04,16,17,00
+Data 99,"Hill Dwarf    ",08,18,03,18,03,18
+Data 03,17,11,19,04,16,17,00
+Data 99,Mountain Dwarf,08,18,03,18,03,18
+Data 03,17,11,19,04,16,17,00
+Data 99,"Dark Elf      ",03,18,08,18,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"Gray Elf      ",03,18,08,19,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"High Elf      ",03,18,08,18,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"Valley Elf    ",03,18,08,18,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"Wild Elf      ",03,18,08,18,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"Wood Elf      ",03,18,08,18,03,18
+Data 06,19,07,18,08,18,16,00
+Data 75,"Deep Gnome    ",06,18,07,18,03,18
+Data 03,18,08,18,03,18,15,00
+Data 50,"Surface Gnome ",06,18,07,18,03,18
+Data 03,18,08,18,03,18,15,00
+Data 50,"Half-Elf      ",03,18,04,18,03,18
+Data 06,18,06,18,03,18,17,00
+Data 90,"Hairfoot      ",07,17,06,18,03,17
+Data 07,18,10,19,03,18,14,00
+Data 00,"Stout         ",07,17,06,18,03,17
+Data 07,18,10,19,03,18,14,00
+Data 00,"Tallfellow    ",07,17,06,18,03,17
+Data 07,18,10,19,03,18,14,00
+Data 00,"Half-Orc      ",05,18,03,17,03,14
+Data 03,17,12,19,05,12,18,75
+Data 99,"Human         ",03,18,03,18,03,18
+Data 03,18,03,18,03,18,18,50
+Data 100
+' Classes, read into class_names$, class_minimum_scores%, race_allows_class!.
+' First the number of classes (character_class%, 12).  Then one record per class:
+'   name, padded with spaces (trailing spaces removed, into class_names$(class))
+'   6 ability minimums, Strength, Intelligence, Wisdom, Dexterity, Constitution, Charisma
+' (class_minimum_scores%(class,ability))
+'   17 flags, one per race in race-table order, 1 = the race may take the class (race_allows_class!(class,race))
+Data_class_table:
+Data 12,"Cavalier   ",15,10,10,15,15,06
+Data 0,0,0,1,1,1,0,0
+Data 0,0,0,1,0,0,0,0
+Data 1,"Paladin    ",15,10,13,15,15,17
+Data 0,0,0,0,0,0,0,0
+Data 0,0,0,1,0,0,0,0
+Data 1,"Cleric     ",06,06,09,03,06,06
+Data 1,1,1,1,1,1,1,0
+Data 1,1,1,1,1,1,1,1
+Data 1,"Druid      ",06,06,12,06,06,15
+Data 0,0,0,0,1,1,1,1
+Data 1,0,0,1,1,1,1,0
+Data 1,"Fighter    ",09,03,06,06,07,06
+Data 1,1,1,1,1,1,1,1
+Data 1,1,1,1,1,1,1,1
+Data 1,"Barbarian  ",15,06,06,14,15,06
+Data 0,0,0,0,0,0,0,0
+Data 0,0,0,0,0,0,0,0
+Data 1,"Ranger     ",13,13,14,06,14,06
+Data 0,0,0,1,1,1,1,0
+Data 1,0,0,1,0,0,0,0
+Data 1,"Magic-user ",03,09,06,06,06,06
+Data 0,0,0,1,1,1,1,0
+Data 1,0,0,1,0,0,0,0
+Data 1,Illusionist,06,15,06,16,03,06
+Data 0,0,0,0,0,0,0,0
+Data 0,1,1,0,0,0,0,0
+Data 1,"Thief      ",06,06,03,09,06,06
+Data 1,1,1,1,1,1,1,1
+Data 1,1,1,1,1,1,1,1
+Data 1,"Assassin   ",12,11,06,12,06,03
+Data 1,1,1,1,1,1,1,1
+Data 1,1,1,1,0,0,0,1
+Data 1,"Monk       ",15,06,15,15,11,06
+Data 0,0,0,0,0,0,0,0
+Data 0,0,0,0,0,0,0,0
+Data 1
+' First-level saving throws, read into saving_throw_names$ and saving_throw_table%.
+' First the count (6), used both as the number of category names and as the number of class groups.
+' Then the category names (saving_throw_names$(1..6)): only five are present, so the sixth Read takes the first
+' value.
+' Then 6 rows of 5 saving throws, one row per class group (saving_throw_table%(group,category)):
+' Cavalier/Paladin,
+' Cleric/Druid, Fighter/Barbarian/Ranger, Magic-user/Illusionist, Thief/Assassin, Monk, each in category order
+' Paralyzation, Petrification, Rod/Staff/Wand, Breath Weapon, Spell.  Because of the missing name every value
+' is read one place early and the last one comes from the alignment count that follows.
+Data_saving_throw_table:
+Data 6,Paralyzation/Poison/Death Magic,Pertification/Polymorph,Rod/Staff/Wand,Breath Weapon,Spell,14,15
+Data 16,17,17,10,13,14,16,15
+Data 14,15,16,17,17,14,13,11
+Data 15,12,13,12,14,16,15,13
+Data 12,14,16,15
+' Alignments, read into alignment_names$ and alignment_allowed!.
+' First the number of alignments (alignment%, 9).  Then one record per alignment:
+'   name, padded with spaces (trailing spaces removed, into alignment_names$(alignment))
+'   12 flags, one per class in class-table order, 1 = the class may have the alignment
+'     (alignment_allowed!(alignment,class))
+Data_alignment_table:
+Data 9,"Lawful Good    ",1,1,1,0,1,0
+Data 1,1,1,0,0,1,"Lawful Neutral ",0
+Data 0,1,0,1,0,0,1,1
+Data 1,0,1,"Lawful Evil    ",0,0,1,0
+Data 1,0,0,1,1,1,1,1
+Data "Neutral Good   ",1,0,1,0,1,1,1
+Data 1,1,0,0,0,"True Neutral   ",0,0
+Data 1,1,1,1,0,1,1,1
+Data 0,0,"Neutral Evil   ",0,0,1,0,1
+Data 1,0,1,1,1,1,0,"Chaotic Good   "
+Data 1,0,1,0,1,1,1,1
+Data 1,0,0,0,Chaotic Neutral,0,0,1
+Data 0,1,1,0,1,1,1,0
+Data 0,"Chaotic Evil   ",0,0,1,0,1,1
+Data 0,1,1,1,1,0
+' The seven ability names, read into ability_names$(1..7): Strength, Intelligence, Wisdom, Dexterity,
+' Constitution,
+' Charisma, Comeliness.  The other tables give ability values in this order.
+Data_ability_names:
+Data Strength,Intelligence,Wisdom,Dexterity,Constitution,Charisma,Comeliness
+' Age categories, read into age_category_names$ and race_age_ranges%.
+' First the five category names (age_category_names$(1..5)): Young Adult, Mature, Middle Aged, Old, Venerable.
+' Then one record per race, in race-table order:
+'   a letter A-Q naming the record (read and dropped)
+'   5 pairs of first and last age in years, one pair per category (race_age_ranges%(category,1,race),
+'     race_age_ranges%(category,2,race))
+Data_age_table:
+Data Young Adult,Mature,Middle Aged,Old,Venerable,A,"  35"," 50"
+Data " 51",150,151," 250"," 251"," 350"," 351"," 450"
+Data B,"  35"," 50"," 51",150,151," 250"," 251"
+Data " 350"," 351"," 450",C,"  40"," 60"," 61",175
+Data 176," 275"," 276"," 400"," 401"," 525",D,"  50"
+Data 100,101,400,401," 600"," 601"," 800"," 801"
+Data 1000,E," 150",250,251,650,651,1000
+Data 1001,1500,1501,2000,F," 100",175,176
+Data 550,551," 875"," 876",1200,1201,1600,G
+Data " 150",250,251,650,651,1000,1001,1500
+Data 1501,2000,H,"  75",150,151,500,501
+Data " 800"," 801",1100,1101,1350,I,"  75",150
+Data 151,500,501," 800"," 801",1100,1101,1350
+Data J,"  50"," 90"," 91",300,301," 450"," 451"
+Data " 600"," 601"," 750",K,"  50"," 90"," 91",300
+Data 301," 450"," 451"," 600"," 601"," 750",L,"  24"
+Data " 40"," 41",100,101," 175"," 176"," 250"," 251"
+Data " 325",M,"  22"," 33"," 34"," 68"," 69"," 101"
+Data " 102"," 144"," 145"," 199",N,"  22"," 33"," 34"
+Data " 68"," 69"," 101"," 102"," 144"," 145"," 199",O
+Data "  22"," 33"," 34"," 68"," 69"," 101"," 102"," 144"
+Data " 145"," 199",P,"  12"," 15"," 16"," 30"," 31"
+Data "  45","  46","  60","  61","  80",Q,"  14"," 20"
+Data " 21"," 40"," 41","  60","  61","  90","  91"," 120"
+' Strength adjustments, read into strength_table%(15,5).  15 rows, one per Strength score from 3 to 18/00, each:
+'   to-hit adjustment, damage adjustment, weight allowance in gp, open doors (out of 6),
+'   bend bars/lift gates percentage
+Data_strength_table:
+Data -3,-1,-0350,1,00,-2,-1,-0250
+Data 1,00,-1,-0,-0150,1,00,-0
+Data -0,-0000,2,01,-0,-0,-0000,2
+Data 02,-0,-0,+0100,2,04,-0,-0
+Data +0200,2,07,-0,+1,+0350,3,10
+Data +1,+1,+0500,3,13,+1,+2,+0750
+Data 3,16,+1,+3,+1000,3,20,+2
+Data +3,+1250,4,25,+2,+4,+1500,4
+Data 30,+2,+5,+2000,4,35,+3,+6
+Data +3000,5,40
+' Intelligence tables, read into intelligence_spell_table% and intelligence_languages%.
+' First 7 rows for Intelligence 9 to 19 (intelligence_spell_table%(row,1..3)): chance to know a spell in
+' percent, minimum and
+' maximum number of spells per level, -1 = all.
+' Then 16 values, the number of extra languages for Intelligence 3 to 18 (intelligence_languages%(1..16)).
+Data_intelligence_table:
+Data 35,04,06,45,05,07,55,06
+Data 09,65,07,11,75,08,14,85
+Data 09,18,95,10,-1,0,0,0
+Data 0,0,1,1,2,2,3,3
+Data 4,4,5,6,7
+' Wisdom magical attack adjustment, 16 values for Wisdom 3 to 18, read into wisdom_magic_adjust%(1..16).
+Data_wisdom_table:
+Data -3,-2,-1,-1,-1,0,0,0
+Data 0,0,0,0,1,2,3,4
+' Dexterity tables, read into thief_dexterity_table% and dexterity_adjustments%.
+' First 10 rows of thief skill adjustments for Dexterity 9 to 18 (thief_dexterity_table%(row,1..5)): pick
+' pockets, open
+' locks, find/remove traps, move silently, hide in shadows, in percent.
+' Then 16 pairs for Dexterity 3 to 18 (dexterity_adjustments%(dexterity-2,1..2)): reaction/missile attack
+' adjustment and
+' defensive (armor class) adjustment.
+Data_dexterity_table:
+Data -15,-10,-10,-20,-10,-10,-05,-10
+Data -15,-05,-05,-00,-05,-10,-00,-00
+Data -00,-00,-05,-00,-00,-00,-00,-00
+Data -00,-00,-00,-00,-00,-00,-00,-00
+Data -00,-00,-00,-00,+05,-00,-00,-00
+Data +05,+10,-00,+05,+05,+10,+15,+05
+Data +10,+10,-3,+4,-2,+3,-1,+2
+Data " 0",+1," 0"," 0"," 0"," 0"," 0"," 0"
+Data " 0"," 0"," 0"," 0"," 0"," 0"," 0"," 0"
+Data " 0"," 0"," 0",-1,+1,-2,+2,-3
+Data +3,-4
+' Constitution adjustments, read into constitution_table%(16,3).  16 rows for Constitution 3 to 18, each:
+'   hit point adjustment per die, system shock survival percentage, resurrection survival percentage
+Data_constitution_table:
+Data -2,35,40,-1,40,45,-1,45
+Data 50,-1,50,55,-0,55,60,-0
+Data 60,65,-0,65,70,-0,70,75
+Data -0,75,80,-0,80,85,-0,85
+Data 90,-0,88,92,+1,91,94,+2
+Data 95,96,+2,97,98,+2,99,100
+' Charisma adjustments, read into charisma_table%(16,3).  16 rows for Charisma 3 to 18, each:
+'   maximum number of henchmen, loyalty base, reaction adjustment (percent)
+Data_charisma_table:
+Data 01,-30,-25,01,-25,-20,02,-20
+Data -15,02,-15,-10,03,-10,-05,03
+Data -05,-00,04,-00,-00,04,-00,-00
+Data 04,-00,-00,05,-00,-00,05,-00
+Data +05,06,+05,+10,07,+15,+15,08
+Data +20,+25,10,+30,+30,15,+40,+35
+' Social classes, read into social_class_names$: first the count (social_class%, 9), then the names from Lower
+' Lower to
+' Upper Upper.
+Data_social_class_names:
+Data 9,Lower Lower,Middle Lower,Upper Lower,Lower Middle,Middle Middle,Upper Middle,Lower Upper
+Data Middle Upper,Upper Upper
+' First-level cleric spells, read into cleric_spells$: first the count (cleric_spell_count%, 20), then the spell
+' names.
+' A * marks a spell from the Unearthed Arcana.
+Data_cleric_spells:
+Data 20,Bless,Ceremony*,Combine*,Command,Create Water,Cure Light Wounds,Detect Evil
+Data Detect Magic,Endure Cold/Heat*,Invisibility to Undead*,Light,Magic Stone*,Penetrate Disguise*,Portent*,Precipitation*
+Data Protection from Evil,Purify Food and Drink,Remove Fear,Resist Cold,Sanctuary
+' Turning undead at first level, read into undead_names$ and undead_turning_table%: first the count (5), then
+' for each undead
+' type its name (undead_names$(n)) and the d20 roll a first-level cleric needs to turn it
+' (undead_turning_table%(n)).
+Data_turn_undead_table:
+Data 5,Skeleton,10,Zombie,13,Ghoul,16,Shadow
+Data 19,Wight,20
+' First-level druid spells, read into druid_spells$: first the count (druid_spell_count%, 16), then the spell
+' names.
+' A * marks a spell from the Unearthed Arcana.
+Data_druid_spells:
+Data 16,Animal Friendship,Ceremony*,Detect Balance*,Detect Magic,Detect Poison*,Detect Snares & Pits,Entangle
+Data Faerie Fire,Invisibility to Animals,Locate Animals,Pass Without Trace,Precipitation*,Predict Weather,Purify Water,Shillelagh
+Data Speak With Animals
+' First-level magic-user spells, read into magic_user_spells$(spell,group): first the number of groups
+' (outer_count%, 3) and
+' the number of spells in each (inner_count%, 11), then the names group by group: offensive, defensive,
+' miscellaneous.  A * marks a spell from the Unearthed Arcana.
+Data_magic_user_spells:
+Data 3,11,Burning Hands,Charm Person,Enlarge,Firewater*,Friends,Grease*
+Data Light,Magic Missile,Push,Shocking Grasp,Sleep,Armor*,Affect Normal Fires,Dancing Lights
+Data Feather Fall,Hold Portal,Jump,Protection From Evil,Run*,Shield,Spider Climb,Ventriloquism
+Data Comprehend Languages,Detect Magic,Erase,Find Familiar,Identify,Mending,Message,Mount*
+Data Unseen Servant,Wizard Mark*,Write
+' First-level illusionist spells, read into illusionist_spells$(spell,group): first the number of groups
+' (outer_count%, 3) and
+' the number of spells in each (inner_count%, 6), then the names group by group: offensive, defensive,
+' miscellaneous.  Empty strings fill the unused places.  A * marks a spell from the Unearthed Arcana.
+Data_illusionist_spells:
+Data 3,6,Color Spray,Hypnotism,Light,Phantasmal Force,Chromatic Orb*,Spook*
+Data Audible Glamer,Darkness,Gaze Reflection,Wall of Fog,Phantom Armor*,,Change Self,Dancing Lights
+Data Detect Illusion,Detect Invisibility,,
+' The eight thief skill names, read into thief_skill_names$(1..8) after the Dexterity table.
+Data_thief_skill_names:
+Data Pick Pockets,Open Locks,Find/Remove Traps,Move Silently,Hide in Shadows,Hear Noise,Climb Walls,Read Languages
+' Coin names, read into coin_names$: first the count (4), then Gold, Electrum, Silver, Copper.  Every price
+' below
+' is given in these four coins, in this order.
+Data_coin_names:
+Data 4,Gold,Electrum,Silver,Copper
+' The store menu, read into store_category_names$: first the count (department_count%, 13), then the twelve
+' departments and the
+' entry that leaves the store.
+Data_store_departments:
+Data 13,Armor,Shields,Hand-to-Hand Weapons,Missile Weapons,Clothing,Herbs,Livestock
+Data Miscellaneous Equipment,Provisions,Religious Items,Tack and Harness,Transport,LEAVE STORE
+' Armor, read into armor_names$ and armor_prices% and armor_usable!.
+' First the number of items (armor_count%, 14).  Then item numbers that the starting-equipment code marks as
+' owned: 3 Chain Mail (chain_mail%), 4 Field Plate (field_plate%), 5 Full Plate (full_plate_mail%), 8 Plate Mail
+' (plate_mail%).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into armor_names$(item))
+'   price in gold, electrum, silver and copper pieces (armor_prices%(item,1..4))
+'   12 flags, one per class in class-table order, 1 = the class may use the item (armor_usable!(item,class))
+Data_armor_prices:
+Data 14,3,4,5,8,"Banded           ","  90",0
+Data 0,0," 1",1," 1",0," 1",1
+Data 1," 0",0," 0",0," 0",Bronze Plate Mail," 100"
+Data 0,0,0," 1",1," 1",0," 1"
+Data 1,1," 0",0," 0",0," 0","Chain Mail       "
+Data "  75",0,0,0," 1",1," 1",0
+Data " 1",1,1," 0",0," 0",0," 0"
+Data "Field Plate      ",2000,0,0,0," 1",1," 1"
+Data 0," 1",1,1," 0",0," 0",0
+Data " 0","Full Plate       ",4000,0,0,0," 1",1
+Data " 1",0," 1",1,1," 0",0," 0"
+Data 0," 0","Leather          ","   5",0,0,0," 0"
+Data 0," 1",1," 1",1,1," 0",0
+Data " 1",1," 0","Padded           ","   4",0,0,0
+Data " 0",0," 1",1," 1",1,1," 0"
+Data 0," 1",1," 0","Plate Mail       "," 400",0,0
+Data 0," 1",1," 1",0," 1",1,1
+Data " 0",0," 0",0," 0","Ring Mail        ","  30",0
+Data 0,0," 1",1," 1",0," 1",1
+Data 1," 0",0," 0",0," 0","Scale Mail       ","  45"
+Data 0,0,0," 1",1," 1",0," 1"
+Data 1,1," 0",0," 0",0," 0","Splint Mail      "
+Data "  80",0,0,0," 1",1," 1",0
+Data " 1",1,1," 0",0," 0",0," 0"
+Data "Studded Leather  ","  15",0,0,0," 0",0," 1"
+Data 0," 1",1,1," 0",0," 1",1
+Data " 0","Great Helmet     ","  15",0,0,0," 1",1
+Data " 1",0," 1",1,1," 0",0," 0"
+Data 0," 0","Small Helmet     ","  10",0,0,0," 1"
+Data 1," 1",1," 1",1,1," 0",0
+Data " 1",1," 0"
+' Shields, read into shield_names$ and shield_prices% and shield_usable!.
+' First the number of items (shield_count%, 5).  Then item numbers that the starting-equipment code marks as
+' owned: 2 Large Shield (large_shield%).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into shield_names$(item))
+'   price in gold, electrum, silver and copper pieces (shield_prices%(item,1..4))
+'   12 flags, one per class in class-table order, 1 = the class may use the item (shield_usable!(item,class))
+Data_shield_prices:
+Data 5,2,"Buckler            "," 5",0,0,0," 1"
+Data 1," 1",0," 1",1,1," 0",0
+Data " 0",0," 0","Large Shield       ",15,0,0,0
+Data " 1",1," 1",0," 1",1,1," 0"
+Data 0," 0",0," 0","Small Shield       ",10,0,0
+Data 0," 1",1," 1",0," 1",1,1
+Data " 0",0," 0",0," 0",Small Wooden Shield," 1",0
+Data 0,0," 1",1," 1",1," 1",1
+Data 1," 0",0," 0",0," 0","Spiked Buckler     ",10
+Data 0,0,0," 1",1," 1",0," 1"
+Data 1,1," 0",0," 0",0," 0"
+' Hand-to-hand weapons, read into melee_weapon_names$ and hand_weapon_prices% and hand_weapon_usable!.
+' First the number of items (melee_weapon_count%, 51).  Then item numbers that the starting-equipment code marks
+' as owned: 9 Dagger (dagger%), 27 Lance (lance%), 30 Horseman's Mace (horsemans_mace%), 43 Broad Sword
+' (broad_sword%), 46 Long Sword (long_sword%).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into melee_weapon_names$(item))
+'   price in gold, electrum, silver and copper pieces (hand_weapon_prices%(item,1..4))
+'   12 flags, one per class in class-table order, 1 = the class may use the item
+' (hand_weapon_usable!(item,class))
+Data_hand_weapon_prices:
+Data 51,9,27,30,43,46,"Aklys           "," 2"
+Data 0,0,0," 0",0," 0",1," 1"
+Data 1,1," 0",0," 0",1," 1","Atlatl          "
+Data " 1",0,0,0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 1"
+Data "Battle Axe      "," 5",0,0,0," 1",1," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 0","Hand Axe        "," 1",0,0,0," 1",1
+Data " 0",0," 1",1,1," 0",0," 0"
+Data 1," 1","Bardiche        "," 7",0,0,0," 0"
+Data 0," 0",0," 1",1,1," 0",0
+Data " 0",1," 1","Bec de Corbin   "," 6",0,0,0
+Data " 0",0," 0",0," 1",1,1," 0"
+Data 0," 0",1," 1","Bill-Guisarme   "," 6",0,0
+Data 0," 0",0," 0",0," 1",1,1
+Data " 0",0," 0",1," 1","Caltrop         "," 0",0
+Data 2,0," 0",0," 0",0," 1",1
+Data 1," 1",1," 1",1," 1","Dagger          "," 2"
+Data 0,0,0," 1",1," 0",1," 1"
+Data 1,1," 1",1," 1",1," 1","Fauchard        "
+Data " 3",0,0,0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 1"
+Data "Fauchard-Fork   "," 8",0,0,0," 0",0," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 1","Footman's Flail "," 3",0,0,0," 1",1
+Data " 1",0," 1",1,1," 0",0," 0"
+Data 1," 0",Horseman's Flail," 8",0,0,0," 1"
+Data 1," 1",0," 1",1,1," 0",0
+Data " 0",1," 0","Military Fork   "," 4",0,0,0
+Data " 0",0," 0",0," 1",1,1," 0"
+Data 0," 0",1," 1","Garrot          "," 0",1,0
+Data 0," 0",0," 0",1," 1",1,1
+Data " 0",0," 1",1," 1","Glaive          "," 6",0
+Data 0,0," 0",0," 0",0," 1",1
+Data 1," 0",0," 0",1," 1","Glaive-Guisarme ",10
+Data 0,0,0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 1","Guisarme        "
+Data " 5",0,0,0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 1"
+Data "Guisarme-Voulge "," 7",0,0,0," 0",0," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 1","Halberd         "," 9",0,0,0," 0",0
+Data " 0",0," 1",1,1," 0",0," 0"
+Data 1," 1","Lucern Hammer   "," 7",0,0,0," 0"
+Data 0," 1",1," 1",1,1," 0",0
+Data " 0",1," 1","Hammer          "," 1",0,0,0
+Data " 1",1," 1",1," 1",1,1," 0"
+Data 0," 0",1," 0","Harpoon         "," 5",0,0
+Data 0," 0",0," 0",0," 1",1,1
+Data " 0",0," 0",1," 0","Hook Fauchard   "," 6",0
+Data 0,0," 0",0," 0",0," 1",1
+Data 1," 0",0," 0",1," 1","Javelin         "," 0"
+Data 1,0,0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 1","Knife           "
+Data " 1",0,0,0," 1",1," 0",0
+Data " 1",1,1," 1",1," 1",1," 1"
+Data "Lance           "," 6",0,0,0," 1",1," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 0","Lasso           "," 0",0,5,0," 0",0
+Data " 1",1," 1",1,1," 0",0," 0"
+Data 1," 1","Footman's Mace  "," 8",0,0,0," 1"
+Data 1," 1",0," 1",1,1," 0",0
+Data " 0",1," 0","Horseman's Mace "," 4",0,0,0
+Data " 1",1," 1",0," 1",1,1," 0"
+Data 0," 0",1," 0","Man Catcher     ",25,0,0
+Data 0," 0",0," 0",0," 1",1,1
+Data " 0",0," 0",1," 1","Morning Star    "," 5",0
+Data 0,0," 1",1," 0",0," 1",1
+Data 1," 0",0," 0",1," 0","Partisan        ",10
+Data 0,0,0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 1","Footman's Pick  "
+Data " 8",0,0,0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 0"
+Data "Horseman's Pick "," 5",0,0,0," 0",0," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 0","Pike-Awl        "," 3",0,0,0," 0",0
+Data " 0",0," 1",1,1," 0",0," 0"
+Data 1," 1","Ranseur         "," 4",0,0,0," 0"
+Data 0," 0",0," 1",1,1," 0",0
+Data " 0",1," 1","Sap             "," 1",0,0,0
+Data " 0",0," 1",1," 1",1,1," 0"
+Data 0," 1",1," 1","Scimitar        ",15,0,0
+Data 0," 1",1," 0",1," 1",1,1
+Data " 0",0," 0",1," 0","Spear           "," 1",0
+Data 0,0," 0",0," 0",1," 1",1
+Data 1," 0",0," 0",1," 1","Spetum          "," 3"
+Data 0,0,0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 1","Bastard Sword   "
+Data 25,0,0,0," 1",1," 0",0
+Data " 1",1,1," 0",0," 0",1," 0"
+Data "Broad Sword     ",10,0,0,0," 1",1," 0"
+Data 0," 1",1,1," 0",0," 1",1
+Data " 0","Falchion        ",10,0,0,0," 0",0
+Data " 0",0," 1",1,1," 0",0," 1"
+Data 1," 1","Khopesh Sword   ",10,0,0,0," 1"
+Data 1," 0",1," 1",1,1," 0",0
+Data " 0",1," 0","Long Sword      ",15,0,0,0
+Data " 1",1," 0",0," 1",1,1," 0"
+Data 0," 1",1," 0","Short Sword     "," 8",0,0
+Data 0," 1",1," 0",0," 1",1,1
+Data " 0",0," 1",1," 0",Two-Handed Sword,30,0
+Data 0,0," 1",1," 0",0," 1",1
+Data 1," 0",0," 0",1," 0","Trident         "," 4"
+Data 0,0,0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 0","Voulge          "
+Data " 2",0,0,0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 1"
+Data "Whip            "," 3",0,0,0," 0",0," 0"
+Data 1," 1",1,1," 0",0," 0",1
+Data " 0"
+' Missile weapons, read into missile_weapon_names$ and missile_weapon_prices% and missile_weapon_usable!.
+' First the number of items (missile_weapon_count%, 27).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into missile_weapon_names$(item))
+'   price in gold, electrum, silver and copper pieces (missile_weapon_prices%(item,1..4))
+'   12 flags, one per class in class-table order, 1 = the class may use the item
+' (missile_weapon_usable!(item,class))
+Data_missile_weapon_prices:
+Data 27,"Aklys               ","  2",0," 0",0," 0",0
+Data " 0",1," 1",1,1," 0",0," 0"
+Data 1," 1","Atlatl              ","  1",0," 0",0," 0"
+Data 0," 0",0," 1",1,1," 0",0
+Data " 0",1," 1","Arrow (Normal 1)    ","  0",0," 2",0
+Data " 0",0," 0",0," 1",1,1," 0"
+Data 0," 1",1," 0","Arrow (Normal 12)   ","  1",0," 0"
+Data 0," 0",0," 0",0," 1",1,1
+Data " 0",0," 1",1," 0","Arrow (Silver 1)    ","  1",0
+Data " 0",0," 0",0," 0",0," 1",1
+Data 1," 0",0," 1",1," 0","Hand Axe            ","  1"
+Data 0," 0",0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 0",1," 0","Composite Short Bow "
+Data " 75",0," 0",0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 0"
+Data "Composite Long Bow  ",100,0," 0",0," 0",0," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 0","Long Bow            "," 60",0," 0",0," 0",0
+Data " 0",0," 1",1,1," 0",0," 0"
+Data 1," 0","Short Bow           "," 15",0," 0",0," 0"
+Data 0," 0",0," 1",1,1," 0",0
+Data " 1",1," 0","Hand Crossbow       ",300,0," 0",0
+Data " 0",0," 0",0," 1",1,1," 0"
+Data 0," 1",1," 1","Heavy Crossbow      "," 20",0," 0"
+Data 0," 0",0," 0",0," 1",1,1
+Data " 0",0," 0",1," 1","Light Crossbow      "," 12",0
+Data " 0",0," 0",0," 0",0," 1",1
+Data 1," 0",0," 0",1," 1","Dart                ","  0"
+Data 0," 5",0," 0",0," 0",1," 1"
+Data 1,1," 1",1," 1",1," 0","Dagger              "
+Data "  2",0," 0",0," 0",0," 0",1
+Data " 1",1,1," 1",1," 1",1," 1"
+Data "Hammer              ","  1",0," 0",0," 0",0," 0"
+Data 0," 1",1,1," 0",0," 0",1
+Data " 0","Harpoon             ","  5",0," 0",0," 0",0
+Data " 0",0," 1",1,1," 0",0," 0"
+Data 1," 0","Javelin             ","  0",1," 0",0," 0"
+Data 0," 0",0," 1",1,1," 0",0
+Data " 0",1," 0","Knife               ","  1",0," 0",0
+Data " 0",0," 0",0," 1",1,1," 0"
+Data 0," 0",1," 0","Lasso               ","  0",0," 5"
+Data 0," 0",0," 1",1," 1",1,1
+Data " 0",0," 0",1," 1","20 Light Quarrels   ","  1",0
+Data " 0",0," 0",0," 0",0," 1",1
+Data 1," 0",0," 0",1," 1","20 Hand Quarrels    ",100
+Data 0," 0",0," 0",0," 0",0," 1"
+Data 1,1," 0",0," 1",1," 1","20 Heavy Quarrels   "
+Data "  2",0," 0",0," 0",0," 0",0
+Data " 1",1,1," 0",0," 0",1," 1"
+Data Sling and 12 Bullets,"  0",0,15,0," 0",0," 0"
+Data 1," 1",1,1," 1",1," 1",1
+Data " 0","20 Sling Bullets    ","  0",1," 0",0," 0",0
+Data " 1",1," 1",1,1," 1",1," 1"
+Data 1," 0","Spear               ","  1",0," 0",0," 0"
+Data 0," 0",1," 1",1,1," 0",0
+Data " 0",1," 1","Staff Sling         ","  2",0," 0",0
+Data " 0",0," 1",1," 1",1,1," 0"
+Data 0," 0",1," 0"
+' Clothing, read into clothing_names$ and clothing_prices%.
+' First the number of items (clothing_count%, 17).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into clothing_names$(item))
+'   price in gold, electrum, silver and copper pieces (clothing_prices%(item,1..4))
+Data_clothing_prices:
+Data 17,"Belt           ",0,0,3,0,High Hard Boots,2
+Data 0,0,0,High Soft Boots,1,0,0,0
+Data "Low Hard Boots ",1,0,0,0,"Low Soft Boots ",0,0
+Data 8,0,"Cap            ",0,0,1,0,"Cloak          "
+Data 0,0,5,0,"Broad Girdle   ",2,0,0
+Data 0,"Normal Girdle  ",0,1,0,0,"Cloth Gloves   ",0
+Data 1,0,0,"Leather Gloves ",1,0,0,0
+Data "Hat            ",0,0,7,0,"Robe           ",0,0
+Data 6,0,"Sandels        ",0,0,4,0,"Linen Shirt    "
+Data 0,0,7,0,"Silk Shirt     ",1,0,0
+Data 0,"Trousers       ",0,1,0,0
+' Herbs, read into herb_names$ and herb_prices%.
+' First the number of items (herb_count%, 3).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into herb_names$(item))
+'   price in gold, electrum, silver and copper pieces (herb_prices%(item,1..4))
+Data_herb_prices:
+Data 3,Sprig of Belladonna,0,0," 4",0,"Bud of Garlic      ",0
+Data 0," 0",5,Sprig of Wolvesbane,0,0,10,0
+' Livestock, read into livestock_names$ and livestock_prices%.
+' First the number of items (livestock_count%, 21).  Then item numbers that the starting-equipment code marks as
+' owned: 10 Heavy War Horse (heavy_war_horse%), 11 Light War Horse (light_war_horse%), 12 Medium War Horse
+' (medium_war_horse%), 13 Light riding Horse (light_riding_horse%).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into livestock_names$(item))
+'   price in gold, electrum, silver and copper pieces (livestock_prices%(item,1..4))
+Data_livestock_prices:
+Data 21,10,11,12,13,"Chicken           ","  0",0
+Data 0,3,"Cow               "," 10",0,0,0,"Guard Dog         "
+Data " 25",0,0,0,"Hunting Dog       "," 17",0,0
+Data 0,"Donkey            ","  8",0,0,0,"Goat              ","  1"
+Data 0,0,0,"Large Hawk        "," 40",0,0,0
+Data "Small Hawk        "," 18",0,0,0,"Draft Horse       "," 30",0
+Data 0,0,"Heavy War Horse   ",300,0,0,0,"Light War Horse   "
+Data 150,0,0,0,"Medium War Horse  ",225,0,0
+Data 0,Light riding Horse," 25",0,0,0,"Mule              "," 20"
+Data 0,0,0,"Ox                "," 15",0,0,0
+Data "Pigeon            ","  0",0,0,2,"Piglet            ","  1",0
+Data 0,0,"Pig               ","  3",0,0,0,"Pony              "
+Data " 15",0,0,0,"Sheep             ","  2",0,0
+Data 0,"Songbird          ","  0",0,0,4
+' Miscellaneous equipment, read into misc_equipment_names$ and misc_equipment_prices%.
+' First the number of items (misc_equipment_count%, 53).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into misc_equipment_names$(item))
+'   price in gold, electrum, silver and copper pieces (misc_equipment_prices%(item,1..4))
+Data_equipment_prices:
+Data 53,"Leather Backpack          "," 2",0," 0",0,"Heavy Cloth Blanket       "," 2"
+Data 0," 0",0,"Heavy Wool Blanket        "," 8",0," 0",0
+Data "Light Cloth Blanket       "," 0",1," 0",0,"Light Wool Blanket        "," 5",0
+Data " 0",0,"Large Iron Box            ",28,0," 0",0,"Small Iron Box            "
+Data " 9",0," 0",0,"Wooden Bucket (5 gallon)  "," 0",0," 7"
+Data 0,"Tallow Candle             "," 0",0," 0",1,"Wax Candle                "," 0"
+Data 0," 1",0,"Candle Holder             "," 2",0," 0",0
+Data "Bone Map Case             "," 5",0," 0",0,"Leather Map Case          "," 0",0
+Data 15,0,"Heavy Chain (10' length)  ",15,0," 0",0,"Light Chain (10' length)  "
+Data " 5",0," 0",0,"Large Wooden Chest        "," 0",0,15
+Data 0,"Small Wooden Chest        "," 0",0," 8",0,"Grappling Hook            "," 1"
+Data 0," 0",0,"Black Ink                 "," 3",0," 0",0
+Data "Colored Ink               "," 6",0," 0",0,"Jug (1/2 gallon cap.)     "," 0",0
+Data " 0",10,"Jug (1 gallon capacity)   "," 0",0,15,0,"Kettle (5 gallon cap.)    "
+Data " 5",0," 0",0,"Knapsack                  "," 1",0," 0"
+Data 0,"Bullseye Lantern          ",12,0," 0",0,"Hooded Lantern            "," 7"
+Data 0," 0",0,"Large Metal Mirror        ",10,0," 0",0
+Data "Small Silver Mirror       ",20,0," 0",0,"Flask of Oil              "," 1",0
+Data " 0",0,"Parchment (12 sheets)     "," 7",0," 0",0,"10' Pole                  "
+Data " 0",0," 0",3,"Pick                      "," 0",0," 3"
+Data 0,"Clay Pot                  "," 0",0," 0",10,"Metal Pot                 "," 0"
+Data 0,15,0,"Large Belt Pouch          "," 1",0," 0",0
+Data "Small Belt Pouch          "," 0",0,15,0,"Quill Pen                 "," 1",0
+Data " 0",0,"Arrow Quiver (cap. 12)    "," 0",0," 8",0,"Arrow Quiver (cap. 20)    "
+Data " 0",0,12,0,"Quarrel Case (cap. 20)    "," 0",0,15
+Data 0,"Quarrel Case (cap. 40)    "," 1",0," 0",0,"50' Rope                  "," 0"
+Data 0," 4",0,"Large Sack                "," 0",0," 0",16
+Data "Small Sack                "," 0",0," 0",10,"Shovel                    "," 0",0
+Data " 3",0,"Waterskin                 "," 0",0,15,0,"Large Iron Spike          "
+Data " 0",0," 0",1,"One-man Tent              ",30,0," 0"
+Data 0,"Two-man Tent              ",50,0," 0",0,"Four-man Tent             ",65
+Data 0," 0",0,"Thieves' Tools            ",30,0," 0",0
+Data Tinder Box w/Flint & Steel," 1",0," 0",0,"Torch                     "," 0",0
+Data " 0",1
+' Provisions, read into provision_names$ and provision_prices%.
+' First the number of items (provision_count%, 10).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into provision_names$(item))
+'   price in gold, electrum, silver and copper pieces (provision_prices%(item,1..4))
+Data_provision_prices:
+Data 10,"Pint of Ale            ",0,0,1,0,"Pint of Small Beer     ",0
+Data 0,0,5,"Merchant's Meal        ",0,0,1,0
+Data "Rich Meal              ",1,0,0,0,"1 days Horse Grain     ",0,0
+Data 1,0,"Pint of Mead           ",0,0,5,0,"1 week Iron Rations    "
+Data 5,0,0,0,1 week Standard Rations,3,0,0
+Data 0,"Pint of Good Wine      ",0,1,0,0,"Pint of Watered Wine   ",0
+Data 0,5,0
+' Religious items, read into religious_item_names$ and religious_item_prices%.
+' First the number of items (religious_item_count%, 6).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into religious_item_names$(item))
+'   price in gold, electrum, silver and copper pieces (religious_item_prices%(item,1..4))
+Data_religious_item_prices:
+Data 6,"Prayer Beads      "," 1",0,0,0,"Incense Stick     "," 1"
+Data 0,0,0,"Iron Holy Symbol  "," 2",0,0,0
+Data Silver Holy Symbol,50,0,0,0,Wooden Holy Symbol," 0",0
+Data 7,0,Vial of Holy Water,25,0,0,0
+' Tack and harness, read into tack_names$ and tack_and_harness_prices%.
+' First the number of items (tack_count%, 9).  Then item numbers that the starting-equipment code marks as
+' owned: 2 Leather Barding (leather_barding%).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into tack_names$(item))
+'   price in gold, electrum, silver and copper pieces (tack_and_harness_prices%(item,1..4))
+Data_tack_harness_prices:
+Data 9,2,"Chain Barding    ",250,0," 0",0,"Leather Barding  "
+Data 100,0," 0",0,"Plate Barding    ",500,0," 0"
+Data 0,"Bit and Bridle   ","  0",0,15,0,"Harness          ","  0"
+Data 0,12,0,"Saddle           "," 10",0," 0",0
+Data Large Saddle Bags,"  4",0," 0",0,Small Saddle Bags,"  3",0
+Data " 0",0,"Saddle Blanket   ","  0",0," 3",0
+' Transport, read into transport_names$ and transport_prices%.
+' First the number of items (transport_count%, 10).
+' Then one record per item:
+'   name, padded with spaces (trailing spaces removed, into transport_names$(item))
+'   price in gold, electrum, silver and copper pieces (transport_prices%(item,1..4))
+Data_transport_prices:
+Data 10,"Small Barge        ","   50",0,0,0,"Small Boat         ","   75"
+Data 0,0,0,"Long Boat          ","  150",0,0,0
+Data "Cart               ","   50",0,0,0,"Large Galley       ",25000,0
+Data 0,0,"Small Galley       ",10000,0,0,0,Large Merchant Ship
+Data 15000,0,0,0,Small Merchant Ship," 5000",0,0
+Data 0,"War Ship           ",20000,0,0,0,"Wagon              ","  150"
+Data 0,0,0
+' The title and introduction screen, read line by line into work_text$ and printed centred, one screen line
+' each.  A line starting with * prints nothing and leaves a blank line; *** ends the text.
+Data_title_screen_text:
+Data Advanced Dungeons and Dragons¿,UNofficial Character Generator Program for the Atari ST¿,Written by Christopher Allen Pelton
+Data "CompuServe: 74706,1155.  GEnie: CAPELTON.",*,This program is in the public domain and not for sale.,This program was written and compiled in GFA Basic.,*
+Data This program generates ability scores with a roll of best 3 of 4 d5+3,This seemingly odd roll produces a range of ability scores that run
+Data from 6 to 18 with an average of 12.  This was done to eliminate ability,rolls of less than 6 which would greatly limit the characters choice
+Data of classes.  See the ability tables in the Player's Handbook for more,"information, but a roll of 5 or less limits the character to one class.",*
+Data "You may reroll the character as often as you wish.  However, to counter",this somewhat you MUST meet the minimum ability score requirements for
+Data any race that you want the character to be.  Ditto the classes!
+Data Available classes are displayed as you select the characters race.
+Data ***
+' Shows the character on one screen.  Left column: the seven abilities (with 18.xx exceptional strength when the
+' class allows it, and the charisma as rolled for dwarves and half-orcs), social class, class, alignment, level,
+' level title, experience and hit points.
+' Right column: sex, race (and the elven parent's race for a half-elf), age and age category, the money in each
+' coin, and for a spell caster the spell list.
+Procedure Show_character_summary
+  Local Summary_left_column%,Summary_right_column%  ! left and right column of the summary
+  Summary_left_column%=1
+  Summary_right_column%=41
+  Cls
+  For Loop_index%=Strength_index% To Comeliness_index%  ! for each ability, Strength to Comeliness
+    Print At(Summary_left_column%,Loop_index%);Ability_names$(Loop_index%);At(13,Loop_index%);":"  ! ability name and colon
+    Print At(Fn Right_align_column(Summary_left_column%+16,Abilities%(Loop_index%)),Loop_index%);Abilities%(Loop_index%)  ! the score, right-aligned
+    If Loop_index%=Strength_index%  ! the Strength line
+      If Has_exceptional_strength!  ! the class may have exceptional strength
+        If Abilities%(Strength_index%)=18  ! Strength of 18
+          Print At(Summary_left_column%+16,Loop_index%);".";Exceptional_strength%  ! show the exceptional strength percentage (18.xx)
+        Endif
+      Endif
+    Endif
+    If Loop_index%=Charisma_index%  ! the Charisma line
+      If Race_group%=Dwarf% Or Race_group%=Half_orc%  ! dwarves and half-orcs have a different charisma towards other races
+        Print At(Summary_left_column%+18,Loop_index%);"(";Rolled_abilities%(Charisma_index%);")"  ! show the charisma as rolled in brackets
+      Endif
+    Endif
+  Next Loop_index%
+  Print At(Summary_left_column%,8);"Social Class: ";Social_class_names$(Social_class%)  ! social class name
+  Print At(Summary_left_column%,9);"Class       : ";Class_names$(Character_class%)
+  Print At(Summary_left_column%,10);"Alignment   : ";Alignment_names$(Alignment%)
+  Print At(Summary_left_column%,11);"Level       :  ";Level%
+  Print At(Summary_left_column%,12);"Level Title : ";Level_title$
+  Print At(Summary_left_column%,13);"Experience  : ";Experience%,
+  Print At(Summary_left_column%,14);"Hit Points  : ";At(Fn Right_align_column(Summary_left_column%+15,Hit_points%),14);Hit_points%
+  Print At(Summary_right_column%,1);"Sex      : ";Sex_name$
+  Print At(Summary_right_column%,2);"Race     : ";Race_names$(Race%)
+  If Race%=Race_half_elf%  ! a half-elf
+    Print At(Summary_right_column%+20,2);"(";Race_names$(Elf_parent_race%);")"  ! show the race of the elven parent beside it
+  Endif
+  Print At(Summary_right_column%,3);"Age      : ";Age%;", ";Age_category_names$(Age_category%)
+  Print At(Summary_right_column%,5);"* * MONEY * *"  ! heading of the money block
+  For Loop_index%=Gold_piece% To Copper_piece%  ! for each coin: gold, electrum, silver, copper
+    Print At(Summary_right_column%,Loop_index%+5);Coin_names$(Loop_index%);At(Summary_right_column%+8,Loop_index%+5);":     "  ! coin name
+    Print At(Fn Right_align_column(Summary_right_column%+13,Purse%(Loop_index%)),Loop_index%+5);Purse%(Loop_index%)  ! the amount, right-aligned
+  Next Loop_index%
+  If Is_spell_caster!  ! a spell caster
+    Print At(Summary_left_column%,16);"* * SPELL LIST * *"  ! heading of the spell list
+    For Loop_index%=1 To Spells_to_choose%  ! for each spell the character knows
+      Print At(Summary_left_column%,Loop_index%+16);Loop_index%;") ";First_level_spells$(Loop_index%)  ! its number and name
+    Next Loop_index%
+  Endif
+Return
+'
+' Rolls a new character: each ability (Strength, Intelligence, Wisdom, Dexterity, Constitution, Charisma,
+' Comeliness) is 4d6 with the lowest die dropped, into abilities%() and rolled_abilities%() (the scores as
+' rolled).  Comeliness is adjusted by Charisma, and d100 gives the social class social_class% (1-9).
+' Shows the rolls and asks the player to keep them, rolling again until they do.  Then clears everything a
+' previous character left: level 1, no experience, no equipment, no race, class, alignment or derived values.
+Procedure Roll_abilities
+  Do
+    Cls  ! start of the roll: clear the screen
+    Arrayfill Abilities%(),0  ! clear the scores
+    Arrayfill Rolled_abilities%(),0  ! clear the scores as rolled
+    For Loop_index%=Strength_index% To Comeliness_index%  ! for each ability, Strength to Comeliness
+      For Inner_index%=1 To 4  ! roll four dice
+        Price_to_pay%(Inner_index%)=Fn Roll_one_die(5)  ! one six-sided die
+        Abilities%(Loop_index%)=Abilities%(Loop_index%)+Price_to_pay%(Inner_index%)  ! add it to the score
+      Next Inner_index%
+      Abilities%(Loop_index%)=Abilities%(Loop_index%)-Min(Min(Min(Price_to_pay%(1),Price_to_pay%(2)),Price_to_pay%(3)),Price_to_pay%(4))+3  ! drop the lowest of the four dice: 4d6, best three
+      Rolled_abilities%(Loop_index%)=Abilities%(Loop_index%)  ! remember the score as rolled
+    Next Loop_index%
+    If Abilities%(Charisma_index%)=3  ! Charisma 3: Comeliness -5
+      Sub Abilities%(Comeliness_index%),5
+    Endif
+    If Abilities%(Charisma_index%)=4 Or Abilities%(Charisma_index%)=5
+      Sub Abilities%(Comeliness_index%),3
+    Endif
+    If Abilities%(Charisma_index%)>=6 And Abilities%(Charisma_index%)<=8
+      Sub Abilities%(Comeliness_index%),1
+    Endif
+    If Abilities%(Charisma_index%)>=13 And Abilities%(Charisma_index%)<=15
+      Add Abilities%(Comeliness_index%),1
+    Endif
+    If Abilities%(Charisma_index%)=16 Or Abilities%(Charisma_index%)=17
+      Add Abilities%(Comeliness_index%),2
+    Endif
+    If Abilities%(Charisma_index%)=18
+      Add Abilities%(Comeliness_index%),3
+    Endif
+    Rolled_abilities%(Comeliness_index%)=Abilities%(Comeliness_index%)  ! remember the adjusted Comeliness as the rolled value
+    Loop_index%=Fn Roll_one_die(100)  ! d100 for the social class
+    If Loop_index%<=4  ! 01-04: Lower Lower
+      Social_class%=1
+    Endif
+    If Loop_index%>=5 And Loop_index%<=10  ! 05-10: Middle Lower
+      Social_class%=2
+    Endif
+    If Loop_index%>=11 And Loop_index%<=20  ! 11-20: Upper Lower
+      Social_class%=3
+    Endif
+    If Loop_index%>=21 And Loop_index%<=35  ! 21-35: Lower Middle
+      Social_class%=4
+    Endif
+    If Loop_index%>=36 And Loop_index%<=55  ! 36-55: Middle Middle
+      Social_class%=5
+    Endif
+    If Loop_index%>=56 And Loop_index%<=87  ! 56-87: Upper Middle
+      Social_class%=6
+    Endif
+    If Loop_index%>=88 And Loop_index%<=96  ! 88-96: Lower Upper
+      Social_class%=7
+    Endif
+    If Loop_index%>=97 And Loop_index%<=99  ! 97-99: Middle Upper
+      Social_class%=8
+    Endif
+    If Loop_index%=100  ! 00: Upper Upper
+      Social_class%=9
+    Endif
+    For Loop_index%=1 To 7  ! show the seven abilities
+      Print At(1,Loop_index%);Ability_names$(Loop_index%);At(13,Loop_index%);":    "  ! ability name and colon
+      Print At(Fn Right_align_column(17,Abilities%(Loop_index%)),Loop_index%);Abilities%(Loop_index%)  ! the score, right-aligned
+    Next Loop_index%
+    Print At(1,8);"Social Class: ";Social_class_names$(Social_class%);"    "  ! the social class
+    Alert 2,"Do you want this character?",1," YES | NO ",Alert_answer%  ! ask the player to keep the rolls
+    Cls
+    Exit If Alert_answer%=1  ! YES: keep them
+  Loop  ! NO: roll everything again
+  Level%=1  ! start at first level
+  Experience%=0  ! with no experience
+  Arrayfill Armour_owned%(),0  ! clear the equipment bought from every price list
+  Arrayfill Shields_bought%(),0
+  Arrayfill Weapons_owned%(),0
+  Arrayfill Missile_weapons_bought%(),0
+  Arrayfill Clothing_bought%(),0
+  Arrayfill Herbs_bought%(),0
+  Arrayfill Animals_owned%(),0
+  Arrayfill Misc_equipment_bought%(),0
+  Arrayfill Provisions_bought%(),0
+  Arrayfill Religious_items_bought%(),0
+  Arrayfill Tack_bought%(),0
+  Arrayfill Transport_bought%(),0
+  Arrayfill Purse%(),0
+  Arrayfill Thief_skills%(),0
+  Age%=0  ! no age yet
+  Alignment%=0  ! no alignment yet
+  Clr Dexterity_reaction$  ! clear all the derived values of the previous character
+  Clr Bend_bars_chance$
+  Cleric_bonus_spells%=0  ! no cleric bonus spells
+  Character_class%=0  ! no class
+  Clr Damage_adjustment$
+  Clr Defensive_adjustment$
+  Exceptional_strength%=0  ! no exceptional strength
+  Clr Spell_failure_chance$
+  Class_group%=0  ! no class group
+  Max_henchmen%=0  ! no henchmen
+  Clr Hit_probability$
+  Hit_points%=0  ! no hit points
+  Clr Hit_point_adjustment$
+  Clr Know_spell_chance$
+  Extra_languages%=0  ! no extra languages
+  Clr Min_spells_per_level$
+  Clr Loyalty_base$
+  Clr Magic_attack_adjustment$
+  Clr Max_spells_per_level$
+  Elf_parent_race%=0  ! no elven parent
+  Clr Open_doors_roll$
+  Race%=0  ! no race
+  Clr Charisma_reaction$
+  Clr Resurrection_chance$
+  Clr Racial_abilities$  ! no racial abilities text
+  Clr Sex_name$  ! no sex name
+  Sex%=0  ! sex not chosen
+  Clr System_shock_chance$
+  Race_group%=0  ! no race group
+  Spells_to_choose%=0  ! no spells
+  Clr Weight_allowance$
+  Cls
+Return
+'
+' Chooses sex, race and class, then works out what the abilities give.
+' The player picks male or female; the races whose minimums the abilities meet are listed (A-Q) and the player
+' picks one (no female deep gnomes).  The race group race_group% is set and its procedure applies the racial
+' adjustments and special abilities; scores above the racial maximum are cut down.
+' The classes the race and the abilities allow are listed (A-L) and the player picks one; a cavalier or paladin
+' from a low social class needs a sponsor.  After a last confirmation the class group class_group% is set, with
+' has_exceptional_strength! (exceptional strength) and is_spell_caster! (spell caster), and the starting age and
+' the class procedure follow.  A half-elf chooses the race of the elven parent.
+' Last come the ability tables: strength (hit, damage, weight allowance, open doors, bend bars), extra
+' languages, magic-user spell knowledge, wisdom (magical attack, cleric bonus spells, spell failure), dexterity,
+' constitution and charisma values, as text for the character sheet, and the constitution saving throw bonus
+' filled into the racial abilities text racial_abilities$.
+Procedure Choose_race_and_class
+  Cls
+  Alert 2,"Is your character to be|male or female?",0," Male | Female ",Sex%  ! ask for the sex
+  If Sex%=1  ! 1: male
+    Sex_name$="Male"
+  Else
+    Sex_name$="Female"
+  Endif
+  For Loop_index%=1 To 17  ! for each of the 17 races
+    Text_position%=0  ! count the abilities that reach the racial minimum
+    For Inner_index%=1 To 6  ! for Strength to Charisma
+      If Abilities%(Inner_index%)>=Race_ability_limits%(Loop_index%,Inner_index%,Minimum_index%,Sex%)
+        Inc Text_position%  ! this one does
+      Endif
+    Next Inner_index%
+    If Text_position%=6  ! all six meet the minimum
+      Race_available!(Loop_index%)=-1  ! the race can be chosen
+    Else
+      Race_available!(Loop_index%)=0  ! the race is not open to these abilities
+    Endif
+  Next Loop_index%
+  Print At(2,1);"A V A I L A B L E";At(42,1);"A V A I L A B L E"  ! heading of the two lists
+  Print At(2,2);"    R A C E S    ";At(42,2);"  C L A S S E S  "
+  For Loop_index%=Race_gray_dwarf% To Race_human%  ! for each race
+    If Race_available!(Loop_index%)  ! only those available
+      Print At(5,Loop_index%+3);Chr$(Loop_index%+64);". ";Race_names$(Loop_index%)  ! letter A-Q and the race name
+    Endif
+  Next Loop_index%
+  For Loop_index%=Strength_index% To Comeliness_index%  ! show the abilities in a row at the bottom
+    Print At(Loop_index%*10-6,22);Left$(Ability_names$(Loop_index%),3);":    "  ! first three letters of the name
+    Print At(Fn Right_align_column(Loop_index%*10+1,Abilities%(Loop_index%)),22);Abilities%(Loop_index%)  ! the score
+  Next Loop_index%
+  Print At(17,24);"PLEASE SELECT YOUR CHARACTERS RACE!";  ! ask for the race
+  Read_race_key:
+  Repeat
+    Do
+      Key_code%=Inp(2)  ! wait for a key
+      Exit If Fn Is_between(Key_code%,97,113) Or Fn Is_between(Key_code%,65,81)  ! a letter A-Q, either case
+    Loop
+    Race%=Fn Letter_number(Key_code%)  ! turn the letter into a race number
+  Until Race_available!(Race%)  ! until the race is one of those available
+  Print At(1,Race%+3);"->"  ! mark the chosen race
+  Check_deep_gnome_female:
+  If Race%=Race_deep_gnome% And Sex%=Female_index%  ! a female deep gnome
+    Work_text$="There are no Female Deep Gnome|Adventurer's! Your character's|"  ! there are none: offer to change the sex
+    Work_text$=Work_text$+"sex must be changed to Male!"
+    Void Fre(0)
+    Alert 3,Work_text$,3," OK | NO WAY | THINK ",Alert_answer%
+    If Alert_answer%=1  ! OK
+      Sex%=Male_index%  ! the character becomes male
+      Sex_name$="Male"
+    Endif
+    If Alert_answer%=2  ! NO WAY
+      Print At(1,Race%+3);"  "  ! remove the race mark
+      For Loop_index%=Strength_index% To Comeliness_index%  ! put the abilities back as rolled
+        Abilities%(Loop_index%)=Rolled_abilities%(Loop_index%)
+        Print At(Loop_index%*10-6,22);Left$(Ability_names$(Loop_index%),3);":    "  ! show them again
+        Print At(Fn Right_align_column(Loop_index%*10+1,Abilities%(Loop_index%)),22);Abilities%(Loop_index%)
+      Next Loop_index%
+      Goto Read_race_key  ! choose the race again
+    Endif
+    If Alert_answer%=3  ! THINK
+      Pause 150  ! wait three seconds, then ask again
+      Goto Check_deep_gnome_female
+    Endif
+  Endif
+  If Race%>=Race_gray_dwarf% And Race%<=Race_mountain_dwarf%  ! gray, hill or mountain dwarf
+    Race_group%=Dwarf%  ! dwarf group
+  Endif
+  If Race%>=Race_dark_elf% And Race%<=Race_wood_elf%  ! dark, gray, high, valley, wild or wood elf
+    Race_group%=Elf%  ! elf group
+  Endif
+  If Race%=Race_deep_gnome% Or Race%=Race_surface_gnome%  ! deep or surface gnome
+    Race_group%=Gnome%  ! gnome group
+  Endif
+  If Race%=Race_half_elf%  ! half-elf
+    Race_group%=Half_elf%  ! half-elf group
+  Endif
+  If Race%>=Race_hairfoot% And Race%<=Race_tallfellow%  ! hairfoot, stout or tallfellow
+    Race_group%=Halfling%  ! halfling group
+  Endif
+  If Race%=Race_half_orc%  ! half-orc
+    Race_group%=Half_orc%  ! half-orc group
+  Endif
+  If Race%=Race_human%  ! human
+    Race_group%=Human%  ! human group
+  Endif
+  On Race_group% Gosub Dwarf_racial_adjustments,Elf_racial_adjustments,Gnome_racial_adjustments,Half_elf_racial_adjustments,Halfling_racial_adjustments,Half_orc_racial_adjustments,Human_racial_adjustments
+  For Loop_index%=Strength_index% To Comeliness_index%  ! for each ability
+    If Loop_index%<>Comeliness_index%  ! except Comeliness
+      If Abilities%(Loop_index%)>Race_ability_limits%(Race%,Loop_index%,Maximum_index%,Sex%)  ! above the racial maximum for this sex
+        Abilities%(Loop_index%)=Race_ability_limits%(Race%,Loop_index%,Maximum_index%,Sex%)  ! cut it down to the maximum
+      Endif
+    Endif
+    Print At(Loop_index%*10-6,22);Left$(Ability_names$(Loop_index%),3);":    "  ! show the adjusted score
+    Print At(Fn Right_align_column(Loop_index%*10+1,Abilities%(Loop_index%)),22);Abilities%(Loop_index%)
+  Next Loop_index%
+  For Loop_index%=1 To 12  ! for each of the 12 classes
+    Text_position%=0  ! count the abilities that reach the class minimum
+    For Inner_index%=1 To 6
+      If Abilities%(Inner_index%)>=Class_minimum_scores%(Loop_index%,Inner_index%)
+        Inc Text_position%  ! this one does
+      Endif
+    Next Inner_index%
+    If Text_position%=6  ! all six meet the minimum
+      Class_available!(Loop_index%)=-1  ! the class can be chosen
+    Else
+      Class_available!(Loop_index%)=0  ! the class is not open to these abilities
+    Endif
+  Next Loop_index%
+  For Loop_index%=Class_cavalier% To Class_monk%  ! list the classes
+    If Race_allows_class!(Loop_index%,Race%) And Class_available!(Loop_index%)  ! allowed for the race and the abilities
+      Print At(45,Loop_index%+3);Chr$(Loop_index%+64);". ";Class_names$(Loop_index%)  ! letter A-L and the class name
+    Else
+      Print At(45,Loop_index%+3);"                 "  ! blank out the line
+    Endif
+  Next Loop_index%
+  Pause 25  ! short pause
+  Confirm_race:
+  Work_text$="Are you sure you want a|"+Race_names$(Race%)+"?"  ! ask whether the race is the right one
+  Void Fre(0)
+  Alert 2,Work_text$,3," YES | NO | THINK ",Alert_answer%
+  If Alert_answer%=2  ! NO
+    Print At(1,Race%+3);"  "  ! remove the race mark
+    For Loop_index%=Strength_index% To Comeliness_index%  ! put the abilities back as rolled
+      Abilities%(Loop_index%)=Rolled_abilities%(Loop_index%)
+      Print At(Loop_index%*10-6,22);Left$(Ability_names$(Loop_index%),3);":    "  ! show them again
+      Print At(Fn Right_align_column(Loop_index%*10+1,Abilities%(Loop_index%)),22);Abilities%(Loop_index%)
+    Next Loop_index%
+    Goto Read_race_key  ! choose the race again
+  Endif
+  If Alert_answer%=3  ! THINK
+    Pause 150  ! wait three seconds, then ask again
+    Goto Confirm_race
+  Endif
+  Select_class:
+  Print At(17,24);" NOW SELECT YOUR CHARACTERS CLASS! ";  ! ask for the class
+  Repeat
+    Do
+      Key_code%=Inp(2)  ! wait for a key
+      Exit If Fn Is_between(Key_code%,97,108) Or Fn Is_between(Key_code%,65,76)  ! a letter A-L, either case
+    Loop
+    Character_class%=Fn Letter_number(Key_code%)  ! turn the letter into a class number
+  Until Class_available!(Character_class%)  ! until the class is one of those available
+  Print At(40,Character_class%+3);"->"  ! mark the chosen class
+  Check_sponsor:
+  If Character_class%=Class_cavalier% Or Character_class%=Class_paladin% And Social_class%<=6  ! a cavalier or paladin from a social class below Lower Upper
+    Work_text$="Your "+Social_class_names$(Social_class%)+"|"  ! needs a sponsor to be trained
+    Work_text$=Work_text$+"background will require you|to have a sponsor!"
+    Void Fre(0)
+    Alert 3,Work_text$,3," OK | NO WAY | THINK ",Alert_answer%
+    If Alert_answer%=1  ! OK
+      Goto Confirm_race_and_class  ! go to the final question
+    Endif
+    If Alert_answer%=2  ! NO WAY
+      Print At(40,Character_class%+3);"  "  ! remove the class mark
+      Goto Select_class  ! choose the class again
+    Endif
+    If Alert_answer%=3  ! THINK
+      Pause 150  ! wait three seconds, then ask again
+      Goto Check_sponsor
+    Endif
+  Endif
+  Confirm_class:
+  Work_text$="Are you sure you want a|"+Class_names$(Character_class%)+"?"  ! ask whether the class is the right one
+  Void Fre(0)
+  Alert 2,Work_text$,3," YES | NO | THINK ",Alert_answer%
+  If Alert_answer%=2  ! NO
+    Print At(40,Character_class%+3);"  "  ! remove the class mark
+    Goto Select_class  ! choose the class again
+  Endif
+  If Alert_answer%=3  ! THINK
+    Pause 150  ! wait three seconds, then ask again
+    Goto Confirm_class
+  Endif
+  Pause 25  ! short pause
+  Confirm_race_and_class:
+  Work_text$="Are you really sure you want|your character to be a|"  ! ask once more for race and class together
+  Work_text$=Work_text$+Race_names$(Race%)+" "+Class_names$(Character_class%)+"?"
+  Void Fre(0)
+  Alert 3,Work_text$,1," YES | NO ",Alert_answer%
+  If Alert_answer%=2  ! NO
+    Print At(1,Race%+3);"  "  ! remove both marks
+    Print At(40,Character_class%+3);"  "
+    Print At(17,24);"PLEASE SELECT YOUR CHARACTERS RACE!";  ! back to the race prompt
+    For Loop_index%=Strength_index% To Comeliness_index%  ! put the abilities back as rolled
+      Abilities%(Loop_index%)=Rolled_abilities%(Loop_index%)
+      Print At(Loop_index%*10-6,22);Left$(Ability_names$(Loop_index%),3);":    "  ! show them again
+      Print At(Fn Right_align_column(Loop_index%*10+1,Abilities%(Loop_index%)),22);Abilities%(Loop_index%)
+    Next Loop_index%
+    Goto Read_race_key  ! choose the race again
+  Endif
+  If Character_class%=Class_cavalier% Or Character_class%=Class_paladin%  ! cavalier or paladin
+    Class_group%=Group_cavalier%  ! cavalier group
+  Endif
+  If Character_class%=Cleric% Or Character_class%=Class_druid%  ! cleric or druid
+    Class_group%=Group_cleric%  ! cleric group
+  Endif
+  If Character_class%>=Fighter% And Character_class%<=Ranger%  ! fighter, barbarian or ranger
+    Class_group%=Group_fighter%  ! fighter group
+  Endif
+  If Character_class%=Magic_user% Or Character_class%=Class_illusionist%  ! magic-user or illusionist
+    Class_group%=Group_magic_user%  ! magic-user group
+  Endif
+  If Character_class%=Thief% Or Character_class%=Class_assassin%  ! thief or assassin
+    Class_group%=Thief_group%  ! thief group
+  Endif
+  If Character_class%=Class_monk%  ! monk
+    Class_group%=Monk_group%  ! monk group
+  Endif
+  If Class_group%=Group_cavalier% Or Class_group%=Group_fighter%  ! cavalier and fighter groups
+    Has_exceptional_strength!=-1  ! may have exceptional strength
+  Else
+    Clr Has_exceptional_strength!  ! no exceptional strength
+  Endif
+  If Class_group%=Group_cleric% Or Class_group%=Group_magic_user%  ! cleric and magic-user groups
+    Is_spell_caster!=-1  ! cast spells
+  Else
+    Clr Is_spell_caster!  ! no spells
+  Endif
+  Cls  ! the class pages start on a clear screen
+  @Roll_starting_age  ! starting age
+  On Class_group% Gosub Cavalier_class_setup,Cleric_class_setup,Fighter_class_setup,Magic_user_class_setup,Thief_class_setup,P21  ! hit points, level title and class abilities for the group (the monk entry has no procedure)
+  If Race%=Race_half_elf%  ! a half-elf
+    Print At(20,2);"What race of ELF was your Elven parent?"  ! ask for the race of the elven parent
+    Print At(25,4);"A. Dark Elf"
+    Print At(25,5);"B. Gray Elf"
+    Print At(25,6);"C. High Elf"
+    Print At(25,7);"D. Valley Elf"
+    Print At(25,8);"E. Wood Elf"
+    Read_parent_key:
+    Do
+      Key_code%=Inp(2)  ! wait for a key
+      Exit If Fn Is_between(Key_code%,97,101) Or Fn Is_between(Key_code%,65,69)  ! a letter A-E, either case
+    Loop
+    Elf_parent_race%=Fn Letter_number(Key_code%)  ! turn the letter into a choice
+    Print At(20,Elf_parent_race%+3);"->"  ! mark it
+    If Elf_parent_race%=5  ! E: wood elf, one past wild elf in the race list
+      Inc Elf_parent_race%
+    Endif
+    Work_text$="You want your parent|to be a "+Race_names$(Elf_parent_race%+3)+"|Right?"  ! ask whether that parent is right
+    Alert 2,Work_text$,1," YES | NO ",Alert_answer%
+    If Alert_answer%=2  ! NO
+      If Elf_parent_race%=6  ! undo the wood-elf step
+        Dec Elf_parent_race%
+      Endif
+      Print At(20,Elf_parent_race%+3);"  "
+      Goto Read_parent_key  ! ask again
+    Endif
+    Add Elf_parent_race%,3  ! turn the choice into a race number
+  Endif
+  Cls  ! the ability tables start on a clear screen
+  If Abilities%(Strength_index%)>=3 And Abilities%(Strength_index%)<=15  ! Strength 3 to 15
+    Ability_row%=(Abilities%(Strength_index%)+1)/2-1  ! rows 1 to 7, two scores to a row
+  Endif
+  If Abilities%(Strength_index%)>=16  ! Strength 16 or more
+    Ability_row%=Abilities%(Strength_index%)-8  ! rows 8 to 10
+  Endif
+  If Abilities%(Strength_index%)=18 And Has_exceptional_strength!  ! Strength 18 with exceptional strength
+    If Exceptional_strength%>=1 And Exceptional_strength%<=50  ! 18/01 to 18/50
+      Ability_row%=11  ! row 11
+      Goto Strength_values
+    Endif
+    If Exceptional_strength%>=51 And Exceptional_strength%<=75  ! 18/51 to 18/75
+      Ability_row%=12  ! row 12
+      Goto Strength_values
+    Endif
+    If Exceptional_strength%>=76 And Exceptional_strength%<=90  ! 18/76 to 18/90
+      Ability_row%=13  ! row 13
+      Goto Strength_values
+    Endif
+    If Exceptional_strength%>=91 And Exceptional_strength%<=99  ! 18/91 to 18/99
+      Ability_row%=14  ! row 14
+      Goto Strength_values
+    Endif
+    If Exceptional_strength%=100  ! 18/00
+      Ability_row%=15  ! row 15
+    Endif
+  Endif
+  Strength_values:
+  Hit_probability$=Str$(Strength_table%(Ability_row%,1))  ! hit probability
+  If Asc(Hit_probability$)<>Asc("-")  ! not negative
+    Hit_probability$="+"+Hit_probability$  ! show a plus sign
+  Endif
+  Damage_adjustment$=Str$(Strength_table%(Ability_row%,2))  ! damage adjustment
+  If Asc(Damage_adjustment$)<>Asc("-")
+    Damage_adjustment$="+"+Damage_adjustment$  ! show a plus sign
+  Endif
+  Weight_allowance$=Str$(Strength_table%(Ability_row%,3))  ! weight allowance
+  If Asc(Weight_allowance$)<>Asc("-")
+    Weight_allowance$="+"+Weight_allowance$  ! show a plus sign
+  Endif
+  Open_doors_roll$=Str$(Strength_table%(Ability_row%,4))  ! open doors
+  Bend_bars_chance$=Str$(Strength_table%(Ability_row%,5))+"%"  ! bend bars/lift gates chance
+  If Race_group%=Two_language_race_group% Or Race%=Race_surface_gnome% Or Race_group%=Half_orc%  ! dwarves (never true: two_language_race_group% is never set), surface gnomes and half-orcs
+    Extra_languages%=2  ! two extra languages at most
+    Goto Check_magic_user_spells
+  Endif
+  If Race_group%=Half_elf% Or Race_group%=Halfling%  ! half-elves and halflings
+    If Abilities%(Intelligence_index%)>16  ! Intelligence above 16
+      Extra_languages%=Abilities%(Intelligence_index%)-16  ! one extra language for each point above 16
+    Else
+      Extra_languages%=0  ! no extra languages
+    Endif
+    Goto Check_magic_user_spells
+  Endif
+  If Race_group%=Elf% And Race%<>Race_dark_elf%  ! elves except dark elves
+    If Abilities%(Intelligence_index%)>15  ! Intelligence above 15
+      Extra_languages%=Abilities%(Intelligence_index%)-15  ! one extra language for each point above 15
+    Else
+      Extra_languages%=0  ! no extra languages
+    Endif
+    Goto Check_magic_user_spells
+  Endif
+  Extra_languages%=Intelligence_languages%(Fn Ability_table_row(Intelligence_index%))  ! everyone else: extra languages from the Intelligence table
+  Check_magic_user_spells:
+  If Class_group%=Group_magic_user%  ! a magic-user or illusionist
+    Text_position%=Abilities%(Intelligence_index%)  ! the Intelligence score
+    If Text_position%=9  ! Intelligence 9
+      Ability_row%=1  ! row 1
+      Goto Spell_values
+    Endif
+    If Text_position%>=10 And Text_position%<=12  ! Intelligence 10 to 12
+      Ability_row%=2  ! row 2
+      Goto Spell_values
+    Endif
+    If Text_position%>=13 And Text_position%<=16  ! Intelligence 13 to 16
+      Ability_row%=Text_position%/2-4+.5  ! rows 3 and 4, two scores to a row
+      Goto Spell_values
+    Endif
+    If Text_position%>=17  ! Intelligence 17 or more
+      Ability_row%=Text_position%-12  ! rows 5 to 7
+    Endif
+    Spell_values:
+    Know_spell_chance$=Str$(Intelligence_spell_table%(Ability_row%,1))+"%"  ! chance to know each spell
+    Min_spells_per_level$=Str$(Intelligence_spell_table%(Ability_row%,2))  ! minimum spells per level
+    Max_spells_per_level$=Str$(Intelligence_spell_table%(Ability_row%,3))  ! maximum spells per level
+    If Max_spells_per_level$="-1"  ! no limit
+      Max_spells_per_level$="ALL"  ! show ALL
+    Endif
+  Endif
+  Magic_attack_adjustment$=Str$(Wisdom_magic_adjust%(Fn Ability_table_row(Wisdom%)))  ! magical attack adjustment from Wisdom
+  If Asc(Magic_attack_adjustment$)<>Asc("-")  ! not negative
+    Magic_attack_adjustment$="+"+Magic_attack_adjustment$  ! show a plus sign
+  Endif
+  If Class_group%=Group_cleric%  ! a cleric or druid
+    If Abilities%(Wisdom%)=13  ! Wisdom 13
+      Cleric_bonus_spells%=1  ! one bonus spell
+      Goto Spell_failure
+    Endif
+    If Abilities%(Wisdom%)>=14  ! Wisdom 14 or more
+      Cleric_bonus_spells%=2  ! two bonus spells
+      Goto Spell_failure
+    Endif
+    Cleric_bonus_spells%=0  ! no bonus spells
+    Spell_failure:
+    If Abilities%(Wisdom%)<=12  ! Wisdom 12 or less
+      Spell_failure_chance$=Str$(Abs((12-Abilities%(Wisdom%))*5))+"%"  ! chance of spell failure, 5% for each point below 12
+    Else
+      Spell_failure_chance$="0%"  ! no spell failure
+    Endif
+  Endif
+  Dexterity_reaction$=Str$(Dexterity_adjustments%(Fn Ability_table_row(Dexterity%),1))  ! reaction/attacking adjustment from Dexterity
+  If Asc(Dexterity_reaction$)<>Asc("-")  ! not negative
+    Dexterity_reaction$="+"+Dexterity_reaction$  ! show a plus sign
+  Endif
+  Defensive_adjustment$=Str$(Dexterity_adjustments%(Fn Ability_table_row(Dexterity%),2))  ! defensive adjustment from Dexterity
+  If Asc(Defensive_adjustment$)<>Asc("-")  ! not negative
+    Defensive_adjustment$="+"+Defensive_adjustment$  ! show a plus sign
+  Endif
+  Hit_point_adjustment$=Str$(Constitution_table%(Fn Ability_table_row(Constitution%),1))  ! hit point adjustment from Constitution
+  If Asc(Hit_point_adjustment$)<>Asc("-")  ! not negative
+    Hit_point_adjustment$="+"+Hit_point_adjustment$  ! show a plus sign
+  Endif
+  System_shock_chance$=Str$(Constitution_table%(Fn Ability_table_row(Constitution%),2))+"%"  ! system shock survival
+  Resurrection_chance$=Str$(Constitution_table%(Fn Ability_table_row(Constitution%),3))+"%"  ! resurrection survival
+  Max_henchmen%=Charisma_table%(Fn Ability_table_row(Charisma_index%),1)  ! maximum number of henchmen from Charisma
+  Loyalty_base$=Str$(Charisma_table%(Fn Ability_table_row(Charisma_index%),2))+"%"  ! loyalty base
+  If Asc(Loyalty_base$)<>Asc("-")  ! not negative
+    Loyalty_base$="+"+Loyalty_base$  ! show a plus sign
+  Endif
+  Charisma_reaction$=Str$(Charisma_table%(Fn Ability_table_row(Charisma_index%),3))+"%"  ! reaction adjustment from Charisma
+  If Asc(Charisma_reaction$)<>Asc("-")  ! not negative
+    Charisma_reaction$="+"+Charisma_reaction$  ! show a plus sign
+  Endif
+  If Race_group%=Dwarf% Or Race_group%=Gnome% Or Race_group%=Halfling%  ! dwarves, gnomes and halflings
+    Text_position%=Int(Abilities%(Constitution%)/3.5)  ! their saving throw bonus from Constitution: one for each 3.5 points
+    For Loop_index%=1 To Len(Racial_abilities$)  ! look through the racial abilities text
+      If Mid$(Racial_abilities$,Loop_index%,1)="_"  ! a blank in the text
+        Mid$(Racial_abilities$,Loop_index%,1)=Str$(Text_position%)  ! fill in the saving throw bonus
+      Endif
+    Next Loop_index%
+  Endif
+Return
+'
+' Racial ability adjustments and racial abilities for a dwarf (called through On race_group% Gosub).
+' Adds 1 to constitution and takes 1 from charisma.  Sets racial_abilities$ to the racial saving throw text:
+' hill and mountain dwarves get the +_ bonuses against magic and poison (the _ is filled in later from
+' constitution), a gray dwarf (subrace race_gray_dwarf%) gets its immunities instead.
+Procedure Dwarf_racial_adjustments
+  Add Abilities%(Constitution%),1  ! constitution +1 for a dwarf
+  Sub Abilities%(Charisma_index%),1  ! charisma -1
+  If Race%<>Race_gray_dwarf%  ! any dwarf but a gray dwarf
+    Racial_abilities$="+_ vs Magic Wands/Staves/Rods/Spells, +_ vs Toxic Substances"  ! hill and mountain dwarf saving throw bonuses (the _ is filled in from constitution)
+  Else  ! gray dwarf (duergar)
+    Racial_abilities$="Immune to Illusion Spells, Paralyzation Attacks"  ! gray dwarf immunities
+    Racial_abilities$=Racial_abilities$+", Non-natural Poisons."
+  Endif
+Return  ! back to the race choice
+'
+' Racial ability adjustments and racial abilities for an elf.
+' Every elf gets dexterity +1 and constitution -1; then by subrace race%: gray elf intelligence +1, wild elf
+' strength +2, wood elf strength +1 and intelligence -1.  racial_abilities$ becomes the elves' 90% resistance to
+' sleep and charm, and a dark elf also gets +2 against magical effects.
+Procedure Elf_racial_adjustments
+  Add Abilities%(Dexterity%),1  ! dexterity +1 for an elf
+  Sub Abilities%(Constitution%),1  ! constitution -1
+  If Race%=Gray_elf%  ! gray elf
+    Add Abilities%(Intelligence_index%),1  ! intelligence +1
+  Endif
+  If Race%=Wild_elf%  ! wild elf
+    Add Abilities%(Strength_index%),2  ! strength +2
+  Endif
+  If Race%=Race_wood_elf%  ! wood elf
+    Add Abilities%(Strength_index%),1  ! strength +1
+    Sub Abilities%(Intelligence_index%),1  ! intelligence -1
+  Endif
+  Racial_abilities$="90% Resistance vs Sleep and Charm Spells."  ! every elf resists sleep and charm
+  If Race%=Race_dark_elf%  ! dark elf (drow)
+    Racial_abilities$=Racial_abilities$+" +2 vs Magical Effects."  ! dark elves also save better against magic
+  Endif
+Return
+'
+' Racial abilities for a gnome (no ability score changes).
+' A surface gnome gets the +_ saving throw bonus against magic, filled in from constitution; a deep gnome gets
+' immunity to illusions and phantasms, +3 to other saves against magic and +2 against poisons.
+Procedure Gnome_racial_adjustments
+  If Race%=Race_surface_gnome%  ! surface gnome
+    Racial_abilities$="+_ vs Magic Wands/Staves/Rods/Spells."  ! saving throw bonus, filled in from constitution
+  Else  ! deep gnome (svirfneblin)
+    Racial_abilities$="Immune to Illusions, Phantasms, +3 to other Saves vs Magic,"  ! deep gnome immunities and saving throw bonuses
+    Racial_abilities$=Racial_abilities$+" and +2 vs Poisons."
+  Endif
+Return
+'
+' Racial abilities for a half-elf: no ability changes, 30% resistance to sleep and charm in racial_abilities$.
+Procedure Half_elf_racial_adjustments
+  Racial_abilities$="30% Resistance to Sleep and Charm Spells"  ! the half-elf's only racial ability
+Return
+'
+' Racial ability adjustments for a halfling: strength -1, dexterity +1, and the +_ saving throw bonuses against
+' magic and poison in racial_abilities$.
+Procedure Halfling_racial_adjustments
+  Sub Abilities%(Strength_index%),1  ! strength -1 for a halfling
+  Add Abilities%(Dexterity%),1  ! dexterity +1
+  Racial_abilities$="+_ vs Wands/Staves/Rods/Spells, +_ vs All Poisons."  ! saving throw bonuses, filled in from constitution
+Return
+'
+' Racial ability adjustments for a half-orc: strength +1, constitution +1, charisma -2.  No racial abilities
+' text.
+Procedure Half_orc_racial_adjustments
+  Add Abilities%(Strength_index%),1  ! strength +1 for a half-orc
+  Add Abilities%(Constitution%),1  ! constitution +1
+  Sub Abilities%(Charisma_index%),2  ! charisma -2
+  Racial_abilities$=""  ! no racial abilities text
+Return
+'
+' Racial abilities for a human: no adjustments, empty racial_abilities$.
+Procedure Human_racial_adjustments
+  Racial_abilities$=""  ! a human has no racial abilities
+Return
+'
+' Rolls the character's starting age age% from the class group class_group% and the race race_group% (base years
+' plus dice, as in the character age table), with a few class splits for humans.
+' Then finds the age category age_category% (young adult, mature, middle aged, old, venerable) whose range in
+' race_age_ranges%() holds that age for the subrace race%, and applies its ability changes to abilities%().
+' Every ability is then held within the subrace and sex limits in race_ability_limits%() and raised to the class
+' minimum in class_minimum_scores%(); a barbarian's wisdom is capped at 16.  A fighter-group character
+' (has_exceptional_strength!) with strength 18 rolls exceptional strength exceptional_strength% (1d100), capped
+' at the subrace and sex maximum in race_percentile_limit%().
+Procedure Roll_starting_age
+  If Class_group%=Group_cavalier%  ! cavalier or paladin
+    If Race_group%=Elf%  ! elf
+      Age%=Fn Roll_five_dice(6)+145  ! elf cavalier: 145 + 5d6 years
+    Endif
+    If Race_group%=Half_elf%  ! half-elf
+      Age%=Fn Roll_three_dice(4)+22  ! half-elf cavalier: 22 + 3d4
+    Endif
+    If Race_group%=Human%  ! human
+      Age%=Fn Roll_one_die(4)+17  ! human cavalier: 17 + 1d4
+    Endif
+  Endif
+  If Class_group%=Group_cleric%  ! cleric or druid
+    If Race_group%=Dwarf%  ! dwarf
+      Age%=Fn Roll_two_dice(20)+250  ! dwarf cleric: 250 + 2d20
+    Endif
+    If Race_group%=Elf%  ! elf
+      Age%=Fn Roll_five_dice(10)+Fn Roll_five_dice(10)+500  ! elf cleric: 500 + 10d10
+    Endif
+    If Race_group%=Gnome%  ! gnome
+      Age%=Fn Roll_three_dice(12)+300  ! gnome cleric: 300 + 3d12
+    Endif
+    If Race_group%=Half_elf%  ! half-elf
+      Age%=Fn Roll_two_dice(4)+40  ! half-elf cleric: 40 + 2d4
+    Endif
+    If Race_group%=Halfling%  ! halfling
+      Age%=Fn Roll_three_dice(4)+30  ! halfling cleric: 30 + 3d4
+    Endif
+    If Race_group%=Half_orc%  ! half-orc
+      Age%=Fn Roll_one_die(4)+20  ! half-orc cleric: 20 + 1d4
+    Endif
+    If Race_group%=Human%  ! human
+      Age%=Fn Roll_one_die(4)+18  ! human cleric: 18 + 1d4
+    Endif
+  Endif
+  If Class_group%=Group_fighter%  ! fighter, barbarian or ranger
+    If Race_group%=Dwarf%  ! dwarf
+      Age%=Fn Roll_five_dice(4)+40  ! dwarf fighter: 40 + 5d4
+    Endif
+    If Race_group%=Elf%  ! elf
+      Age%=Fn Roll_five_dice(6)+130  ! elf fighter: 130 + 5d6
+    Endif
+    If Race_group%=Gnome%  ! gnome
+      Age%=Fn Roll_five_dice(4)+60  ! gnome fighter: 60 + 5d4
+    Endif
+    If Race_group%=Half_elf%  ! half-elf
+      Age%=Fn Roll_three_dice(4)+22  ! half-elf fighter: 22 + 3d4
+    Endif
+    If Race_group%=Halfling%  ! halfling
+      Age%=Fn Roll_three_dice(4)+20  ! halfling fighter: 20 + 3d4
+    Endif
+    If Race_group%=Half_orc%  ! half-orc
+      Age%=Fn Roll_one_die(4)+13  ! half-orc fighter: 13 + 1d4
+    Endif
+    If Race_group%=Human%  ! human
+      If Character_class%=Fighter% Or Character_class%=Barbarian%  ! human fighter or barbarian
+        Age%=Fn Roll_one_die(4)+15  ! 15 + 1d4
+      Else  ! human ranger
+        Age%=Fn Roll_one_die(4)+20  ! 20 + 1d4
+      Endif
+    Endif
+  Endif
+  If Class_group%=Group_magic_user%  ! magic-user or illusionist
+    If Race_group%=Elf%  ! elf
+      Age%=Fn Roll_five_dice(6)+150  ! elf magic-user: 150 + 5d6
+    Endif
+    If Race_group%=Gnome%  ! gnome
+      Age%=Fn Roll_two_dice(12)+100  ! gnome illusionist: 100 + 2d12
+    Endif
+    If Race_group%=Half_elf%  ! half-elf
+      Age%=Fn Roll_two_dice(8)+30  ! half-elf magic-user: 30 + 2d8
+    Endif
+    If Race_group%=Human%  ! human
+      If Character_class%=Magic_user%  ! human magic-user
+        Age%=Fn Roll_two_dice(8)+24  ! 24 + 2d8
+      Else  ! human illusionist
+        Age%=Fn Roll_one_die(6)+30  ! 30 + 1d6
+      Endif
+    Endif
+  Endif
+  If Class_group%=Thief_group%  ! thief or assassin
+    If Race_group%=Dwarf%  ! dwarf
+      Age%=Fn Roll_three_dice(6)+75  ! dwarf thief: 75 + 3d6
+    Endif
+    If Race_group%=Elf%  ! elf
+      Age%=Fn Roll_five_dice(6)+150  ! elf thief: 100 + 5d6
+    Endif
+    If Race_group%=Gnome%  ! gnome
+      Age%=Fn Roll_five_dice(4)+80  ! gnome thief: 80 + 5d4
+    Endif
+    If Race_group%=Half_elf%  ! half-elf
+      Age%=Fn Roll_three_dice(8)+22  ! half-elf thief: 22 + 3d8
+    Endif
+    If Race_group%=Halfling%  ! halfling
+      Age%=Fn Roll_two_dice(4)+40  ! halfling thief: 40 + 2d4
+    Endif
+    If Race_group%=Half_orc%  ! half-orc
+      Age%=Fn Roll_two_dice(4)+20  ! half-orc thief: 20 + 2d4
+    Endif
+    If Race_group%=Human%  ! human
+      If Character_class%=Thief%  ! human thief
+        Age%=Fn Roll_one_die(4)+18  ! 18 + 1d4
+      Else  ! human assassin
+        Age%=Fn Roll_one_die(4)+20  ! 20 + 1d4
+      Endif
+    Endif
+  Endif
+  If Class_group%=Monk_group%  ! monk
+    Age%=Fn Roll_one_die(4)+21  ! monk: 21 + 1d4
+  Endif
+  Age_category%=1  ! start with the youngest age category
+  Do
+    Exit If Age%>=Race_age_ranges%(Age_category%,1,Race%) And Age%<=Race_age_ranges%(Age_category%,2,Race%)  ! the age lies inside this category's range for the subrace
+    Inc Age_category%  ! try the next older category
+  Loop
+  If Age_category%=1  ! young adult
+    Sub Abilities%(Wisdom%),1  ! wisdom -1
+    Add Abilities%(Constitution%),1  ! constitution +1
+  Endif
+  If Age_category%=2  ! mature
+    Add Abilities%(Strength_index%),1  ! strength +1
+    Add Abilities%(Wisdom%),1  ! wisdom +1
+  Endif
+  If Age_category%=3  ! middle aged
+    Sub Abilities%(Strength_index%),1  ! strength -1
+    Sub Abilities%(Constitution%),1  ! constitution -1
+    Add Abilities%(Intelligence_index%),1  ! intelligence +1
+    Add Abilities%(Wisdom%),1  ! wisdom +1
+  Endif
+  If Age_category%=4  ! old
+    Sub Abilities%(Strength_index%),2  ! strength -2
+    Sub Abilities%(Dexterity%),2  ! dexterity -2
+    Sub Abilities%(Constitution%),1  ! constitution -1
+    Add Abilities%(Wisdom%),1  ! wisdom +1
+  Endif
+  If Age_category%=5  ! venerable
+    Sub Abilities%(Strength_index%),1  ! strength -1
+    Sub Abilities%(Dexterity%),1  ! dexterity -1
+    Sub Abilities%(Constitution%),1  ! constitution -1
+    Add Abilities%(Intelligence_index%),1  ! intelligence +1
+    Add Abilities%(Wisdom%),1  ! wisdom +1
+  Endif
+  For Loop_index%=Strength_index% To Charisma_index%  ! for each ability, strength to charisma
+    If Abilities%(Loop_index%)>Race_ability_limits%(Race%,Loop_index%,Maximum_index%,Sex%)  ! above the maximum for this subrace and sex
+      Abilities%(Loop_index%)=Race_ability_limits%(Race%,Loop_index%,Maximum_index%,Sex%)  ! cut it to the maximum
+    Endif
+    If Abilities%(Loop_index%)<Race_ability_limits%(Race%,Loop_index%,Minimum_index%,Sex%)  ! below the minimum for this subrace and sex
+      Abilities%(Loop_index%)=Race_ability_limits%(Race%,Loop_index%,Minimum_index%,Sex%)  ! raise it to the minimum
+    Endif
+    If Abilities%(Loop_index%)<Class_minimum_scores%(Character_class%,Loop_index%)  ! below the minimum the class needs
+      Abilities%(Loop_index%)=Class_minimum_scores%(Character_class%,Loop_index%)  ! raise it to the class minimum
+    Endif
+  Next Loop_index%
+  If Character_class%=Barbarian%  ! barbarian
+    If Abilities%(Wisdom%)>16  ! a barbarian's wisdom may not exceed 16
+      Abilities%(Wisdom%)=16
+    Endif
+  Endif
+  If Has_exceptional_strength!  ! the class may have exceptional strength (cavalier or fighter group)
+    If Abilities%(Strength_index%)=18  ! strength of 18
+      Exceptional_strength%=Fn Roll_one_die(100)  ! roll the exceptional strength percentage
+      If Exceptional_strength%>=Race_percentile_limit%(Race%,Sex%)  ! above the most this subrace and sex may have
+        Exceptional_strength%=Race_percentile_limit%(Race%,Sex%)  ! cut it to that maximum
+      Endif
+    Endif
+  Endif
+Return
+'
+' Class set-up for the cavalier group (cavalier or paladin), chosen by social class social_class%.
+' Upper classes (7-9) start at 1st level with 1d10 hit points and the title Armiger (cavalier) or Gallant
+' (paladin); lower classes start as a 0-level Horseman with 1d4+1 hit points and -1500 experience.  Adds the
+' constitution hit point bonus (and +1 at 17, +2 at 18 or more) with a minimum of 6 or 3, rolls the starting
+' gold into purse%() by social class, and hands out the starting equipment: large shield and dagger for all,
+' then armour, weapons, horse and barding by social class.
+Procedure Cavalier_class_setup
+  If Social_class%>=7  ! upper class: the character starts as a 1st-level cavalier or paladin
+    Hit_points%=Fn Roll_one_die(10)  ! 1d10 hit points
+    If Character_class%=Class_cavalier%  ! cavalier
+      Level_title$="Armiger"  ! 1st-level cavalier title
+    Else  ! paladin
+      Level_title$="Gallant"  ! 1st-level paladin title
+    Endif
+  Else  ! lower social class: the character starts as a 0-level horseman
+    Hit_points%=Fn Roll_one_die(4)+1  ! 1d4+1 hit points
+    Level%=-1  ! level below 1st
+    Experience%=-1500  ! experience starts at -1500
+    Level_title$="Horseman"  ! 0-level title
+  Endif
+  Hit_points%=Hit_points%+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! add the constitution hit point adjustment
+  If Abilities%(Constitution%)=17  ! constitution 17
+    Add Hit_points%,1  ! one more hit point
+  Endif
+  If Abilities%(Constitution%)>=18  ! constitution 18 or more
+    Add Hit_points%,2  ! two more hit points
+  Endif
+  If Social_class%>=7 And Hit_points%<6  ! upper class with fewer than 6 hit points
+    Hit_points%=6  ! at least 6 hit points
+  Endif
+  If Social_class%<=6 And Hit_points%<3  ! lower class with fewer than 3 hit points
+    Hit_points%=3  ! at least 3 hit points
+  Endif
+  If Social_class%<=7  ! up to lower upper class
+    Purse%(Gold_piece%)=Fn Roll_two_dice(4)*10  ! starting gold 2d4 x 10
+  Endif
+  If Social_class%=7 Or Social_class%=8  ! lower or middle upper class
+    Purse%(Gold_piece%)=(Fn Roll_one_die(12)+6)*10  ! starting gold (1d12+6) x 10
+  Endif
+  If Social_class%=9  ! upper upper class
+    Purse%(Gold_piece%)=(Fn Roll_one_die(6)+12)*10  ! starting gold (1d6+12) x 10
+  Endif
+  Shields_bought%(Large_shield%)=1  ! every cavalier has a large shield
+  Weapons_owned%(Dagger%)=1  ! and a dagger
+  If Social_class%=9  ! upper upper class
+    Armour_owned%(Full_plate_mail%)=1  ! full plate mail
+    Weapons_owned%(Lance%)=1  ! lance
+    Weapons_owned%(Horsemans_mace%)=1  ! horseman's mace
+    Weapons_owned%(Long_sword%)=1  ! long sword
+    Animals_owned%(Heavy_war_horse%)=1  ! heavy war horse
+    Tack_bought%(Leather_barding%)=1  ! leather barding
+  Endif
+  If Social_class%=8  ! middle upper class
+    Armour_owned%(Field_plate%)=1  ! field plate
+    Animals_owned%(Heavy_war_horse%)=1  ! heavy war horse
+    Weapons_owned%(Horsemans_mace%)=1  ! horseman's mace
+    Weapons_owned%(Long_sword%)=1  ! long sword
+  Endif
+  If Social_class%=7  ! lower upper class
+    Armour_owned%(Plate_mail%)=1  ! plate mail
+    Weapons_owned%(Horsemans_mace%)=1  ! horseman's mace
+    Weapons_owned%(Long_sword%)=1  ! long sword
+    Animals_owned%(Medium_war_horse%)=1  ! medium war horse
+  Endif
+  If Social_class%=6  ! upper middle class
+    Armour_owned%(Chain_mail%)=1  ! chain mail
+    Weapons_owned%(Horsemans_mace%)=1  ! horseman's mace
+    Weapons_owned%(Long_sword%)=1  ! long sword
+    Animals_owned%(Light_war_horse%)=1  ! light war horse
+  Endif
+  If Social_class%<=5  ! middle middle class or below
+    Weapons_owned%(Broad_sword%)=1  ! broad sword
+    Animals_owned%(Light_riding_horse%)=1  ! light riding horse
+  Endif
+Return
+'
+' Class set-up for the cleric group (cleric or druid).
+' Sets the title Acolyte or Aspirant, rolls 1d8 hit points plus the constitution adjustment (minimum 5) and 3d6
+' x 10 gold.  The character gets one 1st-level spell, plus one for wisdom 13 and another for wisdom 14.  Shows
+' the class's spell list with key letters; the player picks a spell, confirms it, and says how many castings to
+' memorise until every slot in first_level_spells$() is filled.  Clears the screen at the end.
+Procedure Cleric_class_setup
+  Local First_lower_key%,Last_lower_key%,First_upper_key%,Last_upper_key%,Spell_list_length%  ! key ranges and the length of the spell list
+  First_lower_key%=97  ! lowest lower-case spell key: a
+  First_upper_key%=65  ! lowest upper-case spell key: A
+  If Character_class%=Cleric%  ! cleric
+    Level_title$="Acolyte"  ! 1st-level cleric title
+    Spell_list_length%=Cleric_spell_count%  ! list every cleric spell
+    Last_lower_key%=First_lower_key%-1+Cleric_spell_count%  ! last lower-case key
+    Last_upper_key%=First_upper_key%-1+Cleric_spell_count%  ! last upper-case key
+  Else  ! druid
+    Level_title$="Aspirant"  ! 1st-level druid title
+    Spell_list_length%=Druid_spell_count%  ! list every druid spell
+    Last_lower_key%=First_lower_key%-1+Druid_spell_count%
+    Last_upper_key%=First_upper_key%-1+Druid_spell_count%
+  Endif
+  For Loop_index%=1 To 4  ! four spell slots
+    First_level_spells$(Loop_index%)=""  ! empty the slot
+  Next Loop_index%
+  Hit_points%=Fn Roll_one_die(8)+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! 1d8 hit points plus the constitution adjustment
+  If Hit_points%<5  ! fewer than 5
+    Hit_points%=5  ! at least 5 hit points
+  Endif
+  Purse%(Gold_piece%)=Fn Roll_three_dice(6)*10  ! starting gold 3d6 x 10
+  Spells_to_choose%=1  ! one 1st-level spell
+  If Abilities%(Wisdom%)>=13  ! wisdom 13 or more
+    Inc Spells_to_choose%  ! bonus spell
+  Endif
+  If Abilities%(Wisdom%)>=14  ! wisdom 14 or more
+    Inc Spells_to_choose%  ! second bonus spell
+  Endif
+  Print At(20,2);"C H O O S E   Y O U R   S P E L L"  ! show the spell list
+  For Loop_index%=1 To Spell_list_length%  ! one line per spell
+    Print At(25,Loop_index%+4);Chr$(Loop_index%+64);". ";  ! its key letter
+    If Character_class%=Cleric%  ! cleric
+      Print Cleric_spells$(Loop_index%)  ! cleric spell name
+    Else  ! druid
+      Print Druid_spells$(Loop_index%)  ! druid spell name
+    Endif
+  Next Loop_index%
+  Loop_index%=1  ! first free spell slot
+  Text_position%=Spells_to_choose%  ! spells still to choose
+  While Text_position%>0  ! until every spell is chosen
+    Ask_for_spell:
+    Print At(23,3);"You have ";Text_position%;" spell";  ! show how many are left
+    If Text_position%=1  ! one left
+      Print " to choose. "
+    Else
+      Print "s to choose."
+    Endif
+    Do
+      Key_code%=Inp(2)  ! wait for a key
+      Exit If Fn Is_between(Key_code%,First_lower_key%,Last_lower_key%) Or Fn Is_between(Key_code%,First_upper_key%,Last_upper_key%)  ! a spell letter, lower or upper case
+    Loop
+    Chosen_spell%=Fn Letter_number(Key_code%)  ! turn the letter into the spell's number
+    Print At(20,Chosen_spell%+4);"->"  ! mark the spell
+    If Character_class%=Cleric%  ! cleric
+      Work_text$="You want your spell to be|"+Cleric_spells$(Chosen_spell%)+"?"  ! ask whether this is the spell wanted
+    Else  ! druid
+      Work_text$="You want your spell to be|"+Druid_spells$(Chosen_spell%)+"?"
+    Endif
+    Alert 2,Work_text$,0," YES | NO ",Alert_answer%  ! confirm the spell
+    If Alert_answer%=2  ! the player answered NO
+      Print At(20,Chosen_spell%+4);"  "  ! remove the mark
+      Goto Ask_for_spell  ! choose again
+    Endif
+    If Character_class%=Cleric%  ! cleric
+      Work_text$="How many castings of|"+Cleric_spells$(Chosen_spell%)+"|do you want?"  ! ask how many times it is memorised
+    Else  ! druid
+      Work_text$="How many castings of|"+Druid_spells$(Chosen_spell%)+"|do you want?"
+    Endif
+    If Text_position%=1  ! one spell left
+      Field_text$=" ONE "  ! buttons for one casting
+    Endif
+    If Text_position%=2  ! two left
+      Field_text$=" ONE | TWO "  ! buttons for one or two castings
+    Endif
+    If Text_position%=3  ! three left
+      Field_text$=" ONE | TWO | THREE "  ! buttons for up to three castings
+    Endif
+    Alert 2,Work_text$,0,Field_text$,Alert_answer%  ! the button number is the number of castings
+    For Inner_index%=1 To Alert_answer%  ! one slot per casting
+      If Character_class%=3  ! cleric (class 3)
+        First_level_spells$(Loop_index%)=Cleric_spells$(Chosen_spell%)  ! store the cleric spell
+      Else
+        First_level_spells$(Loop_index%)=Druid_spells$(Chosen_spell%)  ! store the druid spell
+      Endif
+      Inc Loop_index%  ! next free slot
+    Next Inner_index%
+    Print At(20,Chosen_spell%+4);"  "  ! remove the mark
+    Text_position%=Text_position%-Alert_answer%  ! fewer spells left to choose
+    Print At(32,3);Text_position%  ! update the count on screen
+  Wend
+  Cls
+Return
+'
+' Class set-up for the fighter group: fighter (1d10 hit points, Veteran), barbarian (1d12, Barbarian) or ranger
+' (2d8, Runner).
+' Adds +1 hit point for constitution 17, +2 for 18 or more, then the constitution adjustment; minimum hit points
+' 6, 7 and 9.  Starting gold 5d4 x 10.
+Procedure Fighter_class_setup
+  If Character_class%=Fighter%  ! fighter
+    Hit_points%=Fn Roll_one_die(10)  ! 1d10 hit points
+    Level_title$="Veteran"  ! 1st-level fighter title
+  Endif
+  If Character_class%=Barbarian%  ! barbarian
+    Hit_points%=Fn Roll_one_die(12)  ! 1d12 hit points
+    Level_title$="Barbarian"  ! 1st-level barbarian title
+  Endif
+  If Character_class%=Ranger%  ! ranger
+    Hit_points%=Fn Roll_two_dice(8)  ! 2d8 hit points
+    Level_title$="Runner"  ! 1st-level ranger title
+  Endif
+  If Abilities%(Constitution%)=17  ! constitution 17
+    Add Hit_points%,1  ! one more hit point
+  Endif
+  If Abilities%(Constitution%)>=18  ! constitution 18 or more
+    Add Hit_points%,2  ! two more hit points
+  Endif
+  Hit_points%=Hit_points%+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! add the constitution hit point adjustment
+  If Character_class%=Fighter% And Hit_points%<6  ! a fighter has at least 6 hit points
+    Hit_points%=6
+  Endif
+  If Character_class%=Barbarian% And Hit_points%<7  ! a barbarian has at least 7
+    Hit_points%=7
+  Endif
+  If Character_class%=Ranger% And Hit_points%<9  ! a ranger has at least 9
+    Hit_points%=9
+  Endif
+  Purse%(Gold_piece%)=Fn Roll_five_dice(4)*10  ! starting gold 5d4 x 10
+Return
+'
+' Class set-up for the magic-user group (magic-user or illusionist).
+' Title Prestidigitator, 1d4 hit points plus the constitution adjustment (minimum 3), 2d4 x 10 gold and four
+' 1st-level spells in first_level_spells$().  A magic-user knows Read Magic and rolls 1d12 on each of the three
+' spell tables in magic_user_spells$(); a 12 lets the player choose from the table's eleven spells.  An
+' illusionist knows Read Illusionist Magic and rolls 1d6 on each table in illusionist_spells$(); a roll past the
+' table's spells lets the player choose.  Each choice is shown, picked by letter and confirmed.
+Procedure Magic_user_class_setup
+  Local First_lower_key%,Last_lower_key%,First_upper_key%,Last_upper_key%  ! spell key ranges
+  First_lower_key%=97  ! lowest lower-case key: a
+  Last_lower_key%=First_lower_key%-1+6-(Character_class%=Magic_user%)*5  ! last lower-case key: k for a magic-user (11 spells), f for an illusionist
+  First_upper_key%=65  ! lowest upper-case key: A
+  Last_upper_key%=First_upper_key%-1+6-(Character_class%=Magic_user%)*5  ! last upper-case key
+  Level_title$="Prestidigitator"  ! 1st-level magic-user and illusionist title
+  For Loop_index%=1 To 4  ! four spell slots
+    First_level_spells$(Loop_index%)=""  ! empty the slot
+  Next Loop_index%
+  Hit_points%=Fn Roll_one_die(4)+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! 1d4 hit points plus the constitution adjustment
+  If Hit_points%<3  ! fewer than 3
+    Hit_points%=3  ! at least 3 hit points
+  Endif
+  Purse%(Gold_piece%)=Fn Roll_two_dice(4)*10  ! starting gold 2d4 x 10
+  Spells_to_choose%=4  ! four 1st-level spells
+  If Character_class%=Magic_user%  ! magic-user
+    First_level_spells$(1)="Read Magic"  ! every magic-user knows Read Magic
+    For Loop_index%=1 To 3  ! one spell from each of the three tables
+      Inner_index%=Fn Roll_one_die(12)  ! roll on the table
+      If Inner_index%<>12  ! not a 12
+        First_level_spells$(Loop_index%+1)=Magic_user_spells$(Inner_index%,Loop_index%)  ! the rolled spell
+      Else  ! a 12: the player chooses
+        Print At(20,2);"C H O O S E   Y O U R   S P E L L"
+        For Inner_index%=1 To 11  ! list the table's eleven spells
+          Print At(25,Inner_index%+3);Chr$(Inner_index%+64);". ";Magic_user_spells$(Inner_index%,Loop_index%)
+        Next Inner_index%
+        Magic_user_key:
+        Do
+          Key_code%=Inp(2)  ! wait for a key
+          Exit If Fn Is_between(Key_code%,First_lower_key%,Last_lower_key%) Or Fn Is_between(Key_code%,First_upper_key%,Last_upper_key%)  ! a spell letter, lower or upper case
+        Loop
+        Chosen_spell%=Fn Letter_number(Key_code%)  ! turn the letter into the spell's number
+        Print At(20,Chosen_spell%+3);"->"  ! mark the spell
+        Work_text$="You want your spell to|be "+Magic_user_spells$(Chosen_spell%,Loop_index%)+"?"  ! ask whether this is the spell wanted
+        Void Fre(0)
+        Alert 2,Work_text$,0," YES | NO ",Alert_answer%  ! confirm the spell
+        If Alert_answer%=2  ! the player answered NO
+          Print At(20,Chosen_spell%+3);"  "  ! remove the mark
+          Goto Magic_user_key  ! choose again
+        Endif
+        First_level_spells$(Loop_index%+1)=Magic_user_spells$(Chosen_spell%,Loop_index%)  ! store the chosen spell
+        Cls
+      Endif
+    Next Loop_index%
+  Endif
+  If Character_class%=Class_illusionist%  ! illusionist
+    First_level_spells$(1)="Read Illusionist Magic"  ! every illusionist knows Read Illusionist Magic
+    For Loop_index%=1 To 3  ! one spell from each of the three tables
+      Inner_index%=Fn Roll_one_die(6)  ! roll on the table
+      If Loop_index%<=2 And Inner_index%<=5 Or (Loop_index%=3 And Inner_index%<=4)  ! a spell on the table (tables 1 and 2 have 5 spells, table 3 has 4)
+        First_level_spells$(Loop_index%+1)=Illusionist_spells$(Inner_index%,Loop_index%)  ! the rolled spell
+      Else  ! otherwise the player chooses
+        Print At(20,2);"C H O O S E   Y O U R   S P E L L"
+        For Inner_index%=1 To (Loop_index%=3)+5  ! list the table's spells (4 on table 3, 5 otherwise)
+          Print At(25,Inner_index%+3);Chr$(Inner_index%+64);". ";
+          If Loop_index%=3 And Inner_index%=6  ! sixth entry of table 3
+            Print Illusionist_spells$(Inner_index%,1)
+          Else
+            Print Illusionist_spells$(Inner_index%,Loop_index%)
+          Endif
+        Next Inner_index%
+        Illusionist_key:
+        Do
+          Key_code%=Inp(2)  ! wait for a key
+          Exit If Fn Is_between(Key_code%,First_lower_key%,Last_lower_key%) Or Fn Is_between(Key_code%,First_upper_key%,Last_upper_key%)  ! a spell letter, lower or upper case
+        Loop
+        If Loop_index%=3 And (Key_code%=101 Or Key_code%=69)  ! table 3 has no spell E
+          Goto Illusionist_key  ! ignore the key
+        Endif
+        Chosen_spell%=Fn Letter_number(Key_code%)  ! turn the letter into the spell's number
+        Print At(20,Chosen_spell%+3);"->"  ! mark the spell
+        Work_text$="You want your spell to|be "+Illusionist_spells$(Chosen_spell%,Loop_index%)+"?"  ! ask whether this is the spell wanted
+        Void Fre(0)
+        Alert 2,Work_text$,0," YES | NO ",Alert_answer%  ! confirm the spell
+        If Alert_answer%=2  ! the player answered NO
+          Print At(20,Chosen_spell%+3);"  "  ! remove the mark
+          Goto Illusionist_key  ! choose again
+        Endif
+        First_level_spells$(Loop_index%+1)=Illusionist_spells$(Chosen_spell%,Loop_index%)  ! store the chosen spell
+        Cls
+      Endif
+    Next Loop_index%
+  Endif
+  Void Fre(0)
+  Cls
+Return
+'
+' Class set-up for the thief group (thief or assassin).
+' Title Rogue or Bravo, 1d6 hit points plus the constitution adjustment (minimum 4), 2d6 x 10 gold.  Works out
+' the thief skills in thief_skills%(): the base percentages, the dexterity adjustments from
+' thief_dexterity_table%() for dexterity 9 to 18, then the racial adjustments.
+Procedure Thief_class_setup
+  If Character_class%=Thief%  ! thief
+    Level_title$="Rogue"  ! 1st-level thief title
+  Else  ! assassin
+    Level_title$="Bravo"  ! 1st-level assassin title
+  Endif
+  Hit_points%=Fn Roll_one_die(6)+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! 1d6 hit points plus the constitution adjustment
+  If Hit_points%<4  ! fewer than 4
+    Hit_points%=4  ! at least 4 hit points
+  Endif
+  Purse%(Gold_piece%)=Fn Roll_two_dice(6)*10  ! starting gold 2d6 x 10
+  Arrayfill Thief_skills%(),0  ! clear the thief skills
+  Ability_row%=Abilities%(Dexterity%)-8  ! row of the dexterity adjustment table (dexterity 9 is row 1)
+  If Ability_row%>10  ! past dexterity 18
+    Ability_row%=10  ! use the last row
+  Endif
+  Thief_skills%(Pick_pockets%)=Thief_dexterity_table%(Ability_row%,1)+30  ! pick pockets: 30% plus the dexterity adjustment
+  Thief_skills%(Open_locks%)=Thief_dexterity_table%(Ability_row%,2)+25  ! open locks: 25% plus the dexterity adjustment
+  Thief_skills%(Find_traps%)=Thief_dexterity_table%(Ability_row%,3)+20  ! find and remove traps: 20% plus the dexterity adjustment
+  Thief_skills%(Move_silently%)=Thief_dexterity_table%(Ability_row%,4)+15  ! move silently: 15% plus the dexterity adjustment
+  Thief_skills%(Hide_in_shadows%)=Thief_dexterity_table%(Ability_row%,5)+10  ! hide in shadows: 10% plus the dexterity adjustment
+  Thief_skills%(Hear_noise%)=10  ! hear noise: 10%
+  Thief_skills%(Climb_walls%)=85  ! climb walls: 85%
+  Thief_skills%(Read_languages%)=0  ! read languages: 0%
+  If Race_group%=Dwarf%  ! dwarf
+    Add Thief_skills%(Open_locks%),10
+    Add Thief_skills%(Find_traps%),15
+    Sub Thief_skills%(Climb_walls%),10
+    Sub Thief_skills%(Read_languages%),5
+  Endif
+  If Race_group%=Elf%  ! elf
+    Add Thief_skills%(Pick_pockets%),5
+    Sub Thief_skills%(Open_locks%),5
+    Add Thief_skills%(Move_silently%),5
+    Add Thief_skills%(Hide_in_shadows%),10
+    Add Thief_skills%(Hear_noise%),5
+  Endif
+  If Race_group%=Gnome%  ! gnome
+    Add Thief_skills%(Open_locks%),5
+    Add Thief_skills%(Find_traps%),10
+    Add Thief_skills%(Move_silently%),5
+    Add Thief_skills%(Hide_in_shadows%),5
+    Add Thief_skills%(Hear_noise%),10
+    Sub Thief_skills%(Climb_walls%),15
+  Endif
+  If Race_group%=Half_elf%  ! half-elf
+    Add Thief_skills%(Pick_pockets%),10
+    Add Thief_skills%(Find_traps%),15
+    Add Thief_skills%(Hide_in_shadows%),5
+  Endif
+  If Race_group%=Halfling%  ! halfling
+    Add Thief_skills%(Pick_pockets%),5
+    Add Thief_skills%(Open_locks%),5
+    Add Thief_skills%(Find_traps%),5
+    Add Thief_skills%(Move_silently%),10
+    Add Thief_skills%(Hide_in_shadows%),15
+    Add Thief_skills%(Hear_noise%),5
+    Sub Thief_skills%(Climb_walls%),15
+    Sub Thief_skills%(Read_languages%),5
+  Endif
+  If Race_group%=Half_orc%  ! half-orc
+    Sub Thief_skills%(Pick_pockets%),5
+    Add Thief_skills%(Open_locks%),5
+    Add Thief_skills%(Find_traps%),5
+    Add Thief_skills%(Hear_noise%),5
+    Add Thief_skills%(Climb_walls%),5
+    Sub Thief_skills%(Read_languages%),10
+  Endif
+Return
+'
+' Sets up a Monk (class group 6): the level title "Novice" in level_title$, hit points 2d4 plus the constitution
+' bonus (at least 5) in hit_points%, 5d4 gold pieces in purse%, and the thief skills in thief_skills%: pick
+' pockets, open locks, find/remove traps, move silently and hide in shadows get the first level thief
+' percentages plus the dexterity adjustment from thief_dexterity_table%, hear noise is 10%, climb walls 85% and
+' read languages 0.
+' The sixth entry of the On class_group% Gosub table at $050e8 holds 0, not this procedure.
+Procedure Set_up_monk
+  Local Ability_row%  ! ability_row% is the row of the dexterity adjustment table
+  Level_title$="Novice"  ! the monk's first level title
+  Hit_points%=Fn Roll_two_dice(4)+Constitution_table%(Fn Ability_table_row(Constitution%),1)  ! hit points: 2d4 plus the constitution bonus from constitution_table%
+  If Hit_points%<5  ! never fewer than 5 hit points
+    Hit_points%=5
+  Endif
+  Purse%(Gold_piece%)=Fn Roll_five_dice(4)  ! the monk starts with 5d4 gold pieces
+  Arrayfill Thief_skills%(),0  ! clear the thief skill percentages
+  Ability_row%=Abilities%(Dexterity%)-8  ! dexterity table row: dexterity less 8
+  If Ability_row%>10  ! the table stops at dexterity 18
+    Ability_row%=10
+  Endif
+  Thief_skills%(Pick_pockets%)=Thief_dexterity_table%(Ability_row%,1)+30  ! pick pockets: 30% plus the dexterity adjustment
+  Thief_skills%(Open_locks%)=Thief_dexterity_table%(Ability_row%,2)+25  ! open locks: 25% plus the dexterity adjustment
+  Thief_skills%(Find_traps%)=Thief_dexterity_table%(Ability_row%,3)+20  ! find/remove traps: 20% plus the dexterity adjustment
+  Thief_skills%(Move_silently%)=Thief_dexterity_table%(Ability_row%,4)+15  ! move silently: 15% plus the dexterity adjustment
+  Thief_skills%(Hide_in_shadows%)=Thief_dexterity_table%(Ability_row%,5)+10  ! hide in shadows: 10% plus the dexterity adjustment
+  Thief_skills%(Hear_noise%)=10  ! hear noise: 10%
+  Thief_skills%(Climb_walls%)=85  ! climb walls: 85%
+  Thief_skills%(Read_languages%)=0  ! read languages: none
+Return
+'
+' Lets the player choose the character's alignment.  A Druid (character_class%=class_druid%) is always True
+' Neutral and is not asked.  Otherwise the alignments the class allows (alignment_allowed!(alignment,class)) are
+' listed with the letters A-I; the player presses a letter of an allowed alignment, which is marked with "->"
+' and confirmed with an alert; NO goes back to the key.  Sets alignment% and clears the screen.
+Procedure Choose_alignment
+  Local First_lower_key%,Last_lower_key%,First_upper_key%,Last_upper_key%  ! the key ranges a-i and A-I for the nine alignments
+  First_lower_key%=97  ! first lower case key: a
+  Last_lower_key%=105  ! last lower case key: i
+  First_upper_key%=65  ! first capital key: A
+  Last_upper_key%=73  ! last capital key: I
+  If Character_class%=Class_druid%  ! the character is a Druid
+    Alignment%=True_neutral%  ! a Druid must be True Neutral
+  Else
+    Print At(20,2);"C H O O S E   Y O U R   A L I G N M E N T"
+    For Loop_index%=1 To 9  ! the nine alignments
+      If Alignment_allowed!(Loop_index%,Character_class%)  ! the alignment is allowed for the character's class
+        Print At(25,Loop_index%+3);Chr$(Loop_index%+64);". ";Alignment_names$(Loop_index%)  ! show it with its key letter
+      Endif
+    Next Loop_index%
+    Read_alignment_key:
+    Repeat
+      Do
+        Key_code%=Inp(2)  ! wait for a key
+        Exit If Fn Is_between(Key_code%,First_lower_key%,Last_lower_key%) Or Fn Is_between(Key_code%,First_upper_key%,Last_upper_key%)  ! a letter a-i or A-I was pressed
+      Loop
+      Alignment%=Fn Letter_number(Key_code%)  ! the alignment number of the letter
+    Until Alignment_allowed!(Alignment%,Character_class%)  ! ask again until an alignment the class allows is chosen
+    Print At(20,Alignment%+3);"->"  ! point at the chosen alignment
+    Work_text$="You want your character|to be "+Alignment_names$(Alignment%)+"?"  ! ask the player to confirm the alignment
+    Void Fre(0)
+    Alert 2,Work_text$,0," YES | NO ",Alert_answer%
+    If Alert_answer%=2  ! the player answered NO
+      Print At(20,Alignment%+3);"  "  ! remove the pointer
+      Goto Read_alignment_key  ! choose again
+    Endif
+  Endif
+  Cls
+Return
+'
+' The equipment store, shown when the player keeps the character.  Lists the twelve price lists of
+' store_category_names$ and LEAVE STORE with the letters A-M.  The chosen category (store_category%) is marked
+' and confirmed; its names, prices, owned counts and (for armor, shields and weapons) class usability tables are
+' swapped into the current price list price_list_names$/price_list_prices%/price_list_owned%/price_list_usable!,
+' buy_from_price_list is called with the item count and the column heading, and the tables are swapped back.
+' LEAVE STORE asks once more, since the store cannot be visited again, and returns.
+Procedure Visit_equipment_store
+  Cls
+  Show_store_menu:
+  Print At(20,2);"P U R C H A S E   Y O U R   E Q U I P M E N T"
+  For Loop_index%=1 To 13  ! the twelve price lists and LEAVE STORE
+    Print At(20,Loop_index%+3-(Loop_index%=13));Chr$(Loop_index%+64);". ";Store_category_names$(Loop_index%)  ! show each category with its letter; LEAVE STORE is one row higher
+  Next Loop_index%
+  Print At(10,21);"For Armor, Shields, Hand-to-Hand Weapons and Missile Weapons"  ! explain the '*' marks on items the class cannot use
+  Print At(10,22);"an '*' before the name means that you CANNOT use that item!."
+  Print At(13,24);"Press the SPACE BAR to exit any of the following menus"  ! and how to leave a price list
+  Print At(13,25);"            without making a selection.";
+  Read_category_key:
+  Do
+    Key_code%=Inp(2)  ! wait for a key
+    Exit If Fn Is_between(Key_code%,97,109) Or Fn Is_between(Key_code%,65,77)  ! a letter a-m or A-M was pressed
+  Loop
+  Store_category%=Fn Letter_number(Key_code%)  ! the category number of the letter
+  If Store_category%=13  ! LEAVE STORE was chosen
+    Work_text$="Are you sure you want to|leave the store?|"  ! ask the player to confirm leaving the store for good
+    Work_text$=Work_text$+"You can't return if you do!"
+    Alert 3,Work_text$,0," YES | NO ",Alert_answer%
+    If Alert_answer%=2  ! the player answered NO
+      Goto Read_category_key  ! back to the category keys
+      Goto Confirm_category
+    Endif
+  Else
+    Confirm_category:
+    Print At(15,Store_category%+3);"->"  ! point at the chosen category
+    Work_text$="You want your character to  |purchase something from the  |"  ! ask the player to confirm the category
+    Work_text$=Work_text$+Store_category_names$(Store_category%)+" list?"
+    Void Fre(0)
+    Alert 0,Work_text$,1," YES | NO ",Alert_answer%
+    If Alert_answer%=2  ! the player answered NO
+      Print At(15,Store_category%+3);"  "  ! remove the pointer
+      Goto Read_category_key  ! back to the category keys
+    Endif
+    Cls
+    If Store_category%=1  ! Armor
+      Swap Price_list_names$(),Armor_names$()  ! make the armor list the current price list (names, prices, owned, usable)
+      Swap Price_list_prices%(),Armor_prices%()
+      Swap Price_list_owned%(),Armour_owned%()
+      Swap Price_list_usable!(),Armor_usable!()
+      @Buy_from_price_list(Armor_count%,"ID   Type of Armor or Helmet")  ! buy from the armor list
+      Swap Armor_names$(),Price_list_names$()  ! put the armor list back
+      Swap Armor_prices%(),Price_list_prices%()
+      Swap Armour_owned%(),Price_list_owned%()
+      Swap Armor_usable!(),Price_list_usable!()
+    Endif
+    If Store_category%=2  ! Shields
+      Swap Price_list_names$(),Shield_names$()  ! make the shield list the current price list
+      Swap Price_list_prices%(),Shield_prices%()
+      Swap Price_list_owned%(),Shields_bought%()
+      Swap Price_list_usable!(),Shield_usable!()
+      @Buy_from_price_list(Shield_count%,"ID   Type of Shield")  ! buy from the shield list
+      Swap Shield_names$(),Price_list_names$()  ! put the shield list back
+      Swap Shield_prices%(),Price_list_prices%()
+      Swap Shields_bought%(),Price_list_owned%()
+      Swap Shield_usable!(),Price_list_usable!()
+    Endif
+    If Store_category%=3  ! Hand-to-Hand Weapons
+      Swap Price_list_names$(),Melee_weapon_names$()  ! make the hand weapon list the current price list
+      Swap Price_list_prices%(),Hand_weapon_prices%()
+      Swap Price_list_owned%(),Weapons_owned%()
+      Swap Price_list_usable!(),Hand_weapon_usable!()
+      @Buy_from_price_list(Melee_weapon_count%,"ID   Type of Hand Weapon")  ! buy from the hand weapon list
+      Swap Melee_weapon_names$(),Price_list_names$()  ! put the hand weapon list back
+      Swap Hand_weapon_prices%(),Price_list_prices%()
+      Swap Weapons_owned%(),Price_list_owned%()
+      Swap Hand_weapon_usable!(),Price_list_usable!()
+    Endif
+    If Store_category%=4  ! Missile Weapons
+      Swap Price_list_names$(),Missile_weapon_names$()  ! make the missile weapon list the current price list
+      Swap Price_list_prices%(),Missile_weapon_prices%()
+      Swap Price_list_owned%(),Missile_weapons_bought%()
+      Swap Price_list_usable!(),Missile_weapon_usable!()
+      @Buy_from_price_list(Missile_weapon_count%,"ID   Type of Missile Weapon")  ! buy from the missile weapon list
+      Swap Missile_weapon_names$(),Price_list_names$()  ! put the missile weapon list back
+      Swap Missile_weapon_prices%(),Price_list_prices%()
+      Swap Missile_weapons_bought%(),Price_list_owned%()
+      Swap Missile_weapon_usable!(),Price_list_usable!()
+    Endif
+    If Store_category%=5  ! Clothing
+      Swap Price_list_names$(),Clothing_names$()  ! make the clothing list the current price list; every class can use clothing
+      Swap Price_list_prices%(),Clothing_prices%()
+      Swap Price_list_owned%(),Clothing_bought%()
+      @Buy_from_price_list(Clothing_count%,"ID   Type of Clothing")  ! buy from the clothing list
+      Swap Clothing_names$(),Price_list_names$()  ! put the clothing list back
+      Swap Clothing_prices%(),Price_list_prices%()
+      Swap Clothing_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=6  ! Herbs
+      Swap Price_list_names$(),Herb_names$()  ! make the herb list the current price list
+      Swap Price_list_prices%(),Herb_prices%()
+      Swap Price_list_owned%(),Herbs_bought%()
+      @Buy_from_price_list(Herb_count%,"ID   Type of Herbs")  ! buy from the herb list
+      Swap Herb_names$(),Price_list_names$()  ! put the herb list back
+      Swap Herb_prices%(),Price_list_prices%()
+      Swap Herbs_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=7  ! Livestock
+      Swap Price_list_names$(),Livestock_names$()  ! make the livestock list the current price list
+      Swap Price_list_prices%(),Livestock_prices%()
+      Swap Price_list_owned%(),Animals_owned%()
+      @Buy_from_price_list(Livestock_count%,"ID   Type of Livestock")  ! buy from the livestock list
+      Swap Livestock_names$(),Price_list_names$()  ! put the livestock list back
+      Swap Livestock_prices%(),Price_list_prices%()
+      Swap Animals_owned%(),Price_list_owned%()
+    Endif
+    If Store_category%=8  ! Miscellaneous Equipment
+      Swap Price_list_names$(),Misc_equipment_names$()  ! make the miscellaneous equipment list the current price list
+      Swap Price_list_prices%(),Misc_equipment_prices%()
+      Swap Price_list_owned%(),Misc_equipment_bought%()
+      @Buy_from_price_list(Misc_equipment_count%,"ID   Miscellaneous Equipment")  ! buy from the miscellaneous equipment list
+      Swap Misc_equipment_names$(),Price_list_names$()  ! put the miscellaneous equipment list back
+      Swap Misc_equipment_prices%(),Price_list_prices%()
+      Swap Misc_equipment_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=9  ! Provisions
+      Swap Price_list_names$(),Provision_names$()  ! make the provision list the current price list
+      Swap Price_list_prices%(),Provision_prices%()
+      Swap Price_list_owned%(),Provisions_bought%()
+      @Buy_from_price_list(Provision_count%,"ID   Type of Provisions")  ! buy from the provision list
+      Swap Provision_names$(),Price_list_names$()  ! put the provision list back
+      Swap Provision_prices%(),Price_list_prices%()
+      Swap Provisions_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=10  ! Religious Items
+      Swap Price_list_names$(),Religious_item_names$()  ! make the religious item list the current price list
+      Swap Price_list_prices%(),Religious_item_prices%()
+      Swap Price_list_owned%(),Religious_items_bought%()
+      @Buy_from_price_list(Religious_item_count%,"ID   Type of Religious Item")  ! buy from the religious item list
+      Swap Religious_item_names$(),Price_list_names$()  ! put the religious item list back
+      Swap Religious_item_prices%(),Price_list_prices%()
+      Swap Religious_items_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=11  ! Tack and Harness
+      Swap Price_list_names$(),Tack_names$()  ! make the tack and harness list the current price list
+      Swap Price_list_prices%(),Tack_and_harness_prices%()
+      Swap Price_list_owned%(),Tack_bought%()
+      @Buy_from_price_list(Tack_count%,"ID   Type of Tack and Harness")  ! buy from the tack and harness list
+      Swap Tack_names$(),Price_list_names$()  ! put the tack and harness list back
+      Swap Tack_and_harness_prices%(),Price_list_prices%()
+      Swap Tack_bought%(),Price_list_owned%()
+    Endif
+    If Store_category%=12  ! Transport
+      Swap Price_list_names$(),Transport_names$()  ! make the transport list the current price list
+      Swap Price_list_prices%(),Transport_prices%()
+      Swap Price_list_owned%(),Transport_bought%()
+      @Buy_from_price_list(Transport_count%,"ID   Type of Transport")  ! buy from the transport list
+      Swap Transport_names$(),Price_list_names$()  ! put the transport list back
+      Swap Transport_prices%(),Price_list_prices%()
+      Swap Transport_bought%(),Price_list_owned%()
+    Endif
+    Goto Show_store_menu  ! show the store menu again
+  Endif
+  Cls
+Return
+'
+' Buys items from the current price list (price_list_names$ names, price_list_prices%(item,coin) prices,
+' price_list_owned% owned, price_list_usable!(item,class) usable).  price_list_length% is the number of items,
+' field_text$ the column heading.
+' Shows up to 20 items a page with their letters, a '*' before items the class cannot use (only for the first
+' four categories), the price in gold, electrum, silver or copper, the number owned and the character's money
+' (purse%) on the bottom line.  Lists longer than 21 items are split into pages chosen with the keys 1-n.  SPACE
+' leaves.
+' After the item is confirmed and the number (1, 2 or 5) chosen, the price price_to_pay% is paid from the coin
+' it is in, changing larger coins into smaller ones when that coin runs out (1 gold = 2 electrum, 1 electrum =
+' 10 silver, 1 silver = 10 copper).  If the character cannot pay, RETRY or QUIT is offered; otherwise the item
+' count is raised and the player may buy another item.
+Procedure Buy_from_price_list(Price_list_length%,Field_text$)
+  Local Blank_item_area$,First_page_key%,Last_page_key%,First_lower_key%,Last_lower_key%,First_upper_key%,Last_upper_key%,Chosen_row%,First_item_on_page%,Last_item_on_page%,Last_page_offset%,Current_page%,Page_count%,Item_row%,Page_key_pressed!
+  First_lower_key%=97  ! first lower case item key: a
+  First_upper_key%=65  ! first capital item key: A
+  Blank_item_area$=String$(1600," ")  ! spaces to clear the item rows when the page changes
+  Current_page%=0  ! start on the first page
+  If Price_list_length%<=21  ! the whole list fits on one page
+    Page_count%=1  ! one page
+    Last_upper_key%=Price_list_length%+96  ! last key (the lower and capital ends are swapped here, so capitals up to the item count plus 32 pass)
+    Last_lower_key%=Price_list_length%+64
+    Goto Show_page  ! show the page
+  Endif
+  Page_count%=Abs(Int(Price_list_length%/-20))  ! number of pages of 20 items, rounded up
+  Last_page_offset%=Price_list_length%-(Page_count%-1)*20-1  ! offset of the last item on the last page
+  Last_upper_key%=117  ! last lower case key: u
+  Last_lower_key%=85  ! last capital key: U
+  First_page_key%=49  ! first page key: 1
+  Last_page_key%=Page_count%+48  ! last page key: the digit of the page count
+  Show_page:
+  If Page_count%>1  ! the list has several pages
+    First_item_on_page%=Current_page%*20+1  ! first item on the current page
+    If Current_page%=Page_count%-1  ! the current page is the last one
+      Last_item_on_page%=First_item_on_page%+Last_page_offset%  ! last item on the last page
+      Last_lower_key%=First_lower_key%+Last_page_offset%  ! last lower case key on this page
+      Last_upper_key%=First_upper_key%+Last_page_offset%  ! last capital key on this page
+    Else
+      Last_item_on_page%=First_item_on_page%+19  ! a full page of 20 items
+      Last_lower_key%=First_lower_key%+19
+      Last_upper_key%=First_upper_key%+19
+    Endif
+  Else
+    First_item_on_page%=1  ! one page: from the first item
+    Last_item_on_page%=Price_list_length%  ! to the last
+  Endif
+  Print At(4,1);Field_text$;At(35,1);"Gold    Electrum   Silver    Copper    Owned"  ! the list heading and the coin columns
+  Item_row%=1  ! first item row
+  For Loop_index%=First_item_on_page% To Last_item_on_page%  ! the items on this page
+    Print At(4,Item_row%+2);Chr$(Item_row%+64);".   ";Price_list_names$(Loop_index%)  ! the item with its key letter
+    If Store_category%<5  ! armor, shields and weapons depend on the class
+      If Not Price_list_usable!(Loop_index%,Character_class%)  ! the class cannot use this item
+        Print At(7,Item_row%+2);"*"  ! mark it with '*'
+      Endif
+    Endif
+    For Inner_index%=Gold_piece% To Copper_piece%  ! the four coins
+      If Price_list_prices%(Loop_index%,Inner_index%)>0  ! the item has a price in this coin
+        Print At(Fn Right_align_column(Inner_index%*10+29,Price_list_prices%(Loop_index%,Inner_index%)),Item_row%+2);  ! right-align the price in the coin column
+        Print Price_list_prices%(Loop_index%,Inner_index%)
+      Else
+        Print At(Inner_index%*10+28,Item_row%+2);"."  ! no price in this coin
+      Endif
+    Next Inner_index%
+    Inc Item_row%  ! next row
+  Next Loop_index%
+  Print_owned:
+  Item_row%=1  ! first item row
+  For Loop_index%=First_item_on_page% To Last_item_on_page%  ! the items on this page
+    If Price_list_owned%(Loop_index%)>0  ! the character owns some of this item
+      Print At(Fn Right_align_column(79,Price_list_owned%(Loop_index%)),Item_row%+2);Price_list_owned%(Loop_index%)  ! right-align the number owned
+    Else
+      Print At(78,Item_row%+2);"."  ! none owned
+    Endif
+    Inc Item_row%
+  Next Loop_index%
+  If Page_count%>1  ! the list has several pages
+    Print At(1,24);"This catagory has ";Page_count%;" pages. Press the number ";  ! explain the page keys
+    Print "keys 1-";Page_count%;" to select. Now on page ";Current_page%+1;"."
+  Endif
+  For Loop_index%=Gold_piece% To Copper_piece%  ! show the character's money in each coin
+    Inner_index%=(Loop_index%-1)*20+1  ! column of this coin
+    Print At(Inner_index%,25);Coin_names$(Loop_index%);At(Inner_index%+9,25);":     ";
+    Print At(Fn Right_align_column(Inner_index%+14,Purse%(Loop_index%)),25);Purse%(Loop_index%);  ! right-align the coins owned
+  Next Loop_index%
+  Repeat
+    Key_code%=Inp(2)  ! wait for a key
+    Clr Page_key_pressed!  ! no page key yet
+    If Fn Is_between(Key_code%,First_lower_key%,Last_lower_key%) Or Fn Is_between(Key_code%,First_upper_key%,Last_upper_key%)  ! an item letter on this page
+      Key_accepted!=-1  ! accept the key
+      Goto Key_checked
+    Endif
+    If Fn Is_between(Key_code%,First_page_key%,Last_page_key%) And Page_count%>1  ! a page number key, and the list has several pages
+      Page_key_pressed!=-1  ! a page key
+      Key_accepted!=-1  ! accept the key
+      Goto Key_checked
+    Endif
+    If Key_code%=32  ! SPACE leaves the list
+      Key_accepted!=-1  ! accept the key
+      Goto Key_checked
+    Endif
+    Clr Key_accepted!  ! any other key is refused
+    Key_checked:
+  Until Key_accepted!  ! until an accepted key
+  If Key_code%=32  ! SPACE was pressed
+    Goto Leave_price_list  ! leave the list without buying
+  Endif
+  If Page_count%>1 And Page_key_pressed!  ! a page key was pressed
+    Current_page%=Key_code%-49  ! the page chosen, counted from 0
+    Print At(1,3);Blank_item_area$;  ! clear the item rows
+    Goto Show_page  ! show the new page
+  Endif
+  Chosen_row%=Fn Letter_number(Key_code%)  ! the row of the item letter
+  Print At(1,Chosen_row%+2);"->"  ! point at the item
+  Work_text$="The item requested was a|"+Price_list_names$(Fn Page_item(Chosen_row%,Current_page%))+"."  ! ask the player to confirm the item
+  Work_text$=Work_text$+"|Is this what you wanted?"
+  Alert 0,Work_text$,0," YES | NO ",Alert_answer%
+  If Alert_answer%=2  ! the player answered NO
+    Print At(1,Chosen_row%+2);"  "  ! remove the pointer
+    Goto Print_owned  ! choose again
+  Endif
+  Arrayfill Price_to_pay%(),0  ! nothing to pay yet
+  Alert 0,"How many of these do you want?| ",1," 1 | 2 | 5 ",Inner_count%  ! ask how many to buy
+  If Inner_count%=3  ! the third button buys 5
+    Inner_count%=5
+  Endif
+  For Loop_index%=Gold_piece% To Copper_piece%  ! the price in each coin
+    Price_to_pay%(Loop_index%)=Price_list_prices%(Fn Page_item(Chosen_row%,Current_page%),Loop_index%)*Inner_count%  ! the item's price in this coin times the number bought
+  Next Loop_index%
+  Pay_in_copper:
+  If Price_to_pay%(Copper_piece%)=0  ! nothing to pay in copper
+    Goto Pay_in_silver  ! pay in silver
+  Endif
+  If Price_to_pay%(Copper_piece%)>0 And Purse%(Copper_piece%)>=Price_to_pay%(Copper_piece%)  ! copper owed and the purse has enough copper
+    Purse%(Copper_piece%)=Purse%(Copper_piece%)-Price_to_pay%(Copper_piece%)  ! pay the copper
+    Goto Item_bought  ! the item is bought
+    Goto Pay_in_silver
+  Endif
+  If Purse%(Silver_piece%)>0  ! a silver piece is left
+    Dec Purse%(Silver_piece%)  ! change a silver piece
+    Add Purse%(Copper_piece%),10  ! into 10 copper pieces
+    Goto Retry_copper  ! try the copper again
+  Endif
+  If Purse%(Silver_piece%)=0 And Purse%(Electrum_piece%)>0  ! no silver but an electrum piece is left
+    Dec Purse%(Electrum_piece%)  ! change an electrum piece
+    Add Purse%(Silver_piece%),10  ! into 10 silver pieces
+    Goto Retry_copper  ! try the copper again
+  Endif
+  If Purse%(Silver_piece%)=0 And Purse%(Electrum_piece%)=0 And Purse%(Gold_piece%)>0  ! no silver or electrum but a gold piece is left
+    Dec Purse%(Gold_piece%)  ! change a gold piece
+    Add Purse%(Electrum_piece%),2  ! into 2 electrum pieces
+    Goto Retry_copper  ! try the copper again
+  Endif
+  If Purse%(Silver_piece%)=0 And Purse%(Electrum_piece%)=0 And Purse%(Gold_piece%)=0  ! no coins left to change
+    Goto Cannot_afford  ! the character cannot pay
+  Endif
+  Retry_copper:
+  Goto Pay_in_copper
+  Pay_in_silver:
+  If Price_to_pay%(Silver_piece%)=0  ! nothing to pay in silver
+    Goto Pay_in_electrum  ! pay in electrum
+  Endif
+  If Price_to_pay%(Silver_piece%)>0 And Purse%(Silver_piece%)>=Price_to_pay%(Silver_piece%)  ! silver owed and the purse has enough silver
+    Purse%(Silver_piece%)=Purse%(Silver_piece%)-Price_to_pay%(Silver_piece%)  ! pay the silver
+    Goto Item_bought  ! the item is bought
+    Goto Pay_in_electrum
+  Endif
+  If Purse%(Electrum_piece%)>0  ! an electrum piece is left
+    Dec Purse%(Electrum_piece%)  ! change an electrum piece
+    Add Purse%(Silver_piece%),10  ! into 10 silver pieces
+    Goto Retry_silver  ! try the silver again
+  Endif
+  If Purse%(Electrum_piece%)=0 And Purse%(Gold_piece%)>0  ! no electrum but a gold piece is left
+    Dec Purse%(Gold_piece%)  ! change a gold piece
+    Add Purse%(Electrum_piece%),2  ! into 2 electrum pieces
+    Goto Retry_silver  ! try the silver again
+  Endif
+  If Purse%(Electrum_piece%)=0 And Purse%(Gold_piece%)=0  ! no coins left to change
+    Goto Cannot_afford  ! the character cannot pay
+  Endif
+  Retry_silver:
+  Goto Pay_in_silver
+  Pay_in_electrum:
+  If Price_to_pay%(Electrum_piece%)=0  ! nothing to pay in electrum
+    Goto Pay_in_gold  ! pay in gold
+  Endif
+  If Price_to_pay%(Electrum_piece%)>0 And Purse%(Electrum_piece%)>=Price_to_pay%(Electrum_piece%)  ! electrum owed and the purse has enough electrum
+    Purse%(Electrum_piece%)=Purse%(Electrum_piece%)-Price_to_pay%(Electrum_piece%)  ! pay the electrum
+    Goto Item_bought  ! the item is bought
+    Goto Pay_in_gold
+  Endif
+  If Purse%(Gold_piece%)>0  ! a gold piece is left
+    Dec Purse%(Gold_piece%)  ! change a gold piece
+    Add Purse%(Electrum_piece%),2  ! into 2 electrum pieces
+  Else
+    If Purse%(Gold_piece%)=0  ! no gold left to change
+      Goto Cannot_afford  ! the character cannot pay
+    Endif
+  Endif
+  Goto Pay_in_electrum  ! try the electrum again
+  Pay_in_gold:
+  If Price_to_pay%(Gold_piece%)=0  ! nothing to pay in gold
+    Goto Item_bought  ! the item is free
+  Endif
+  If Price_to_pay%(Gold_piece%)>0 And Purse%(Gold_piece%)>=Price_to_pay%(Gold_piece%)  ! gold owed and the purse has enough gold
+    Purse%(Gold_piece%)=Purse%(Gold_piece%)-Price_to_pay%(Gold_piece%)  ! pay the gold
+    Goto Item_bought  ! the item is bought
+    Goto Cannot_afford
+  Endif
+  Goto Cannot_afford  ! not enough gold: the character cannot pay
+  Cannot_afford:
+  Work_text$="The item requested by you:|"+Price_list_names$(Fn Page_item(Chosen_row%,Current_page%))+"."  ! tell the player the money is not enough
+  Work_text$=Work_text$+"|You don't have the money for."
+  Alert 3,Work_text$,1," RETRY | QUIT ",Alert_answer%
+  If Alert_answer%=1  ! RETRY
+    Print At(1,Chosen_row%+2);"   "  ! remove the pointer
+    Goto Print_owned  ! choose another item
+  Endif
+  If Alert_answer%=2  ! QUIT
+    Goto Leave_price_list  ! leave the list
+  Endif
+  Item_bought:
+  Text_position%=Fn Page_item(Chosen_row%,Current_page%)  ! the item's number in the list
+  Price_list_owned%(Text_position%)=Price_list_owned%(Text_position%)+Inner_count%  ! add the number bought to the items owned
+  For Loop_index%=Gold_piece% To Copper_piece%  ! show the money left in each coin
+    Inner_index%=(Loop_index%-1)*20+1
+    Print At(Inner_index%,25);Coin_names$(Loop_index%);At(Inner_index%+9,25);":     ";
+    Print At(Fn Right_align_column(Inner_index%+14,Purse%(Loop_index%)),25);Purse%(Loop_index%);
+  Next Loop_index%
+  Work_text$="Do you want to buy another|Item for your character?"  ! ask whether to buy another item
+  Alert 2,Work_text$,1," YES | NO ",Alert_answer%
+  If Alert_answer%=2  ! the player answered NO
+    Goto Leave_price_list
+  Endif
+  Print At(1,Chosen_row%+2);"   "  ! remove the pointer
+  Goto Print_owned  ! choose another item
+  Leave_price_list:
+  Cls
+Return
+'
+' Print the character sheet.  Waits until GEMDOS reports the printer ready (the player may abort with the
+' alert), then prints 80-column lines built in work_text$ with fields placed by Mid$: name, sex and age; race,
+' hair and height; alignment, eyes and weight; class, level and experience; title and hit points; social class
+' and nationality (blanks to fill in by hand).  Then each ability score with its table values (strength with its
+' percentile, intelligence languages and spell chances, wisdom magic adjustment and cleric bonus spells,
+' dexterity, constitution and charisma adjustments, comeliness), the saving throws of the class group
+' class_group%, the spell list, undead turning for clerics, thieving abilities for thieves, assassins and monks,
+' every equipment list (each category swapped into price_list_names$/price_list_owned% for print_equipment_list)
+' and the money left.  Ends with a form feed.
+Procedure Print_character_sheet
+  Local Printer_status%,Work_text$,Field_text$,Score_text$,Ability_text_column%,Left_column%,Middle_column%,Right_column%  ! the work line, its field, the score text, the ability text column and the three field columns
+  Left_column%=1  ! the first field of a line starts in column 1
+  Middle_column%=Left_column%+35  ! the second field starts in column 36
+  Right_column%=Middle_column%+20  ! the third field starts in column 56
+  Do
+    Printer_status%=Gemdos(17)  ! ask GEMDOS whether the printer is ready (Cprnos)
+    If Not Printer_status%  ! the printer is not ready
+      Work_text$="Do you have a printer?|If you do it isn't ready.|"  ! tell the player to check the printer
+      Work_text$=Work_text$+"Please check it now!"
+      Alert 3,Work_text$,0," READY | ABORT ",Alert_answer%  ! READY tries again, ABORT gives up
+    Endif
+    If Alert_answer%=2  ! the player chose ABORT
+      Goto Done  ! leave without printing
+    Endif
+    Exit If Printer_status%  ! the printer is ready: start the sheet
+  Loop  ! check the printer again
+  Work_text$=Space$(80)  ! clear the line
+  Field_text$="Name: "+String$(21,"_")  ! a blank to write the name in by hand
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Sex: "+Sex_name$  ! the character's sex
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Field_text$="Age: "+Str$(Age%)+", "+Age_category_names$(Age_category%)  ! the age in years and its age category
+  Mid$(Work_text$,Right_column%)=Field_text$
+  Lprint Work_text$  ! print the name, sex and age line
+  Work_text$=Space$(80)
+  If Race_group%=Half_elf%  ! a half-elf
+    Field_text$=Race_names$(Race%)+"/"+Race_names$(Elf_parent_race%)  ! the race and the race of the elven parent
+  Else
+    Field_text$=Race_names$(Race%)  ! the race name
+  Endif
+  Field_text$="Race: "+Field_text$
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Hair: "+String$(10,"_")  ! a blank for the hair colour
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Field_text$="Height: "+String$(10,"_")  ! a blank for the height
+  Mid$(Work_text$,Right_column%)=Field_text$
+  Lprint Work_text$  ! print the race, hair and height line
+  Work_text$=Space$(80)
+  Field_text$="Alignment: "+Alignment_names$(Alignment%)  ! the alignment
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Eyes: "+String$(10,"_")  ! a blank for the eye colour
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Field_text$="Weight: "+String$(10,"_")  ! a blank for the weight
+  Mid$(Work_text$,Right_column%)=Field_text$
+  Lprint Work_text$  ! print the alignment, eyes and weight line
+  Work_text$=Space$(80)
+  Field_text$="Class: "+Class_names$(Character_class%)  ! the class
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Level: "+Str$(Level%)  ! the level
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Field_text$="Experience: "+Str$(Experience%)  ! the experience points
+  Mid$(Work_text$,Right_column%)=Field_text$
+  Lprint Work_text$  ! print the class, level and experience line
+  Work_text$=Space$(80)
+  Field_text$="Title: "+Level_title$  ! the level title
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Hit Points: "+Str$(Hit_points%)  ! the hit points
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Lprint Work_text$  ! print the title and hit points line
+  Work_text$=Space$(80)
+  Field_text$="Social Class: "+Social_class_names$(Social_class%)  ! the social class
+  Mid$(Work_text$,Left_column%)=Field_text$
+  Field_text$="Nationality: "+String$(25,"_")  ! a blank for the nationality
+  Mid$(Work_text$,Middle_column%)=Field_text$
+  Lprint Work_text$  ! print the social class and nationality line
+  Lprint String$(80,"-")  ! a rule under the personal details
+  If Race_group%=Dwarf% Or Race_group%=Half_orc% Or Exceptional_strength%>0  ! a dwarf or half-orc (charisma shown twice) or a strength with a percentile
+    Ability_text_column%=22  ! the ability texts start in column 22
+  Else
+    Ability_text_column%=19  ! the ability texts start in column 19
+  Endif
+  Work_text$=Space$(80)  ! clear the line
+  Field_text$=""
+  Score_text$=""
+  If Has_exceptional_strength! And Exceptional_strength%>0  ! exceptional strength applies and was rolled
+    Score_text$=Str$(Exceptional_strength%)  ! the percentile roll
+    If Len(Score_text$)=3  ! a roll of 100
+      Score_text$="00"  ! is shown as 18/00
+    Else
+      If Len(Score_text$)=1  ! a roll of 1 to 9
+        Score_text$="0"+Score_text$  ! gets a leading zero
+      Endif
+    Endif
+    Score_text$="."+Score_text$  ! the percentile is shown after a point (18.xx)
+  Endif
+  Field_text$="Strength    : "+Str$(Abilities%(Strength_index%))+Score_text$+","
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$=Hit_probability$+" to Hit, "+Damage_adjustment$+" to Damage, "+Weight_allowance$+" Weight Adjustment,"  ! the strength bonuses to hit and damage and the weight allowance
+  Mid$(Work_text$,Ability_text_column%)=Field_text$  ! beside the score
+  Lprint Work_text$  ! print the strength line
+  Work_text$=Space$(80)
+  Field_text$=Open_doors_roll$+" in 6 to Open Doors, "+Bend_bars_chance$+" to Bend Bars and Lift Gates."  ! the open doors chance and the bend bars/lift gates percentage
+  Mid$(Work_text$,Ability_text_column%)=Field_text$  ! under the strength bonuses
+  Lprint Work_text$  ! print the second strength line
+  Work_text$=Space$(80)
+  Field_text$=""
+  Score_text$=""
+  Score_text$=Str$(Abilities%(Intelligence_index%))  ! the intelligence score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Intelligence: "+Score_text$+","  ! the intelligence score
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$="Additional Languages: "+Str$(Extra_languages%)  ! the number of extra languages the character may learn
+  Mid$(Work_text$,Ability_text_column%)=Field_text$
+  If Class_group%=Group_magic_user%  ! a magic-user or illusionist
+    Field_text$=", Chance to Know Spell: "+Know_spell_chance$+","  ! the chance to know each spell
+    Mid$(Work_text$,Ability_text_column%+23)=Field_text$
+  Endif
+  Lprint Work_text$  ! print the intelligence line
+  If Class_group%=Group_magic_user%  ! a magic-user or illusionist
+    Work_text$=Space$(80)
+    Field_text$=Min_spells_per_level$+" Minimum Spells/Level, "+Max_spells_per_level$+" Maximum Spells/Level."  ! the minimum and maximum number of spells per level
+    Mid$(Work_text$,Ability_text_column%)=Field_text$
+    Lprint Work_text$  ! print the spells per level line
+  Endif
+  Work_text$=Space$(80)
+  Field_text$=""
+  Score_text$=""
+  Score_text$=Str$(Abilities%(Wisdom%))  ! the wisdom score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Wisdom      : "+Score_text$+","
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$="Magic Attack Adjust: "+Magic_attack_adjustment$  ! the saving throw adjustment against magical attacks
+  Mid$(Work_text$,Ability_text_column%)=Field_text$
+  If Class_group%=Group_cleric%  ! a cleric or druid
+    Field_text$=", Spell Bonus: "+Str$(Cleric_bonus_spells%)+", Spell Failure: "+Spell_failure_chance$+"."  ! the bonus spells and the chance of spell failure
+  Else
+    Field_text$="."  ! others end the line here
+  Endif
+  Mid$(Work_text$,Ability_text_column%+23)=Field_text$
+  Lprint Work_text$  ! print the wisdom line
+  Work_text$=Space$(80)
+  Field_text$=""
+  Score_text$=""
+  Score_text$=Str$(Abilities%(Dexterity%))  ! the dexterity score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Dexterity   : "+Score_text$+","
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$="Attack Adjust: "+Dexterity_reaction$+", Defense Adjust: "+Defensive_adjustment$  ! the reaction/attack adjustment and the defensive adjustment
+  Mid$(Work_text$,Ability_text_column%)=Field_text$
+  Lprint Work_text$  ! print the dexterity line
+  Work_text$=Space$(80)
+  Field_text$=""
+  Score_text$=""
+  Score_text$=Str$(Abilities%(Constitution%))  ! the constitution score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Constitution: "+Score_text$+","  ! the constitution score
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$="Hit Points/Die: "+Hit_point_adjustment$+", System Shock: "+System_shock_chance$  ! the hit point adjustment per die and the system shock survival
+  Field_text$=Field_text$+", Resurrection: "+Resurrection_chance$  ! and the resurrection survival
+  Mid$(Work_text$,Ability_text_column%)=Field_text$
+  Lprint Work_text$  ! print the constitution line
+  Work_text$=Space$(80)
+  Field_text$=""
+  Score_text$=""
+  Score_text$=Str$(Abilities%(Charisma_index%))  ! the charisma score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Charisma    : "+Score_text$
+  If Race_group%=Dwarf% Or Race_group%=Half_orc%  ! a dwarf or half-orc
+    Score_text$="/"+Str$(Rolled_abilities%(Charisma_index%))+","  ! add the unadjusted charisma, which other races see
+  Else
+    Score_text$=","  ! others end the score here
+  Endif
+  Field_text$=Field_text$+Score_text$
+  Mid$(Work_text$,1)=Field_text$
+  Field_text$="Maximum Henchmen: "+Str$(Max_henchmen%)+", Loyalty: "+Loyalty_base$  ! the maximum number of henchmen and their loyalty base
+  Field_text$=Field_text$+", Reaction Adjust: "+Charisma_reaction$  ! and the reaction adjustment
+  Mid$(Work_text$,Ability_text_column%)=Field_text$
+  Lprint Work_text$  ! print the charisma line
+  Work_text$=Space$(80)
+  Score_text$=Str$(Abilities%(Comeliness_index%))  ! the comeliness score
+  If Len(Score_text$)=1  ! a one-digit score
+    Score_text$=" "+Score_text$  ! is padded to two columns
+  Endif
+  Field_text$="Comeliness  : "+Score_text$
+  Mid$(Work_text$,1)=Field_text$
+  Lprint Work_text$  ! print the comeliness line
+  Lprint String$(80,"-")  ! a rule under the abilities
+  Work_text$=Space$(80)
+  Field_text$="* * *    Saving Throws    * * *"  ! the saving throws heading
+  Mid$(Work_text$,Fn Centre_column(40,Field_text$))=Field_text$  ! centred on the line
+  Lprint Work_text$
+  For Loop_index%=1 To 2  ! two lines of two saving throws
+    Work_text$=Space$(80)
+    Field_text$=Saving_throw_names$(Loop_index%)+": "+Str$(Saving_throw_table%(Class_group%,Loop_index%))  ! saving throw 1 or 2 and the number this class group needs
+    Score_text$=Saving_throw_names$(Loop_index%+3)+": "+Str$(Saving_throw_table%(Class_group%,Loop_index%+3))  ! saving throw 4 or 5 in the right half
+    Mid$(Work_text$,1)=Field_text$
+    Mid$(Work_text$,41)=Score_text$
+    Lprint Work_text$  ! print the saving throw pair
+  Next Loop_index%
+  Work_text$=Space$(80)  ! the third saving throw on its own line
+  Field_text$=Saving_throw_names$(3)+": "+Str$(Saving_throw_table%(Class_group%,3))  ! rod/staff/wand
+  Mid$(Work_text$,1)=Field_text$
+  Lprint Work_text$  ! print it
+  If Racial_abilities$<>""  ! there is a racial saving throw note
+    Lprint Racial_abilities$  ! print it
+  Endif
+  If Is_spell_caster!  ! the character has a spell list
+    Lprint String$(80,"-")
+    Work_text$=Space$(80)
+    Field_text$="* * *    Spell List    * * *"  ! the spell list heading
+    Mid$(Work_text$,Fn Centre_column(40,Field_text$))=Field_text$  ! centred on the line
+    Lprint Work_text$
+    For Loop_index%=1 To 2  ! two lines of spells
+      Work_text$=Space$(80)
+      If First_level_spells$(Loop_index%)<>""  ! a spell in the left column
+        Mid$(Work_text$,1)=First_level_spells$(Loop_index%)  ! put it at the left
+      Endif
+      If First_level_spells$(Loop_index%+2)<>""  ! a spell in the right column
+        Mid$(Work_text$,41)=First_level_spells$(Loop_index%+2)  ! put it at column 41
+      Endif
+      Lprint Work_text$  ! print the spell line
+    Next Loop_index%
+  Endif
+  If Character_class%=Cleric%  ! a cleric
+    Work_text$=Space$(80)
+    Field_text$="* * *    Undead Turning    * * *"  ! the undead turning heading
+    Mid$(Work_text$,Fn Centre_column(40,Field_text$))=Field_text$  ! centred on the line
+    Lprint Work_text$
+    For Loop_index%=1 To 2  ! two lines of two undead types
+      Work_text$=Space$(80)
+      Field_text$=Undead_names$(Loop_index%)+": "+Str$(Undead_turning_table%(Loop_index%))  ! the undead type and the number needed to turn it
+      Score_text$=Undead_names$(Loop_index%+3)+": "+Str$(Undead_turning_table%(Loop_index%+3))  ! the type three on in the right half
+      Mid$(Work_text$,1)=Field_text$
+      Mid$(Work_text$,41)=Score_text$
+      Lprint Work_text$  ! print the pair
+    Next Loop_index%
+    Work_text$=Space$(80)
+    Field_text$=Undead_names$(3)+": "+Str$(Undead_turning_table%(3))  ! the third undead type on its own line
+    Mid$(Work_text$,1)=Field_text$
+    Lprint Work_text$  ! print it
+  Endif
+  If Class_group%=Thief_group% Or Class_group%=Monk_group%  ! a thief, assassin or monk
+    Lprint String$(80,"-")
+    Work_text$=Space$(80)
+    Field_text$="* * *    Thieving Abilities    * * *"  ! the thieving abilities heading
+    Mid$(Work_text$,Fn Centre_column(40,Field_text$))=Field_text$  ! centred on the line
+    Lprint Work_text$
+    For Loop_index%=1 To 4  ! four lines of two thieving skills
+      Work_text$=Space$(80)
+      Mid$(Work_text$,1)=Thief_skill_names$(Loop_index%)  ! the skill name at the left
+      Mid$(Work_text$,18)=":"  ! a colon after it
+      Field_text$=Str$(Thief_skills%(Loop_index%))+"%"  ! the skill percentage
+      Mid$(Work_text$,Fn Right_align_column(22,Thief_skills%(Loop_index%)))=Field_text$  ! right-aligned to column 22
+      Mid$(Work_text$,41)=Thief_skill_names$(Loop_index%+4)  ! the skill four on, at column 41
+      Mid$(Work_text$,58)=":"  ! a colon after it
+      Field_text$=Str$(Thief_skills%(Loop_index%+4))+"%"  ! its percentage
+      Mid$(Work_text$,Fn Right_align_column(62,Thief_skills%(Loop_index%+4)))=Field_text$  ! right-aligned to column 62
+      Lprint Work_text$  ! print the skill pair
+    Next Loop_index%
+  Endif
+  Lprint String$(80,"-")  ! a rule before the equipment
+  Swap Price_list_names$(),Armor_names$()  ! make the armor names the list to print
+  Swap Price_list_owned%(),Armour_owned%()  ! and the armor bought the quantities
+  @Print_equipment_list(Armor_count%,"Armor/Helmet/Shield")  ! print the armor bought under its heading
+  Swap Armor_names$(),Price_list_names$()  ! give the armor names back
+  Swap Armour_owned%(),Price_list_owned%()  ! and the armor quantities
+  Swap Price_list_names$(),Shield_names$()  ! make the shield names the list
+  Swap Price_list_owned%(),Shields_bought%()  ! and the shields bought the quantities
+  @Print_equipment_list(Shield_count%,"*")  ! print the shields under the same heading
+  Swap Shield_names$(),Price_list_names$()  ! give the shield names back
+  Swap Shields_bought%(),Price_list_owned%()  ! and the shield quantities
+  Swap Price_list_names$(),Melee_weapon_names$()  ! make the hand-to-hand weapon names the list
+  Swap Price_list_owned%(),Weapons_owned%()  ! and the hand-to-hand weapons bought the quantities
+  @Print_equipment_list(Melee_weapon_count%,"Weapons")  ! print the hand-to-hand weapons under their heading
+  Swap Melee_weapon_names$(),Price_list_names$()  ! give the hand-to-hand weapon names back
+  Swap Weapons_owned%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Missile_weapon_names$()  ! make the missile weapon names the list
+  Swap Price_list_owned%(),Missile_weapons_bought%()  ! and the missile weapons bought the quantities
+  @Print_equipment_list(Missile_weapon_count%,"*")  ! print the missile weapons under the same heading
+  Swap Missile_weapon_names$(),Price_list_names$()  ! give the missile weapon names back
+  Swap Missile_weapons_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Clothing_names$()  ! make the clothing names the list
+  Swap Price_list_owned%(),Clothing_bought%()  ! and the clothing bought the quantities
+  @Print_equipment_list(Clothing_count%,"Personal Possessions")  ! print the clothing under the possessions heading
+  Swap Clothing_names$(),Price_list_names$()  ! give the clothing names back
+  Swap Clothing_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Herb_names$()  ! make the herb names the list
+  Swap Price_list_owned%(),Herbs_bought%()  ! and the herbs bought the quantities
+  @Print_equipment_list(Herb_count%,"*")  ! print the herbs
+  Swap Herb_names$(),Price_list_names$()  ! give the herb names back
+  Swap Herbs_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Livestock_names$()  ! make the livestock names the list
+  Swap Price_list_owned%(),Animals_owned%()  ! and the livestock bought the quantities
+  @Print_equipment_list(Livestock_count%,"*")  ! print the livestock
+  Swap Livestock_names$(),Price_list_names$()  ! give the livestock names back
+  Swap Animals_owned%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Misc_equipment_names$()  ! make the miscellaneous equipment names the list
+  Swap Price_list_owned%(),Misc_equipment_bought%()  ! and the miscellaneous equipment bought the quantities
+  @Print_equipment_list(Misc_equipment_count%,"*")  ! print the miscellaneous equipment
+  Swap Misc_equipment_names$(),Price_list_names$()  ! give the miscellaneous equipment names back
+  Swap Misc_equipment_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Provision_names$()  ! make the provision names the list
+  Swap Price_list_owned%(),Provisions_bought%()  ! and the provisions bought the quantities
+  @Print_equipment_list(Provision_count%,"*")  ! print the provisions
+  Swap Provision_names$(),Price_list_names$()  ! give the provision names back
+  Swap Provisions_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Religious_item_names$()  ! make the religious item names the list
+  Swap Price_list_owned%(),Religious_items_bought%()  ! and the religious items bought the quantities
+  @Print_equipment_list(Religious_item_count%,"*")  ! print the religious items
+  Swap Religious_item_names$(),Price_list_names$()  ! give the religious item names back
+  Swap Religious_items_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Tack_names$()  ! make the tack and harness names the list
+  Swap Price_list_owned%(),Tack_bought%()  ! and the tack and harness bought the quantities
+  @Print_equipment_list(Tack_count%,"*")  ! print the tack and harness
+  Swap Tack_names$(),Price_list_names$()  ! give the tack and harness names back
+  Swap Tack_bought%(),Price_list_owned%()  ! and their quantities
+  Swap Price_list_names$(),Transport_names$()  ! make the transport names the list
+  Swap Price_list_owned%(),Transport_bought%()  ! and the transport bought the quantities
+  @Print_equipment_list(Transport_count%,"*")  ! print the transport
+  Swap Transport_names$(),Price_list_names$()  ! give the transport names back
+  Swap Transport_bought%(),Price_list_owned%()  ! and their quantities
+  Lprint String$(80,"-")  ! a rule before the money
+  Work_text$=Space$(80)
+  For Loop_index%=1 To 4  ! the four coin types
+    Field_text$=Coin_names$(Loop_index%)+": "+Str$(Purse%(Loop_index%))  ! the coin name and how many the character has left
+    Mid$(Work_text$,(Loop_index%-1)*20+1)=Field_text$  ! in 20-column fields across the line
+  Next Loop_index%
+  Lprint Work_text$  ! print the money line
+  Lprint Chr$(12);  ! form feed: eject the page
+  Void Fre(0)  ! collect the string garbage
+  Done:
+Return  ! back to the main program
+'
+' Print one equipment list of the character sheet: the items of price_list_names$ with a quantity in
+' price_list_owned% above 0, two to a line as "name (quantity)" at columns 1 and 41.  list_count% is the number
+' of items in the list and list_heading$ its heading, printed centred between stars; "*" means the list
+' continues the previous heading.
+Procedure Print_equipment_list(List_count%,List_heading$)
+  Local Right_half!,Text_position%  ! which half of the line the next item goes in, and its column
+  If List_heading$<>"*"  ! the list has its own heading
+    Work_text$=Space$(80)
+    List_heading$="* * *    "+List_heading$+"    * * *"  ! frame the heading with stars
+    Mid$(Work_text$,Fn Centre_column(40,List_heading$))=List_heading$  ! centred on the line
+    Lprint Work_text$  ! print the heading
+  Endif
+  Clr Right_half!  ! the first item goes in the left half
+  Work_text$=Space$(80)
+  For Loop_index%=1 To List_count%  ! every item of the list
+    If Price_list_owned%(Loop_index%)>0  ! the character bought some of this item
+      Text_position%=Abs(Right_half!*40)+1  ! column 1 for the left half, 41 for the right
+      Right_half!=Not Right_half!  ! the next item goes in the other half
+      Field_text$=Price_list_names$(Loop_index%)+" ("+Str$(Price_list_owned%(Loop_index%))+")"  ! the item name and the quantity in brackets
+      Mid$(Work_text$,Text_position%)=Field_text$  ! put it in its half of the line
+      If Not Right_half!  ! both halves of the line are filled
+        Lprint Work_text$  ! print the line
+        Work_text$=Space$(80)  ! and start a new one
+      Endif
+    Endif
+  Next Loop_index%
+  If Asc(Work_text$)<>Asc(" ")  ! a left-half item is still waiting
+    Lprint Work_text$  ! print it
+  Endif
+Return
+'
+' Title screen, shown at start-up.  Refuses to run in low resolution, draws a filled frame for medium or high
+' resolution and prints the title and introduction texts from the DATA at data_title_screen_text centred, one
+' per row ("*" leaves a blank row, "***" ends them).  While the player reads them load_game_tables reads all the
+' tables, then the player presses a key to go on.
+Procedure Show_title_screen
+  Local Title_row%,Work_text$,Screen_resolution  ! the alert answer and title line row, and the screen resolution
+  Screen_resolution=Xbios(4)  ! the screen resolution: 0 low, 1 medium, 2 high (Getrez)
+  If Screen_resolution=0  ! low resolution
+    Alert 1,"THIS PROGRAM NEEDS EITHER|MEDIUM OR HIGH RESOLUTION!",1,"RETURN",Title_row%  ! the program cannot run in low resolution
+    End  ! quit
+  Endif
+  If Screen_resolution=1  ! medium resolution
+    Rbox 20,10,619,189  ! a frame round the 640x200 screen
+  Endif
+  If Screen_resolution=2  ! high resolution
+    Rbox 20,20,619,379  ! a frame round the 640x400 screen
+  Endif
+  Deffill 1,2,16  ! a patterned fill
+  Fill 3,3  ! fill the frame
+  Restore Data_title_screen_text  ! the title and introduction texts
+  Title_row%=1  ! start on row 3
+  Repeat
+    Read Work_text$  ! the next text line
+    If Left$(Work_text$,1)<>"*"
+      Print At(Fn Centre_column(40,Work_text$),Title_row%+2);Work_text$;  ! centred on the screen
+    Endif
+    Inc Title_row%
+  Until Work_text$="***"
+  @Load_game_tables  ! read all the tables while the player reads the title
+  Print At(27,23);"Press any key to continue!"  ! wait for the player
+  Void Inp(2)  ! wait for a key
+  Void Fre(0)  ! collect the string garbage
+Return
+'
+' Read the game tables.  Sets the index constants (coin types, race limit columns, abilities, the 17 races, race
+' groups, the 12 classes, class groups, thieving skills), defines the dice and helper functions, dimensions the
+' arrays and READs every DATA table in turn: races and their ability limits, classes with their minimums and
+' races, saving throws, alignments, ability names, age categories, the ability tables, thieving skills, social
+' classes, spells, undead turning, coins, shop departments and the twelve price lists of the shop.  Names in the
+' DATA are padded with spaces, which are trimmed.
+Procedure Load_game_tables
+  Local Outer_count%,Inner_count%,Race%,Character_class%,Alignment%,Work_text$  ! counts used while reading the DATA tables
+  Option Base 1  ! arrays start at index 1
+  Gold_piece%=1  ! coin type 1: gold
+  Electrum_piece%=2  ! coin type 2: electrum
+  Silver_piece%=3  ! coin type 3: silver
+  Copper_piece%=4  ! coin type 4: copper
+  Minimum_index%=1  ! race limit 1: minimum
+  Maximum_index%=2  ! race limit 2: maximum
+  Male_index%=1  ! race limit sex 1: male
+  Female_index%=2  ! race limit sex 2: female
+  True_neutral%=5  ! five
+  Strength_index%=1  ! ability 1: strength
+  Intelligence_index%=2  ! ability 2: intelligence
+  Wisdom%=3  ! ability 3: wisdom
+  Dexterity%=4  ! ability 4: dexterity
+  Constitution%=5  ! ability 5: constitution
+  Charisma_index%=6  ! ability 6: charisma
+  Comeliness_index%=7  ! ability 7: comeliness
+  Race_gray_dwarf%=1  ! race 1: gray dwarf
+  Hill_dwarf%=2  ! race 2: hill dwarf
+  Race_mountain_dwarf%=3  ! race 3: mountain dwarf
+  Race_dark_elf%=4  ! race 4: dark elf
+  Gray_elf%=5  ! race 5: gray elf
+  High_elf%=6  ! race 6: high elf
+  Valley_elf%=7  ! race 7: valley elf
+  Wild_elf%=8  ! race 8: wild elf
+  Race_wood_elf%=9  ! race 9: wood elf
+  Race_deep_gnome%=10  ! race 10: deep gnome
+  Race_surface_gnome%=11  ! race 11: surface gnome
+  Race_half_elf%=12  ! race 12: half-elf
+  Race_hairfoot%=13  ! race 13: hairfoot halfling
+  Stout%=14  ! race 14: stout halfling
+  Race_tallfellow%=15  ! race 15: tallfellow halfling
+  Race_half_orc%=16  ! race 16: half-orc
+  Race_human%=17  ! race 17: human
+  Dwarf%=1  ! race group 1
+  Elf%=2  ! race group 2
+  Gnome%=3  ! race group 3
+  Half_elf%=4  ! race group 4
+  Halfling%=5  ! race group 5
+  Half_orc%=6  ! race group 6
+  Human%=7  ! race group 7
+  Class_cavalier%=1  ! class 1: cavalier
+  Class_paladin%=2  ! class 2: paladin
+  Cleric%=3  ! class 3: cleric
+  Class_druid%=4  ! class 4: druid
+  Fighter%=5  ! class 5: fighter
+  Barbarian%=6  ! class 6: barbarian
+  Ranger%=7  ! class 7: ranger
+  Magic_user%=8  ! class 8: magic-user
+  Class_illusionist%=9  ! class 9: illusionist
+  Thief%=10  ! class 10: thief
+  Class_assassin%=11  ! class 11: assassin
+  Class_monk%=12  ! class 12: monk
+  Group_cavalier%=1  ! class group 1: cavalier and paladin
+  Group_cleric%=2  ! class group 2: cleric and druid
+  Group_fighter%=3  ! class group 3: fighter, barbarian and ranger
+  Group_magic_user%=4  ! class group 4: magic-user and illusionist
+  Thief_group%=5  ! class group 5: thief and assassin
+  Monk_group%=6  ! class group 6: monk
+  Pick_pockets%=1  ! thieving skill 1: pick pockets
+  Open_locks%=2  ! thieving skill 2: open locks
+  Find_traps%=3  ! thieving skill 3: find/remove traps
+  Move_silently%=4  ! thieving skill 4: move silently
+  Hide_in_shadows%=5  ! thieving skill 5: hide in shadows
+  Hear_noise%=6  ! thieving skill 6: hear noise
+  Climb_walls%=7  ! thieving skill 7: climb walls
+  Read_languages%=8  ! thieving skill 8: read languages
+  Deffn Roll_one_die(First_argument)=Random(First_argument)+1  ! one die: 1 to n
+  Deffn Roll_two_dice(First_argument)=Random(First_argument)+Random(First_argument)+2  ! two dice of n sides
+  Deffn Roll_three_dice(First_argument)=Random(First_argument)+Random(First_argument)+Random(First_argument)+3  ! three dice of n sides
+  Deffn Roll_four_dice(First_argument)=Random(First_argument)+Random(First_argument)+Random(First_argument)+Random(First_argument)+4  ! four dice of n sides
+  Deffn Roll_five_dice(First_argument)=Random(First_argument)+Random(First_argument)+Random(First_argument)+Random(First_argument)+Random(First_argument)+5  ! five dice of n sides
+  Deffn Ability_table_row(First_argument)=Abilities%(First_argument)-2+(Abilities%(First_argument)>18)  ! the table row for an ability score: 3 is row 1, 18 and 19 are row 16
+  Deffn Letter_number(First_argument)=(First_argument>96)*32+First_argument-64  ! a letter key, upper or lower case, as a number from 1 (A)
+  Deffn Is_between(First_argument,Second_argument,Upper_limit)=First_argument>=Second_argument And First_argument<=Upper_limit  ! true when the value lies from the low to the high limit
+  Deffn Centre_column(First_argument,Work_text$)=First_argument-Int(Len(Work_text$)/2)  ! the column that centres a text on the given column
+  Deffn Page_item(First_argument,Second_argument)=Second_argument*20+First_argument  ! the item number of a row on a page of 20 shop items
+  Deffn Right_align_column(First_argument,Second_argument)=First_argument-Len(Str$(Second_argument))  ! the column that right-aligns a number to end before the given column
+  Dim Price_to_pay%(4)  ! the dice rolled for the four coin types
+  Dim Purse%(4)  ! the coins the character has
+  Dim Abilities%(7)  ! the seven ability scores
+  Dim Rolled_abilities%(7)  ! the scores as rolled, before racial adjustment
+  Dim First_level_spells$(4)  ! the spell list lines
+  Dim Price_list_names$(1)  ! the list being shown or printed (other lists are swapped in)
+  Dim Price_list_prices%(1)  ! its prices
+  Dim Price_list_owned%(1)  ! its quantities bought
+  Dim Price_list_usable!(1)  ! its classes allowed
+  Restore  ! the race table at the start of the DATA
+  Read Race%  ! the number of races
+  Dim Race_names$(Race%)  ! the race names
+  Dim Race_ability_limits%(Race%,6,2,2)  ! the minimum and maximum of each ability for each race and sex
+  Dim Race_available!(Race%)  ! per race
+  Dim Race_percentile_limit%(Race%,2)  ! the highest exceptional strength percentile per race and sex
+  For Loop_index%=1 To Race%  ! every race
+    Read Work_text$  ! the race name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Race_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    For Inner_index%=1 To 6  ! the six abilities strength to charisma
+      Read Race_ability_limits%(Loop_index%,Inner_index%,Minimum_index%,Male_index%)  ! the minimum for a male
+      Read Race_ability_limits%(Loop_index%,Inner_index%,Maximum_index%,Male_index%)  ! the maximum for a male
+      Race_ability_limits%(Loop_index%,Inner_index%,Minimum_index%,Female_index%)=Race_ability_limits%(Loop_index%,Inner_index%,Minimum_index%,Male_index%)  ! females have the same minimum
+      Race_ability_limits%(Loop_index%,Inner_index%,Maximum_index%,Female_index%)=Race_ability_limits%(Loop_index%,Inner_index%,Maximum_index%,Male_index%)  ! and the same maximum
+    Next Inner_index%
+    Read Race_ability_limits%(Loop_index%,1,2,Female_index%)  ! except the female strength maximum
+    Read Race_percentile_limit%(Loop_index%,Female_index%)  ! the female exceptional strength limit
+    Read Race_percentile_limit%(Loop_index%,Male_index%)  ! the male exceptional strength limit
+  Next Loop_index%
+  Restore Data_class_table  ! the class table
+  Read Character_class%  ! the number of classes
+  Dim Class_minimum_scores%(Character_class%,6)  ! the ability minimums of each class
+  Dim Class_available!(Character_class%)
+  Dim Class_names$(Character_class%)  ! the class names
+  Dim Race_allows_class!(Character_class%,Race%)  ! which races may take each class
+  For Loop_index%=1 To Character_class%  ! every class
+    Read Work_text$  ! the class name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Class_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    For Inner_index%=1 To 6  ! the six ability minimums
+      Read Class_minimum_scores%(Loop_index%,Inner_index%)  ! one minimum
+    Next Inner_index%
+    For Inner_index%=1 To Race%  ! every race
+      Read Race_allows_class!(Loop_index%,Inner_index%)  ! may this race take this class
+    Next Inner_index%  ! the next race
+  Next Loop_index%  ! the next class
+  Restore Data_saving_throw_table  ! the saving throw table
+  Read Text_position%  ! the number of class groups
+  Dim Saving_throw_names$(Text_position%)  ! the saving throw names (the DATA holds five, so the sixth read takes the first table number)
+  Dim Saving_throw_table%(Text_position%,5)  ! the five saving throws of each class group
+  Loop_index%=1
+  Repeat
+    Read Saving_throw_names$(Loop_index%)  ! a saving throw name
+    Inc Loop_index%
+  Until Loop_index%>Text_position%
+  Loop_index%=1
+  Repeat
+    Inner_index%=1  ! the five saving throws of a class group
+    Repeat
+      Read Saving_throw_table%(Loop_index%,Inner_index%)  ! one saving throw
+      Inc Inner_index%
+    Until Inner_index%>5
+    Inc Loop_index%
+  Until Loop_index%>Text_position%
+  Restore Data_alignment_table  ! the alignment table
+  Read Alignment%  ! the number of alignments
+  Dim Alignment_allowed!(Alignment%,Character_class%)  ! which classes may take each alignment
+  Dim Alignment_names$(Alignment%)  ! the alignment names
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the alignment name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Alignment_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1  ! every class
+    Repeat
+      Read Alignment_allowed!(Loop_index%,Inner_index%)  ! may this class take this alignment
+      Inc Inner_index%
+    Until Inner_index%>Character_class%  ! the next class
+    Inc Loop_index%  ! the next alignment
+  Until Loop_index%>Alignment%
+  Restore Data_ability_names  ! the ability names
+  Dim Ability_names$(7)  ! strength to comeliness
+  Loop_index%=1
+  Repeat
+    Read Ability_names$(Loop_index%)  ! one ability name
+    Inc Loop_index%
+  Until Loop_index%>7
+  Restore Data_age_table  ! the age table
+  Dim Age_category_names$(5)  ! young adult to venerable
+  Dim Race_age_ranges%(5,2,Race%)  ! the first and last age of each category for each race
+  Loop_index%=1
+  Repeat
+    Read Age_category_names$(Loop_index%)  ! one age category name
+    Inc Loop_index%
+  Until Loop_index%>5
+  Loop_index%=1  ! every race
+  Repeat
+    Inner_index%=1  ! the five categories
+    Read Work_text$  ! skip the race letter
+    Repeat
+      Read Race_age_ranges%(Inner_index%,1,Loop_index%)  ! the first age of the category
+      Read Race_age_ranges%(Inner_index%,2,Loop_index%)  ! the last age of the category
+      Inc Inner_index%
+    Until Inner_index%>5
+    Inc Loop_index%
+  Until Loop_index%>Race%
+  Restore Data_strength_table  ! the strength table
+  Dim Strength_table%(15,5)  ! to hit, damage, weight allowance, open doors and bend bars for each strength
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Strength_table%(Loop_index%,Inner_index%)  ! one value
+      Inc Inner_index%
+    Until Inner_index%>5
+    Inc Loop_index%
+  Until Loop_index%>15
+  Restore Data_intelligence_table  ! the intelligence tables
+  Dim Intelligence_spell_table%(7,3)  ! chance to know a spell and minimum and maximum spells per level
+  Dim Intelligence_languages%(16)  ! the extra languages for each intelligence
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Intelligence_spell_table%(Loop_index%,Inner_index%)  ! one value
+      Inc Inner_index%
+    Until Inner_index%>3
+    Inc Loop_index%
+  Until Loop_index%>7
+  Loop_index%=1
+  Repeat
+    Read Intelligence_languages%(Loop_index%)  ! one language count
+    Inc Loop_index%
+  Until Loop_index%>16
+  Restore Data_wisdom_table  ! the wisdom table
+  Dim Wisdom_magic_adjust%(16)  ! the magical attack adjustment for each wisdom
+  Loop_index%=1
+  Repeat
+    Read Wisdom_magic_adjust%(Loop_index%)  ! one adjustment
+    Inc Loop_index%
+  Until Loop_index%>16
+  Restore Data_dexterity_table  ! the thieving tables
+  Dim Thief_dexterity_table%(10,5)  ! the thieving skill base and adjustment rows
+  Dim Thief_skills%(8)  ! the character's thieving skill percentages
+  Dim Thief_skill_names$(8)  ! the thieving skill names
+  Dim Dexterity_adjustments%(16,2)  ! the attack and defensive adjustments for each dexterity
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Thief_dexterity_table%(Loop_index%,Inner_index%)  ! one value
+      Inc Inner_index%
+    Until Inner_index%>5
+    Inc Loop_index%
+  Until Loop_index%>10
+  Loop_index%=1
+  Repeat
+    Read Dexterity_adjustments%(Loop_index%,1)  ! the reaction/attack adjustment
+    Read Dexterity_adjustments%(Loop_index%,2)  ! the defensive adjustment
+    Inc Loop_index%
+  Until Loop_index%>16
+  Loop_index%=1
+  Restore Data_thief_skill_names  ! the thieving skill names
+  Repeat
+    Read Thief_skill_names$(Loop_index%)  ! one skill name
+    Inc Loop_index%
+  Until Loop_index%>8
+  Restore Data_constitution_table  ! the constitution table
+  Dim Constitution_table%(16,3)  ! hit point adjustment, system shock and resurrection for each constitution
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Constitution_table%(Loop_index%,Inner_index%)  ! one value
+      Inc Inner_index%
+    Until Inner_index%>3
+    Inc Loop_index%
+  Until Loop_index%>16
+  Restore Data_charisma_table  ! the charisma table
+  Dim Charisma_table%(16,3)  ! maximum henchmen, loyalty base and reaction adjustment for each charisma
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Charisma_table%(Loop_index%,Inner_index%)  ! one value
+      Inc Inner_index%
+    Until Inner_index%>3
+    Inc Loop_index%
+  Until Loop_index%>16
+  Restore Data_social_class_names  ! the social classes
+  Read Social_class%  ! the number of social classes
+  Dim Social_class_names$(Social_class%)  ! lower lower to upper upper
+  Loop_index%=1
+  Repeat
+    Read Social_class_names$(Loop_index%)  ! one social class name
+    Inc Loop_index%
+  Until Loop_index%>Social_class%
+  Restore Data_cleric_spells  ! the cleric first level spells
+  Read Cleric_spell_count%  ! the number of spells
+  Dim Cleric_spells$(Cleric_spell_count%)
+  Loop_index%=1
+  Repeat
+    Read Cleric_spells$(Loop_index%)  ! one spell name
+    Inc Loop_index%
+  Until Loop_index%>Cleric_spell_count%
+  Restore Data_turn_undead_table  ! the undead turning table
+  Read Text_position%  ! the number of undead types
+  Dim Undead_names$(Text_position%)  ! the undead names
+  Dim Undead_turning_table%(Text_position%)  ! the number a first level cleric needs to turn each
+  Loop_index%=1
+  Repeat
+    Read Undead_names$(Loop_index%)  ! one undead name
+    Read Undead_turning_table%(Loop_index%)  ! and its turning number
+    Inc Loop_index%
+  Until Loop_index%>Text_position%
+  Restore Data_druid_spells  ! the druid first level spells
+  Read Druid_spell_count%  ! the number of spells
+  Dim Druid_spells$(Druid_spell_count%)
+  Loop_index%=1
+  Repeat
+    Read Druid_spells$(Loop_index%)  ! one spell name
+    Inc Loop_index%
+  Until Loop_index%>Druid_spell_count%
+  Restore Data_magic_user_spells  ! the magic-user first level spells
+  Read Outer_count%  ! the number of groups
+  Read Inner_count%  ! the spells in a group
+  Dim Magic_user_spells$(Inner_count%,Outer_count%)
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Magic_user_spells$(Inner_index%,Loop_index%)  ! one spell name
+      Inc Inner_index%
+    Until Inner_index%>Inner_count%
+    Inc Loop_index%
+  Until Loop_index%>Outer_count%
+  Restore Data_illusionist_spells  ! the illusionist first level spells
+  Read Outer_count%  ! the number of groups
+  Read Inner_count%  ! the spells in a group
+  Dim Illusionist_spells$(Inner_count%,Outer_count%)
+  Loop_index%=1
+  Repeat
+    Inner_index%=1
+    Repeat
+      Read Illusionist_spells$(Inner_index%,Loop_index%)  ! one spell name
+      Inc Inner_index%
+    Until Inner_index%>Inner_count%
+    Inc Loop_index%
+  Until Loop_index%>Outer_count%
+  Restore Data_coin_names  ! the coin names
+  Read Outer_count%  ! the number of coin types
+  Dim Coin_names$(Outer_count%)  ! gold, electrum, silver and copper
+  Loop_index%=1
+  Repeat
+    Read Coin_names$(Loop_index%)  ! one coin name
+    Inc Loop_index%
+  Until Loop_index%>Outer_count%
+  Restore Data_store_departments  ! the shop departments
+  Read Department_count%  ! the number of departments
+  Dim Store_category_names$(Department_count%)  ! armor to transport, then LEAVE STORE
+  Loop_index%=1
+  Repeat
+    Read Store_category_names$(Loop_index%)  ! one department name
+    Inc Loop_index%
+  Until Loop_index%>Department_count%
+  Restore Data_armor_prices  ! the armor price list
+  Read Armor_count%  ! the number of armor items
+  Dim Armor_names$(Armor_count%)  ! the armor names
+  Dim Armor_prices%(Armor_count%,4)  ! the price of each in each coin type
+  Dim Armor_usable!(Armor_count%,Character_class%)  ! which classes may wear each
+  Dim Armour_owned%(Armor_count%)  ! how many the character bought
+  Read Chain_mail%
+  Read Field_plate%
+  Read Full_plate_mail%
+  Read Plate_mail%
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Armor_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Armor_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inner_index%=1  ! every class
+    Repeat
+      Read Armor_usable!(Loop_index%,Inner_index%)  ! may this class wear this armor
+      Inc Inner_index%
+    Until Inner_index%>Character_class%  ! the next class
+    Inc Loop_index%  ! the next item
+  Until Loop_index%>Armor_count%
+  Restore Data_shield_prices  ! the shield price list
+  Read Shield_count%  ! the number of shields
+  Dim Shield_names$(Shield_count%)  ! the shield names
+  Dim Shield_prices%(Shield_count%,4)  ! the price of each in each coin type
+  Dim Shield_usable!(Shield_count%,Character_class%)  ! which classes may use each
+  Dim Shields_bought%(Shield_count%)  ! how many the character bought
+  Read Large_shield%
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Shield_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Shield_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inner_index%=1  ! every class
+    Repeat
+      Read Shield_usable!(Loop_index%,Inner_index%)  ! may this class use this shield
+      Inc Inner_index%
+    Until Inner_index%>Character_class%  ! the next class
+    Inc Loop_index%  ! the next item
+  Until Loop_index%>Shield_count%
+  Restore Data_hand_weapon_prices  ! the hand-to-hand weapon price list
+  Read Melee_weapon_count%  ! the number of hand-to-hand weapons
+  Dim Melee_weapon_names$(Melee_weapon_count%)  ! the weapon names
+  Dim Hand_weapon_prices%(Melee_weapon_count%,4)  ! the price of each in each coin type
+  Dim Hand_weapon_usable!(Melee_weapon_count%,Character_class%)  ! which classes may use each
+  Dim Weapons_owned%(Melee_weapon_count%)  ! how many the character bought
+  Read Dagger%
+  Read Lance%
+  Read Horsemans_mace%
+  Read Broad_sword%
+  Read Long_sword%
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Melee_weapon_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Hand_weapon_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inner_index%=1  ! every class
+    Repeat
+      Read Hand_weapon_usable!(Loop_index%,Inner_index%)  ! may this class use this weapon
+      Inc Inner_index%
+    Until Inner_index%>Character_class%  ! the next class
+    Inc Loop_index%  ! the next item
+  Until Loop_index%>Melee_weapon_count%
+  Restore Data_missile_weapon_prices  ! the missile weapon price list
+  Read Missile_weapon_count%  ! the number of missile weapons
+  Dim Missile_weapon_names$(Missile_weapon_count%)  ! the weapon names
+  Dim Missile_weapon_prices%(Missile_weapon_count%,4)  ! the price of each in each coin type
+  Dim Missile_weapon_usable!(Missile_weapon_count%,12)  ! which of the twelve classes may use each
+  Dim Missile_weapons_bought%(Missile_weapon_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Missile_weapon_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Missile_weapon_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inner_index%=1  ! every class
+    Repeat
+      Read Missile_weapon_usable!(Loop_index%,Inner_index%)  ! may this class use this weapon
+      Inc Inner_index%
+    Until Inner_index%>Character_class%  ! the next class
+    Inc Loop_index%  ! the next item
+  Until Loop_index%>Missile_weapon_count%
+  Restore Data_clothing_prices  ! the clothing price list
+  Read Clothing_count%  ! the number of clothing items
+  Dim Clothing_names$(Clothing_count%)  ! the clothing names
+  Dim Clothing_prices%(Clothing_count%,4)  ! the price of each in each coin type
+  Dim Clothing_bought%(Clothing_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Clothing_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Clothing_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Clothing_count%
+  Restore Data_herb_prices  ! the herb price list
+  Read Herb_count%  ! the number of herbs
+  Dim Herb_names$(Herb_count%)  ! the herb names
+  Dim Herb_prices%(Herb_count%,4)  ! the price of each in each coin type
+  Dim Herbs_bought%(Herb_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Herb_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Herb_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Herb_count%
+  Restore Data_livestock_prices  ! the livestock price list
+  Read Livestock_count%  ! the number of animals
+  Dim Livestock_names$(Livestock_count%)  ! the animal names
+  Dim Livestock_prices%(Livestock_count%,4)  ! the price of each in each coin type
+  Dim Animals_owned%(Livestock_count%)  ! how many the character bought
+  Read Heavy_war_horse%
+  Read Light_war_horse%
+  Read Medium_war_horse%
+  Read Light_riding_horse%
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Livestock_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Livestock_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Livestock_count%
+  Restore Data_equipment_prices  ! the miscellaneous equipment price list
+  Read Misc_equipment_count%  ! the number of items
+  Dim Misc_equipment_names$(Misc_equipment_count%)  ! the item names
+  Dim Misc_equipment_prices%(Misc_equipment_count%,4)  ! the price of each in each coin type
+  Dim Misc_equipment_bought%(Misc_equipment_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Misc_equipment_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Misc_equipment_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Misc_equipment_count%
+  Restore Data_provision_prices  ! the provisions price list
+  Read Provision_count%  ! the number of provisions
+  Dim Provision_names$(Provision_count%)  ! the provision names
+  Dim Provision_prices%(Provision_count%,4)  ! the price of each in each coin type
+  Dim Provisions_bought%(Provision_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Provision_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Provision_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Provision_count%
+  Restore Data_religious_item_prices  ! the religious items price list
+  Read Religious_item_count%  ! the number of religious items
+  Dim Religious_item_names$(Religious_item_count%)  ! the item names
+  Dim Religious_item_prices%(Religious_item_count%,4)  ! the price of each in each coin type
+  Dim Religious_items_bought%(Religious_item_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Religious_item_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Religious_item_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Religious_item_count%
+  Restore Data_tack_harness_prices  ! the tack and harness price list
+  Read Tack_count%  ! the number of items
+  Dim Tack_names$(Tack_count%)  ! the item names
+  Dim Tack_and_harness_prices%(Tack_count%,4)  ! the price of each in each coin type
+  Dim Tack_bought%(Tack_count%)  ! how many the character bought
+  Read Leather_barding%
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Tack_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Tack_and_harness_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Tack_count%
+  Restore Data_transport_prices  ! the transport price list
+  Read Transport_count%  ! the number of vehicles
+  Dim Transport_names$(Transport_count%)  ! the vehicle names
+  Dim Transport_prices%(Transport_count%,4)  ! the price of each in each coin type
+  Dim Transport_bought%(Transport_count%)  ! how many the character bought
+  Loop_index%=1
+  Repeat
+    Read Work_text$  ! the item name, padded with spaces
+    Text_position%=Len(Work_text$)  ! from its end
+    Do
+      Exit If Mid$(Work_text$,Text_position%,1)<>" "  ! stop at the last letter
+      Dec Text_position%  ! drop a trailing space
+    Loop
+    Transport_names$(Loop_index%)=Left$(Work_text$,Text_position%)  ! keep the name without its trailing spaces
+    Inner_index%=1
+    Repeat
+      Read Transport_prices%(Loop_index%,Inner_index%)  ! the price in one coin type
+      Inc Inner_index%
+    Until Inner_index%>4
+    Inc Loop_index%
+  Until Loop_index%>Transport_count%
+Return  ! all tables read
