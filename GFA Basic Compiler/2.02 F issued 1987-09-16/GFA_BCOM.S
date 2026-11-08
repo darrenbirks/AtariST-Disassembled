@@ -1,7 +1,7 @@
-; GFA_BCOM.PRG  -  GFA BASIC Compiler 2.02 GB
+; GFA_BCOM.PRG  -  GFA BASIC Compiler 2.02 F issued 1987-09-16
 ;
-; Devpac source of the compiler, disassembled by Darren Birks, 3 November 2026.  Assembled, it gives
-; GFA_BCOM.PRG byte for byte, relocations included:
+; Devpac source of the compiler, disassembled by Darren Birks, 4 November 2026.
+; Assembled, it gives GFA_BCOM.PRG byte for byte, relocations included:
 ;
 ;     vasmm68k_mot -devpac -m68000 -Ftos -o GFA_BCOM.PRG GFA_BCOM.S
 ;
@@ -10,6 +10,13 @@
 ; a compiled program needs are copied out of this program, so much of its text is runtime code it never runs.
 ; In a compiled program the runtime is reached through a6 (jsr d(a6)) and the variables through a5.
 ; The program uses the memory after its own end (bss_end+$xx) and has no BSS of its own.
+;
+; The later of the two releases of 2.02 F: its version text is dated 16/09/87 where the earlier one's
+; (2.02 F issued 1987-08-25) is 25/08/87.  Its compile alerts read "Erreur de compilation" and
+; [Cont.|Arrêt] where the earlier has "Erreur dans compilation" and [Suite |Annuler], and the float
+; array store of the runtime it copies into every compiled program rounds the value before packing it
+; (12 bytes longer).  Both GFA_BCOM.RSC files have the same texts, so both name themselves 2.02 F; the
+; folder name tells the two apart.
 
 
 ; Runtime routine numbers: the runtime reaches its routines as n(a6), n the routine's number,
@@ -581,8 +588,8 @@ start:
 compile_next_program:
 	st	progress_screen_offset          ; progress offset $ffff: the next line restarts the bar
 	bsr.w	options_dialog                  ; dialog and file selector (outside this range)
-	bsr.w	open_source_file                ; open the .BAS file (outside this range)
-	lea	bas_header,a0                   ; read the 126-byte header into dat_0d02c
+	bsr.w	open_source_file
+	lea	bas_header,a0                   ; read the 126-byte header into dat_0d2f2
 	moveq	#126,d0                         ; 126 bytes: version word, 'GfABASIC' and the 29 header longs
 	bsr.w	read_source_bytes               ; read d0 bytes from the .BAS file to a0
 	cmpi.w	#$2,bas_header                  ; version word above 2: not a GFA BASIC 2.x file
@@ -631,10 +638,10 @@ compile_next_program:
 	addq.l	#2,sp                           ; drop the Fseek function word; the arguments stay
 	tst.l	d0
 	bmi.w	error_os                        ; seek failed: file error
-	movea.l	d3,a0                           ; read the lines (d7 bytes) to d3
-	move.l	d7,d0                           ; byte count of the line text
-	bsr.w	read_source_bytes               ; read the lines into the work area
-	bsr.w	link_structures                 ; outside this range; d7 negative = start again
+	movea.l	d3,a0
+	move.l	d7,d0
+	bsr.w	read_source_bytes
+	bsr.w	link_structures
 	tst.b	d7
 	bmi.w	compile_next_program
 	movea.l	bss_end+$80,a0                  ; DATA pass: a0 reads the lines, a1 writes the DATA items
@@ -760,7 +767,7 @@ compile_next_program:
 	adda.w	#$a,sp                          ; drop the Fseek arguments left from $a2
 	tst.l	d0
 	bmi.w	error_os                        ; seek failed: file error
-	bsr.w	fill_source_buffer              ; read the first block of lines
+	bsr.w	fill_source_buffer
 
 ;------------------------------------------------------------------------------
 ; Compiles one line: advance the progress bar, compile_line, then append the line's code and its
@@ -789,7 +796,7 @@ check_program_end:
 	bsr.w	file_selector                   ; set the extension (outside this range)
 	dc.w	$a009                           ; Line-A Show mouse
 	bsr.w	create_program_file
-	bsr.w	select_runtime_routines         ; write the program (outside this range)
+	bsr.w	select_runtime_routines
 	bsr.w	write_program
 	bsr.w	close_program_file
 	dc.w	$a00a                           ; Line-A Hide mouse
@@ -893,16 +900,12 @@ error_not_gfa_basic:
 
 ;------------------------------------------------------------------------------
 ; Command $53 (==>, a line the editor marked as a syntax error): fatal alert 'Syntax Error in
-; Program'. The text from $39c is decoded as instructions.
+; Program'.
 ;------------------------------------------------------------------------------
 cmd_syntax_error_line:
 	bsr.w	compile_error_fatal
-	subq.w	#1,$6e746178                    ; 'Syntax Error in ' as text, decoded as instructions
-	movea.l	d5,a0                           ; text continued, decoded as instructions
-	moveq	#114,d1                         ; text continued, decoded as instructions
-	ble.s	tron_message_tail               ; text 'or' decoded as a branch: not a real branch
-	movea.l	$6e20(a1),a0                    ; text continued, decoded as instructions
-	dc.b	'Program',0
+	dc.b	'Erreur dans le programme Basic',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; Commands that cannot be compiled (LIST, LLIST, PSAVE, LOAD, SAVE, STOP, TRON, TROFF, CONT,
@@ -911,90 +914,75 @@ cmd_syntax_error_line:
 ;------------------------------------------------------------------------------
 cmd_list_unsupported:
 	bsr.w	compile_error_continue
-	dc.b	'LIST ???',0
-	dc.b	$00
+	dc.b	'LIST incompilable',0
 
 ;------------------------------------------------------------------------------
 ; LLIST: not compilable, alert 'LLIST ???'.
 ;------------------------------------------------------------------------------
 cmd_llist_unsupported:
 	bsr.w	compile_error_continue
-	dc.b	'LLIST ???',0
+	dc.b	'LLIST incompilabe',0
 
 ;------------------------------------------------------------------------------
 ; PSAVE: not compilable, alert 'PSAVE ???'.
 ;------------------------------------------------------------------------------
 cmd_psave_unsupported:
 	bsr.w	compile_error_continue
-	addq.w	#8,(a3)                         ; 'PS' as text
-	dc.b	'AVE ???',0
+	dc.b	'PSAVE incompilable',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; LOAD: not compilable, alert 'LOAD ???'.
 ;------------------------------------------------------------------------------
 cmd_load_unsupported:
 	bsr.w	compile_error_continue
-	dc.b	'LOAD ???',0
-	dc.b	$00
+	dc.b	'LOAD incompilable',0
 
 ;------------------------------------------------------------------------------
 ; SAVE: not compilable, alert 'SAVE ???'.
 ;------------------------------------------------------------------------------
 cmd_save_unsupported:
 	bsr.w	compile_error_continue
-	subq.w	#1,d1                           ; 'SAVE' as text
-	addq.w	#3,d5                           ; text continued, decoded as instructions
-	dc.b	' ???',0
-	dc.b	$00
-	bsr.w	compile_error_continue          ; token $de at the start of a line: alert '?????'
-	dc.w	$3f3f,$3f3f                     ; '?????' as text
-	move.w	d0,-(sp)                        ; unused word after the '?????' text
+	dc.b	'SAVE incompilable',0
+	bsr.w	compile_error_continue
+	dc.b	'?????',0
 
 ;------------------------------------------------------------------------------
 ; STOP: not compilable, alert 'STOP ???'.
 ;------------------------------------------------------------------------------
 cmd_stop_unsupported:
 	bsr.w	compile_error_continue
-	subq.w	#1,(a4)                         ; 'ST' as text
-	dc.b	'OP ???',0
-	dc.b	$00
+	dc.b	'STOP incompilable',0
 
 ;------------------------------------------------------------------------------
 ; TRON: not compilable, alert 'TRON ???'.
 ;------------------------------------------------------------------------------
 cmd_tron_unsupported:
 	bsr.w	compile_error_continue
-	addq.w	#2,(a2)                         ; 'TRON' as text
-	dc.w	$4f4e
-
-; Tail ' ???' of the TRON text; the label exists because decoded text at $3a6 branches here.
-tron_message_tail:
-	dc.b	' ???',0                        ; ' ???' of 'TRON ???' (target of a decoded-as-code branch)
-	dc.b	$00
+	dc.b	'TRON incompilable',0
 
 ;------------------------------------------------------------------------------
 ; TROFF: not compilable, alert 'TROFF ???'.
 ;------------------------------------------------------------------------------
 cmd_troff_unsupported:
 	bsr.w	compile_error_continue
-	addq.w	#2,(a2)                         ; 'TR' as text
-	dc.b	'OFF ???',0
+	dc.b	'TROFF incompilable',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; CONT: not compilable, alert 'CONT ???'.
 ;------------------------------------------------------------------------------
 cmd_cont_unsupported:
 	bsr.w	compile_error_continue
-	dc.b	'CONT ???',0
-	dc.b	$00
+	dc.b	'CONT incompilable',0
 
 ;------------------------------------------------------------------------------
 ; DEFLIST: not compilable, alert 'DEFLIST ???'.
 ;------------------------------------------------------------------------------
 cmd_deflist_unsupported:
 	bsr.w	compile_error_continue
-	neg.w	d5                              ; 'DE' as text
-	dc.b	'FLIST ???',0
+	dc.b	'DEFLIST incompilable',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; Steps a2 back over a tst.w d2 at the end of the code (loops while there are more).
@@ -1019,7 +1007,7 @@ emit_skip_if_true:
 	cmpi.w	#$50c2,d0                       ; $50c2 = Scc d2
 	bne.s	.add_test                       ; not an Scc d2: add a test
 	andi.w	#$f00,d1                        ; condition field ...
-	ori.w	#$6006,d1                       ; ... into $6006 = Bcc.s *+8
+	ori.w	#$6006,d1                       ; ... into $607e = Bcc.s *+8
 	subq.l	#4,a2                           ; step back over Scc d2 / ext.w d2
 	move.w	d1,(a2)+                        ; Bcc.s *+8 replaces them
 	rts
@@ -1064,7 +1052,7 @@ dispatch_command:
 
 ; Handler offsets for the 256 tokens that can start a line: commands $00-$bf, then $cf-$ff
 ; (variables $e0-$ff give an assignment, $e8/$f8 a label). Slots $c0-$ce ($63c-$659) hold code,
-; not offsets: they are not command tokens. The slots from $65a on are decoded as words and code.
+; not offsets: they are not command tokens. The slots from $6b8 on are decoded as words and code.
 command_dispatch_table:
 	dc.w	cmd_no_code-command_dispatch_table
 	dc.w	cmd_no_code-command_dispatch_table
@@ -1260,12 +1248,12 @@ command_dispatch_table:
 	dc.w	error_bad_file_token-command_dispatch_table
 
 ; ELLIPSE / PELLIPSE with angles: the bytes here decode as table words but are code:
-; move.w #$23e,d0 (ELLIPSE) or move.w #$233,d0 (PELLIPSE) at $642, then $646: replace the last IR
+; move.w #$23e,d0 (ELLIPSE) or move.w #$233,d0 (PELLIPSE) at $6a0, then $646: replace the last IR
 ; word (the plain ellipse routine) by d1 = $230 and parse the two angles for routine d0.
 parse_ellipse_arc:
 	dc.w	opt_swap_routine_pair+2-command_dispatch_table ; code, not offsets: move.w #$23e,d0 / bra.s $646
 	dc.w	assign_int_store+2-command_dispatch_table
-	dc.w	rt_exp_split-command_dispatch_table
+	dc.w	rt_float_exp+2-command_dispatch_table
 
 ; PELLIPSE with angles (code inside the dispatch table, see parse_ellipse_arc).
 parse_pellipse_arc:
@@ -1279,11 +1267,11 @@ parse_pellipse_arc:
 ;------------------------------------------------------------------------------
 flush_line_with_break_test:
 	bsr.w	flush_line_code                 ; append the line's code
-	bsr.w	emit_break_test                 ; then a jsr (a6) break test
+	bsr.w	emit_break_test
 	bra.w	check_program_end
 	dc.w	$0000,$027a,$027a,$027a,$027a,$027a,$027a,$027a ; token table $cf-$ff continues as words: $d0-$dd File
                                                 ;   Error, $de '?????'
-	dc.w	$027a,$027a,$027a,$027a,$027a,$027a,$027a,$ff3e
+	dc.w	$027a,$027a,$027a,$027a,$027a,$027a,$027a,$ff12
 	dc.w	$028e,$0216                     ; $df END, $e0-$e3 variable assignments, $e4-$e7 array assignments
 	andi.w	#$230,-(a4)                     ; table words $0264 ($e1 string) and $0230 ($e2 integer) as code
 	dc.w	$024a                           ; $e3: boolean assignment
@@ -1383,12 +1371,8 @@ cmd_no_code:
 ;------------------------------------------------------------------------------
 error_bad_file_token:
 	bsr.w	compile_error_fatal             ; fatal alert '* File Error *': token that cannot start a line
-	move.l	-(a0),d5                        ; '* File Error *' as text, decoded as instructions
-	not.w	$6c65(a1)                       ; text continued, decoded as instructions
-	movea.l	d5,a0                           ; text continued, decoded as instructions
-	moveq	#114,d1                         ; text continued, decoded as instructions
-	ble.s	print_separator                 ; text 'or' decoded as a branch: not a real branch
-	move.l	0(a2),d0                        ; text continued, decoded as instructions
+	dc.b	'* File Error *',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; END, QUIT, SYSTEM, NEW, EDIT and the program's last line: jsr $201(a6).
@@ -4466,7 +4450,7 @@ cmd_pointer_store_string:
 
 ;------------------------------------------------------------------------------
 ; SWAP a,b: two simple variables are swapped by straight code (lea of both, then move.l/move.w
-; exchanges copied from the templates at $1f00); strings call $15b; anything else goes through
+; exchanges copied from the templates at $1f5e); strings call $15b; anything else goes through
 ; the variable addresses and $1a4/$1a6/$1a7/$15b.
 ;------------------------------------------------------------------------------
 cmd_swap:
@@ -4968,13 +4952,13 @@ parse_expression:
 call_token_handler:
 	move.w	d7,d0                           ; d7 = token
 	add.w	d0,d0                           ; word index
-	lea	token_handler_table,a2          ; handler table, offsets from $232e
+	lea	token_handler_table,a2          ; handler table, offsets from $238c
 	adda.w	0(a2,d0.w),a2                   ; a2 = handler address
 	jmp	(a2)                            ; handler gets d7 = token
 
 ; One byte per expression token: binary operator priority (4 AND..EQV, $1e +/-, $28 * /, $32 ^,
 ; $23 MOD DIV, $0a compares, $3c string compares, $41 string +), 0 a terminator, $ff an operand
-; or function, $f7 tokens that may not appear. Decoded as code and words up to $22fb.
+; or function, $f7 tokens that may not appear. Decoded as code and words up to $2359.
 token_priority_table:
 	dc.w	$0404,$0404,$041e
 	dc.b	$1e
@@ -5014,7 +4998,7 @@ parse_signed_operand:
 	moveq	#9,d7                           ; routine 9: power
 	bra.w	emit_float_operator
 
-; Handler offsets from $232e for the 256 expression tokens; decoded as code up to $252d.
+; Handler offsets from $238c for the 256 expression tokens; decoded as code up to $258b.
 token_handler_table:
 	dc.w	$0220,$0220,$0220,$0220,$0220,$0212,$0212,$0212
 	dc.w	$0212,$0212,$0212,$0212,$0230,$0230,$0230,$0230
@@ -5048,8 +5032,8 @@ token_handler_table:
 	dc.w	$0200,$0200,$0200,$0200,$0200,$0200,$0200,$0200
 	dc.w	$037c,$0376,$0390,$039a,$0414,$040c,$0402,$03f8
 	dc.w	$0200,$0200,$0200,$0200,$0200,$0200,$0200,$0200
-	dc.w	$6100,$25fc                     ; tokens that cannot appear in an expression: fatal '* FN Error *'
-	dc.b	'* FN Error *',0                ; '* FN Error *' as text, decoded as instructions
+	dc.w	$6100,$261e                     ; tokens that cannot appear in an expression: fatal '* FN Error *'
+	dc.b	'* FN Error *',0
 	dc.b	$00
 
 ;------------------------------------------------------------------------------
@@ -5628,7 +5612,7 @@ parse_exec:
 
 ;------------------------------------------------------------------------------
 ; Runs of not.w d6 ($4646): a token stream of $46 (end) bytes; a5 is pointed here after an FN
-; error so the parser unwinds. Then from $29fe the FN / @ function call handler.
+; error so the parser unwinds. Then from $2a5c the FN / @ function call handler.
 ;------------------------------------------------------------------------------
 	not.w	d6                              ; $4646: two $46 end tokens
 
@@ -6115,8 +6099,7 @@ optimise_op_table:
 ;------------------------------------------------------------------------------
 opt_error_bad_operation:
 	bsr.w	compile_error_fatal             ; $ff85/$ff84: fatal '* Opt Err *'
-	move.l	-(a0),d5
-	dc.b	'Opt Err *',0
+	dc.b	'* Opt Err *',0
 
 ;------------------------------------------------------------------------------
 ; Optimiser rule (decoded as data): addq.l #2,a1 steps over one operand word, then the rts at
@@ -6191,7 +6174,7 @@ opt_rule_float_to_int:
 ;------------------------------------------------------------------------------
 ; Optimiser rule for $fffe (integer to float), decoded as data: before $120 (print a number) it
 ; becomes print integer $156; $fffe $ffff cancel; before $ffd2 it goes; $fffe $fffd becomes
-; $fffb; before $ffcd see opt_int_to_float_const_op; before $fff9 the rule at $338a (next
+; $fffb; before $ffcd see opt_int_to_float_const_op; before $fff9 the rule at $33e8 (next
 ; range); before $4e/$1e/$28/$147 the integer forms in opt_return_unchanged.
 ;------------------------------------------------------------------------------
 opt_rule_int_to_float:
@@ -6305,8 +6288,7 @@ opt_float_const:
 	bra.s	ir_drop_pair                    ; drop the $ffff and the spare word
 .fold_overflow:
 	bsr.w	compile_error_fatal             ; fatal '* Opt Err 2 *'
-	move.l	-(a0),d5                        ; '* ' of the text, decoded as an instruction
-	dc.b	'Opt Err 2 *',0
+	dc.b	'* Opt Err 2 *',0
 .push_const:
 	bsr.w	ir_find_operand_end
 	cmpi.w	#$fff6,-(a2)                    ; the operand ends with a float pop?
@@ -6610,7 +6592,7 @@ ir_find_operand_end:
 	bgt.s	.next_word                      ; yes: go on
 	rts
 
-; Stack effect / operand skip per IR operation, offsets from $3190.
+; Stack effect / operand skip per IR operation, offsets from $31ee.
 ir_stack_effect_table:
 	dc.w	.no_effect-ir_stack_effect_table
 	dc.w	.no_effect-ir_stack_effect_table
@@ -7075,8 +7057,7 @@ generate_code:
 	bpl.s	.check_range
 .bad_ir:
 	bsr.w	compile_error_fatal             ; internal error "* Mk 1 *" (fatal alert, does not return)
-	move.l	-(a0),d5                        ; text "* Mk 1 *" decoded as code (message of the bsr above)
-	dc.b	'Mk 1 *',0
+	dc.b	'* Mk 1 *',0
 	dc.b	$00
 .routine_number:
 	cmpi.w	#$280,d0
@@ -8250,8 +8231,7 @@ emit_push_long_at_a0:
 ;------------------------------------------------------------------------------
 codegen_error_mk2:
 	bsr.w	compile_error_fatal             ; IR $ff85/$ff84: internal error "* Mk 2 *"
-	move.l	-(a0),d5                        ; text "* Mk 2 *" decoded as code
-	dc.b	'Mk 2 *',0
+	dc.b	'* Mk 2 *',0
 	dc.b	$00
 
 ;------------------------------------------------------------------------------
@@ -8693,9 +8673,8 @@ emit_varptr_long:
 ;------------------------------------------------------------------------------
 codegen_error_b:
 	bsr.w	compile_error_fatal             ; IR $ffc8: internal error "* B! *"
-	move.l	-(a0),d5                        ; text "* B! *" decoded as code
-	clr.b	-(a1)                           ; (message text decoded as code)
-	move.l	0(a2),d0                        ; (message text decoded as code)
+	dc.b	'* B! *',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; IR $ffcb: load a float variable into d3-d5 (lea var,a0 / routine $12c).
@@ -9812,8 +9791,7 @@ emit_moveq_d0_char_call:
 ;------------------------------------------------------------------------------
 codegen_error_dollar:
 	bsr.w	compile_error_fatal             ; IR $ffc7: internal error "*$*"
-	move.l	-(a4),d5                        ; text "*$*" decoded as code
-	move.l	d0,d5                           ; (message text decoded as code)
+	dc.w	$2a24,$2a00
 
 ;------------------------------------------------------------------------------
 ; IR $ff96: lea string var,a0 / jsr routine $177.
@@ -10025,8 +10003,7 @@ emit_call_routine_1b5:
 ;------------------------------------------------------------------------------
 codegen_error_mkadd:
 	bsr.w	compile_error_fatal             ; unused IR words of the add/sub group: "* Mkadd *"
-	move.l	-(a0),d5                        ; text "* Mkadd *" decoded as code
-	dc.b	'Mkadd *',0
+	dc.b	'* Mkadd *',0
 
 ;------------------------------------------------------------------------------
 ; IR $ffca: lea string var,a1.
@@ -10379,8 +10356,7 @@ mark_runtime_routine:
 	rts                                     ; block end flagged: done
 .not_found:
 	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	move.l	-(a0),d5                        ; text "* L? - Restart *" decoded as code
-	dc.b	'L? - Restart *',0
+	dc.b	'* L? - Restart *',0
 	dc.b	$00
 
 ;------------------------------------------------------------------------------
@@ -10486,12 +10462,7 @@ runtime_length:
 ;------------------------------------------------------------------------------
 error_read:
 	bsr.w	compile_error_fatal             ; fatal "Read Error"
-	addq.w	#1,-(a5)                        ; text "Read Error" decoded as code
-	bsr.s	read_source_handle+2            ; (message text decoded as code)
-	movea.l	d5,a0                           ; (message text decoded as code)
-	moveq	#114,d1                         ; (message text decoded as code)
-	ble.s	error_end_of_file               ; (message text decoded as code)
-	dc.w	$0000
+	dc.b	'Erreur de lecture',0
 
 ;------------------------------------------------------------------------------
 ; Compiler: Fopen of the .BAS file named at bss_end+$3d0 for reading; handle into
@@ -10575,8 +10546,9 @@ read_source_handle:
 error_end_of_file:
 	tst.l	d0                              ; negative: an error code
 	bmi.s	error_os                        ; yes: "OS-ERROR"
-	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	dc.b	'End of File ???',0
+	bsr.w	compile_error_fatal
+	dc.b	'EOF - Fin de fichier ???',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; Fatal "OS-ERROR".
@@ -10591,15 +10563,16 @@ error_os:
 ;------------------------------------------------------------------------------
 error_write:
 	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	dc.b	'Write Error',0
+	dc.b	'Erreur d',$27
+	dc.b	$82
+	dc.b	'criture',0
 
 ;------------------------------------------------------------------------------
 ; Fatal "Error while closing File".
 ;------------------------------------------------------------------------------
 error_close:
 	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	dc.b	'Error while closing File',0
-	dc.b	$00
+	dc.b	'Erreur lors|de fermeture du fichier',0
 
 ;------------------------------------------------------------------------------
 ; Compiler: reads the next 4000 bytes of the source into bss_end+$d04 and sets the read
@@ -10613,7 +10586,7 @@ fill_source_buffer:
 	move.w	#$3f,-(sp)                      ; GEMDOS $3f
 	trap	#1                              ; Fread
 	adda.w	#$c,sp                          ; drop the arguments
-	lea	bas_header_ref_base,a0          ; dat_0d011+$1b = dat_0d02c
+	lea	bas_header_ref_base,a0          ; dat_0d2d7+$1b = dat_0d2f2
 	move.w	$1b(a0),d1                      ; the version word (at most 2, so the masked value is 0)
 	andi.w	#$f3fc,d1                       ; mask: the result is always 0
 	move.w	d1,bss_end+$1ca4                ; read position = start of the new buffer
@@ -10673,7 +10646,9 @@ memory_end:
 ;------------------------------------------------------------------------------
 error_out_of_memory:
 	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	dc.b	'Out of Memory',0
+	dc.w	$4d82
+	dc.b	'moire pleine',0
+	dc.b	$00
 
 ;------------------------------------------------------------------------------
 ; Compiler: a0 = address of a pointer in the table that ends at bss_end+$a0, d0 = bytes.
@@ -10688,7 +10663,7 @@ open_memory_gap:
 	movea.l	bss_end+$9c,a0                  ; a0 = end of all regions
 	lea	0(a0,d0.l),a1                   ; new end
 	cmpa.l	memory_end(pc),a1               ; past the end of the work area?
-	bcc.s	error_out_of_memory             ; yes: "Out of Memory"
+	bcc.s	error_out_of_memory
 	move.l	a0,d0                           ; bytes to move: region end - gap start
 	sub.l	d2,d0                           ; (d2 = gap start)
 	jsr	rt_copy_bytes_backward          ; block move (another range)
@@ -10711,7 +10686,7 @@ fatal_error_flag:
 ; Does not return.
 ;------------------------------------------------------------------------------
 compile_error_fatal:
-	movem.l	d0-d7/a0-sp,bss_end+$ffff2f8a   ; registers to text-$40: the command line area of the basepage
+	movem.l	d0-d7/a0-sp,bss_end+$ffff2cc4   ; registers to text-$40: the command line area of the basepage
 	st	fatal_error_flag                ; fatal: only an Abort button
 	lea	str_button_abort(pc),a2         ; button text
 	bra.s	show_compile_error              ; show it
@@ -10740,35 +10715,36 @@ show_compile_error:
 	bne.s	.copy_buttons                   ; ... with their NUL
 	moveq	#1,d0                           ; form_alert default button 1
 	lea	str_alert_compiling_error(pc),a0 ; the whole alert text
-	bsr.w	form_alert_call                 ; show it, d0 = button pressed
+	bsr.w	form_alert_call
 	lea	bss_end+$208e,sp                ; reset the compiler stack
 	tst.b	fatal_error_flag                ; fatal error?
 	bne.w	abort_compile                   ; yes: abort
-	subq.w	#1,d0                           ; button 1 = Continue?
-	bne.w	abort_compile                   ; Abort: close the files and start again
-	bra.w	compile_next_line               ; Continue: compile the next line
+	subq.w	#1,d0
+	bne.w	abort_compile
+	bra.w	compile_next_line
 
 ; Alert buttons: [Continue|Abort].
 str_buttons_continue_abort:
-	dc.b	'][Continue|Abort]',0
+	dc.b	'][Cont.|Arr'
+	dc.b	$88,$74,$5d,$00
 
 ; Alert button: [ Abort ].
 str_button_abort:
-	dc.b	'][ Abort ]',0
+	dc.b	$5d,$5b,$41,$72,$72,$88,$74,$5d,$00
 
 ; Start of the alert text; the message and buttons are appended after it.
 str_alert_compiling_error:
-	dc.b	'[1][Compiling error        |'
+	dc.b	'[1][Erreur de compilation|'
 
 ; Buffer for the message and the buttons.
 alert_message_buffer:
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
-	dc.b	$00,$00,$00,$00,$00
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000
 
 ; Long: address of resource tree 0.
 rsc_tree_file_box:
@@ -11307,10 +11283,7 @@ write_bytes:
 .error:
 	addq.l	#4,sp                           ; drop the buffer address
 	bsr.w	compile_error_fatal             ; fatal error, the message follows
-	subq.w	#1,d1                           ; text "SAVEPROG - write error" decoded as code
-	addq.w	#3,d5                           ; (message text decoded as code)
-	addq.w	#8,(a2)                         ; (message text decoded as code)
-	dc.b	'OG - write error',0
+	dc.b	'SAVEPROG - write error',0
 	dc.b	$00
 
 ; Write buffer for write_long / write_byte.
@@ -11403,8 +11376,8 @@ link_dispatch:
 ; Data: 20 handler offsets from link_push_open (REPEAT, UNTIL, WHILE, WEND, DO, LOOP, FOR,
 ; NEXT, IF, ELSE, ENDIF, EXIT, PROCEDURE, RETURN, LOCAL, DEFFN, labels).
 structure_handler_offsets:
-	dc.w	$0000,$0008,$0050,$0058,$0000,$0032,$0050,$0088 ; 20 handler offsets from loc_052f6, decoded as code up
-                                                ;   to $52f4
+	dc.w	$0000,$0008,$0050,$0058,$0000,$0032,$0050,$0088 ; 20 handler offsets from loc_0536e, decoded as code up
+                                                ;   to $536c
 	dc.w	$012a,$0000,$010e,$00f2,$01b4,$fec0,$fec0,$01ea
 	dc.w	$01fa,$0202,$0256,$0262,$023e
 
@@ -11961,7 +11934,7 @@ rt_data_length_patch:
 ;------------------------------------------------------------------------------
 ; Runtime routine $12f (RUN), also the end of the start-up: restores the start-up registers,
 ; graphics defaults (routine $244), clears the screen, sets the first word of each of the 101
-; 6-byte entries at $878(a4) to -1, empties the procedure stack (a3 = $5c(a4)), CLEAR
+; 6-byte entries at $8d6(a4) to -1, empties the procedure stack (a3 = $5c(a4)), CLEAR
 ; (routine $154), then routine 3: the program.
 ;------------------------------------------------------------------------------
 rt_run:
@@ -11972,8 +11945,8 @@ rt_run:
 	move.w	#$9,-(sp)                       ; GEMDOS 9
 	trap	#1                              ; Cconws
 	addq.l	#6,sp                           ; drop the arguments
-	moveq	#100,d0                         ; 101 entries of 6 bytes at $878(a4) set to -1
-	lea	$878(a4),a0                     ; (the 101-entry table at $878(a4))
+	moveq	#100,d0                         ; 101 entries of 6 bytes at $8d6(a4) set to -1
+	lea	$878(a4),a0                     ; (the 101-entry table at $8d6(a4))
 	moveq	#-1,d1                          ; d1 = $ffff
 .clear_table:
 	move.w	d1,(a0)+                        ; first word of the entry = -1
@@ -12035,10 +12008,10 @@ rt_fre:
 	rts                                     ; return
 
 ; Runtime data: 26 offsets in a4 of the GEM arrays; rt_gem_init writes their addresses from
-; (a4) on (the AES and VDI parameter blocks). Decoded as code to $5881.
+; (a4) on (the AES and VDI parameter blocks). Decoded as code to $58f9.
 rt_gem_array_offsets:
 	dc.w	$02e4,$02f0,$074a,$0772,$079a,$07c2,$02cc,$030e ; 26 offsets in a4 of the GEM arrays, decoded as code to
-                                                ;   $5881
+                                                ;   $58f9
 	dc.w	$040e,$060e,$070e,$10e6,$02f0,$10f2,$111a,$1142
 	dc.w	$116a,$1192,$11aa,$13aa,$12aa,$15aa
 
@@ -12257,10 +12230,10 @@ rt_gemsys_opcode:
 
 ;------------------------------------------------------------------------------
 ; Runtime: the rest of rt_gemsys_opcode (contrl[1..3] from the table). The AES table itself:
-; 3 bytes per opcode from this address, opcode 10 at $59d2.
+; 3 bytes per opcode from this address, opcode 10 at $5a4a.
 ;------------------------------------------------------------------------------
 rt_aes_control_table:
-	moveq	#0,d0                           ; code, and 3 bytes per AES opcode from here: opcode 10 is at $59d2
+	moveq	#0,d0                           ; code, and 3 bytes per AES opcode from here: opcode 10 is at $5a4a
 	move.b	(a0)+,d0                        ; contrl[1] = intin count
 	move.w	d0,(a1)+                        ; (stored)
 	move.b	(a0)+,d0                        ; contrl[2] = intout count
@@ -12279,7 +12252,7 @@ rt_aes_call_block:
 	move.w	#$c8,d0                         ; $c8 = AES
 	trap	#2                              ; AES/VDI
 	rts                                     ; return
-	dc.w	$0001,$0002,$0101,$0201,$0100,$0101,$0201,$0101 ; AES opcode table bytes from here to $5b2d, decoded as
+	dc.w	$0001,$0002,$0101,$0201,$0100,$0101,$0201,$0101 ; AES opcode table bytes from here to $5ba5, decoded as
                                                 ;   code
 	dc.w	$0101,$0000,$0000,$0000,$0000,$0000,$0100,$0001
 	dc.w	$0003,$0500,$0505,$0000,$0101,$0201,$0010,$0701
@@ -12315,13 +12288,13 @@ rt_find_shift_state_byte:
 	moveq	#-1,d6                          ; Kbshift(-1): read the state
 	bsr.s	rt_kbshift                      ; (Kbshift)
 	move.w	d0,d5                           ; d5 = the state, restored at the end
-	move.w	#$a00,d7                        ; search from $a01 on
+	move.w	#$a00,d7                        ; search from $a5f on
 .toggle_state:
 	moveq	#15,d6                          ; state 15: all four shift keys
 	bsr.s	rt_kbshift                      ; set it
 .scan_memory:
 	addq.w	#1,d7                           ; next address
-	bmi.s	.restore                        ; past $7fff: not found
+	bmi.s	.restore                        ; past $8077: not found
 	movea.w	d7,a0                           ; a0 = the address
 	cmp.b	(a0),d6                         ; does it hold the state?
 	beq.s	.compare_state                  ; yes: try the other states
@@ -13493,9 +13466,9 @@ rt_int_floor:
 ; after rt_int_floor and rt_trunc_done. Decoded as code in the first pass.
 rt_trunc_mask_table:
 	dc.w	$8000,$c000,$e000,$f000,$f800,$fc00,$fe00,$ff00 ; mask words $0000,$8000..$ffff, decoded as code to
-                                                ;   $62f7
+                                                ;   $636f
 	dc.w	$ff80,$ffc0,$ffe0,$fff0,$fff8,$fffc,$fffe,$ffff ; mask words $0000,$8000..$ffff, decoded as code to
-                                                ;   $62f7
+                                                ;   $636f
 
 ; Runtime routine $fe: long d0 to float, stored at (a0) through routine $e1. Kept as data
 ; (dc.w); the words decode as pea $e1(a6).
@@ -14210,9 +14183,9 @@ rt_power_zero_base:
 ;------------------------------------------------------------------------------
 ; Runtime (copied into compiled programs, never run by the compiler). Routine $de: power with the operands swapped.
 ; Routine 9
-; at $6a0c: d0-d2 = d3-d5 ^ d0-d2. Integer exponents 1..256 by repeated
+; at $6a84: d0-d2 = d3-d5 ^ d0-d2. Integer exponents 1..256 by repeated
 ; squaring, otherwise EXP(LOG(base)*exponent); a negative base needs an
-; integer exponent (error 6 otherwise). Base saved at dat_06b14.
+; integer exponent (error 6 otherwise). Base saved at dat_06b8c.
 ;------------------------------------------------------------------------------
 rt_power_swapped:
 	exg	d0,d3                           ; the operands arrive the other way round: swap ...
@@ -14304,7 +14277,7 @@ rt_power:
 	tst.w	d2                              ; a fraction left: error 6
 	bne.s	.error_negative
 	movem.l	(sp),d0-d2                      ; exponent again
-	jsr	rn_float_test_units_bit(a6)     ; routine $fc: odd exponent? (flag byte before dat_06b14)
+	jsr	rn_float_test_units_bit(a6)     ; routine $fc: odd exponent? (flag byte before dat_06b8c)
 	sne	-$1(a0)                         ; odd exponent: flag byte at 6b13 set
 	movem.l	(a0),d0-d2                      ; d0-d2 = base
 	ext.l	d2                              ; exponent word extended: sign gone, |base|
@@ -14411,7 +14384,7 @@ rt_for_int_push:
 	rts
 
 rt_for_int_stack_full:
-	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (084ec)
+	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (08564)
 	movea.l	$60(a4),a1                      ; a1 = top limit of the control stack again
 	subq.l	#8,a1
 	cmpa.l	a1,a3                           ; room now?
@@ -14438,7 +14411,7 @@ rt_for_int_step:
 	move.l	a3,rn_saved_registers(a6)       ; save the control stack pointer
 	rts
 .full_step:
-	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (084ec)
+	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (08564)
 	movea.l	$60(a4),a1                      ; a1 = top limit again
 	suba.w	#$c,a1
 	cmpa.l	a1,a3                           ; room now?
@@ -14658,8 +14631,8 @@ rt_slpoke_super:
 ; ($120(a6), the entry at 6cc8).
 ;------------------------------------------------------------------------------
 rt_print_int:
-	jsr	rn_long_to_float(a6)            ; integer to float (06316)
-	jmp	rn_print_float(a6)              ; print the float (06cc8)
+	jsr	rn_long_to_float(a6)            ; integer to float (0638e)
+	jmp	rn_print_float(a6)              ; print the float (06d40)
 
 ;------------------------------------------------------------------------------
 ; Runtime: PRINT of a boolean in d2: prints 0 for 0, -1 otherwise.
@@ -14673,7 +14646,7 @@ rt_print_bool:
 ; Runtime: prints the character in d0 (jmp $123(a6) = rt_print_char).
 ;------------------------------------------------------------------------------
 rt_print_bool_char:
-	jmp	rn_print_char(a6)               ; print character d0 (06d4a)
+	jmp	rn_print_char(a6)               ; print character d0 (06dc2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: prints -1 (TRUE).
@@ -14690,21 +14663,21 @@ rt_print_bool_true:
 ; and prints the text ($211(a6) = 06d52).
 ;------------------------------------------------------------------------------
 rt_print_float_var:
-	jsr	rn_float_load(a6)               ; unpack the float at a0 into d0-d2 (05b9a)
+	jsr	rn_float_load(a6)               ; unpack the float at a0 into d0-d2 (05c12)
 
 rt_print_float:
-	jsr	rn_float_to_string(a6)          ; format the float (060da): text at a0, length d0
+	jsr	rn_float_to_string(a6)          ; format the float (06152): text at a0, length d0
 	ext.l	d0                              ; length to a long count
 	movea.l	a0,a1                           ; a1 = text
-	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06d52)
+	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06dca)
 
 ;------------------------------------------------------------------------------
-; Runtime: PRINT of a string: a0 = its descriptor. $212(a6) (085b2) gives a1 = text and
+; Runtime: PRINT of a string: a0 = its descriptor. $212(a6) (0862a) gives a1 = text and
 ; d0 = length; $211(a6) prints them.
 ;------------------------------------------------------------------------------
 rt_print_string:
-	jsr	rn_string_text_len_212(a6)      ; a1 = text, d0 = length of the string at a0 (085b2)
-	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06d52)
+	jsr	rn_string_text_len_212(a6)      ; a1 = text, d0 = length of the string at a0 (0862a)
+	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06dca)
 
 ;------------------------------------------------------------------------------
 ; Runtime: TAB(d0) in PRINT. Compares d0 (0..255) with the column of the current channel
@@ -14723,10 +14696,10 @@ rt_print_tab:
 	bra.s	.spaces
 .newline:
 	move.w	d0,-(sp)
-	jsr	rn_print_crlf(a6)               ; print CR LF (06d44)
+	jsr	rn_print_crlf(a6)               ; print CR LF (06dbc)
 	move.w	(sp)+,d0
 .spaces:
-	jmp	rn_print_spc(a6)                ; SPC d0 (06d02)
+	jmp	rn_print_spc(a6)                ; SPC d0 (06d7a)
 	btst	d0,-(a4)                        ; word $0124, not code: TAB ends at the jmp before
 
 ;------------------------------------------------------------------------------
@@ -14761,7 +14734,7 @@ rt_print_comma:
 ;------------------------------------------------------------------------------
 rt_print_space_block:
 	lea	dat_sixteen_spaces(pc),a1       ; the 16 spaces
-	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06d52)
+	jmp	rn_print_text(a6)               ; print d0 characters from a1 (06dca)
 
 ;------------------------------------------------------------------------------
 ; Data: 16 spaces (16 times $2020, decoded as move.l -(a0),d0).
@@ -14795,7 +14768,7 @@ rt_print_crlf:
 ; Runtime: print one character ($123(a6)): d0 = the character. It is put in the one-byte
 ; buffer at 06e04 ($210(a6)) and printed by the next entry.
 ; 6d52 ($211(a6)): print d0.l characters from a1 on the current channel $228(a4). Adds the
-; count to $86e(a4), keeps the channel's column byte at $24c(a4)+channel (CR = 0, BS - 1,
+; count to $8cc(a4), keeps the channel's column byte at $24c(a4)+channel (CR = 0, BS - 1,
 ; LF no change, others + 1), then writes:
 ;   channel >= 0: GEMDOS handle, Fwrite (error 37 Disk full on a short write)
 ;   channel -7 (LPRINT): Fwrite to handle -3 (PRN:)
@@ -14803,7 +14776,7 @@ rt_print_crlf:
 ;   CON: and the raw screen go to the GEM window text output ($d7(a6) = 0b160) when $b36(a4) is set.
 ;------------------------------------------------------------------------------
 rt_print_char:
-	lea	rn_print_char_buffer(a6),a1     ; the one-byte print buffer (06e04)
+	lea	rn_print_char_buffer(a6),a1     ; the one-byte print buffer (06e7c)
 	move.b	d0,(a1)                         ; character into the buffer
 	moveq	#1,d0                           ; one character
 
@@ -14844,7 +14817,7 @@ rt_print_text:
 	pea	(a3)                            ; keep a3
 	movea.l	a1,a3                           ; a3 = text
 	move.l	d0,d7                           ; d7 = count
-	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d26)
+	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d9e)
 	bra.s	.bconout_next
 .bconout:
 	moveq	#0,d0                           ; next character, zero-extended
@@ -14895,7 +14868,7 @@ rt_gem_text_redirect:
 	bne.s	.no_gem
 .gem:
 	addq.l	#4,sp                           ; drop the return address
-	jmp	rn_window_print_text(a6)        ; GEM window text output (0b160)
+	jmp	rn_window_print_text(a6)        ; GEM window text output (0b426)
 .no_gem:
 	rts
 
@@ -14995,7 +14968,7 @@ rt_inc_float_var:
 	andi.w	#$3ff,d2                        ; exponent
 	sub.w	d2,d1                           ; d1 = low mantissa bits only
 	bset	#$1f,d0                         ; implicit top bit
-	jsr	rn_float_add_one(a6)            ; add 1 (06eb6)
+	jsr	rn_float_add_one(a6)            ; add 1 (06f2e)
 	andi.w	#$fc00,d1                       ; exponent back into the low word
 	or.w	d2,d1
 	tst.l	d2
@@ -15026,7 +14999,7 @@ rt_dec_float_var:
 ;------------------------------------------------------------------------------
 rt_float_sub_one:
 	bchg	#$1f,d2                         ; flip the sign
-	jsr	rn_float_add_one(a6)            ; add 1 (06eb6)
+	jsr	rn_float_add_one(a6)            ; add 1 (06f2e)
 	bchg	#$1f,d2
 	rts
 
@@ -15068,7 +15041,7 @@ rt_float_add_one:
 	move.l	#$80000000,d3                   ; 1.0 in d3-d5
 	moveq	#0,d4
 	move.l	#$200,d5
-	jmp	rn_float_add(a6)                ; float add (05c00)
+	jmp	rn_float_add(a6)                ; float add (05c78)
 .negative:
 	not.w	d3                              ; negative number: |x| - 1
 	cmpi.w	#$200,d2                        ; |x| < 1: general add of 1.0
@@ -15127,7 +15100,7 @@ rt_for_float_push:
 	rts
 
 rt_for_float_stack_full:
-	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (084ec)
+	jsr	rn_string_garbage_collect(a6)   ; full: string garbage collection (08564)
 	movea.l	$60(a4),a1                      ; a1 = top limit again
 	suba.w	#$e,a1
 	cmpa.l	a1,a3                           ; room now?
@@ -15235,7 +15208,7 @@ rt_next_float:
 	bset	#$1f,d0                         ; implicit top bit
 	andi.w	#$3ff,d2                        ; d2.w = exponent
 	sub.w	d2,d1                           ; d1 = low mantissa bits only
-	jsr	rn_float_add_one(a6)            ; add 1 (06eb6)
+	jsr	rn_float_add_one(a6)            ; add 1 (06f2e)
 	move.l	-(a3),d5                        ; d3-d5 = the limit
 	move.w	-(a3),d4
 	move.l	-(a3),d3
@@ -15322,7 +15295,7 @@ rt_next_float_step:
 	smi	-(sp)                           ; keep the step's sign
 	move.w	-(a3),d4
 	move.l	-(a3),d3
-	jsr	rn_float_add(a6)                ; float add (05c00)
+	jsr	rn_float_add(a6)                ; float add (05c78)
 	move.l	-(a3),d5                        ; d3-d5 = the limit
 	move.w	-(a3),d4
 	move.l	-(a3),d3
@@ -15418,7 +15391,7 @@ rt_raise_channel_error:
 
 ;------------------------------------------------------------------------------
 ; Runtime: selects channel #d0 for output/input ($126(a6)): d0 below 100 (else error 23 File #
-; wrong), its handle from the table at $7ec(a4) (0 = error 24 File not open) into $228(a4) and
+; wrong), its handle from the table at $84a(a4) (0 = error 24 File not open) into $228(a4) and
 ; $22a(a4); clears the character count $86c(a4).
 ; 7110: selects the printer (LPRINT, channel -7); 7114 ($10b(a6)): the screen (channel -4).
 ;------------------------------------------------------------------------------
@@ -15455,13 +15428,13 @@ rt_set_output_channel:
 rt_out:
 	subq.w	#6,d1                           ; BIOS device - 6 = channel
 	move.w	d1,$228(a4)                     ; the channel to print on
-	jmp	rn_print_char(a6)               ; print character d0 (06d4a)
+	jmp	rn_print_char(a6)               ; print character d0 (06dc2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: CLS: selects the screen ($10b(a6)) and prints ESC E.
 ;------------------------------------------------------------------------------
 rt_cls:
-	jsr	rn_select_screen(a6)            ; select the screen (07114)
+	jsr	rn_select_screen(a6)            ; select the screen (0718c)
 
 ;------------------------------------------------------------------------------
 ; Runtime: prints the 2 bytes at dat_esc_e (ESC E, clear screen) on the current channel.
@@ -15469,7 +15442,7 @@ rt_cls:
 rt_cls_print_esc_e:
 	lea	dat_esc_e(pc),a1                ; ESC E
 	moveq	#2,d0                           ; 2 characters
-	jmp	rn_print_text(a6)               ; print them (06d52)
+	jmp	rn_print_text(a6)               ; print them (06dca)
 
 ; Data and code: 713c-713d are ESC E ($1b,$45); the listing decodes them with the next word
 ; as one move.b. 713e is CLS #n: jsr $126(a6) (select channel #d0, bytes 4eae 0126) then
@@ -15489,7 +15462,7 @@ rt_cls_channel:
 ;------------------------------------------------------------------------------
 rt_bput:
 	movea.l	d1,a1                           ; a1 = address, d0 = count
-	jmp	rn_print_text(a6)               ; write them (06d52)
+	jmp	rn_print_text(a6)               ; write them (06dca)
 
 ;------------------------------------------------------------------------------
 ; Runtime: BGET: reads d0 bytes to address d1 from the current channel (d6) through $18c(a6)
@@ -15525,7 +15498,7 @@ dat_temp_channel:
 
 ;------------------------------------------------------------------------------
 ; Runtime: opens a temporary channel ($18a(a6)): a0 = the file name descriptor, d1 = the mode
-; letter ('I' or 'O'). Builds a 1-character mode string at $ad2(a4) with its descriptor at
+; letter ('I' or 'O'). Builds a 1-character mode string at $b30(a4) with its descriptor at
 ; $ad8(a4), takes the highest free channel number (99 down) into dat_temp_channel, opens it
 ; ($96(a6), presumably OPEN at 071b0) and selects it ($126(a6)).
 ;------------------------------------------------------------------------------
@@ -15542,8 +15515,8 @@ rt_open_temp_channel:
 	dbeq	d1,.free                        ; search 99 down for a free entry
 	move.w	d1,rn_dat_temp_channel(a6)      ; dat_temp_channel
 	jsr	rn_open(a6)                     ; OPEN (presumably 071b0)
-	move.w	dat_temp_channel(pc),d0         ; select the channel (070fc)
-	jmp	rn_select_channel(a6)           ; select it (070fc)
+	move.w	dat_temp_channel(pc),d0         ; select the channel (07174)
+	jmp	rn_select_channel(a6)           ; select it (07174)
 
 ;------------------------------------------------------------------------------
 ; Runtime: closes the temporary channel ($18b(a6)) when one is open: tas marks it closed,
@@ -15553,7 +15526,7 @@ rt_close_temp_channel_if_open:
 	move.w	dat_temp_channel(pc),d0         ; the temporary channel
 	tas	rn_dat_temp_channel(a6)         ; mark it closed; was it open?
 	bmi.s	.done
-	jmp	rn_close(a6)                    ; CLOSE #d0 (07314)
+	jmp	rn_close(a6)                    ; CLOSE #d0 (0738c)
 .done:
 	rts
 
@@ -15595,7 +15568,7 @@ rt_open_record_length:
 	andi.w	#$df,d0                         ; upper case
 	move.w	d0,d4                           ; d4 = mode letter
 	movea.l	d6,a0                           ; the name string: a1 = text, d0 = length
-	jsr	rn_string_text_len_212(a6)      ; a1 = name text, d0 = length (085b2)
+	jsr	rn_string_text_len_212(a6)      ; a1 = name text, d0 = length (0862a)
 	cmpi.w	#$64,d5                         ; above 100: error 23
 	bhi.s	rt_open_error_number_wrong
 	lea	$7ec(a4),a0                     ; channel table
@@ -15717,8 +15690,8 @@ rt_open_append:
 
 ;------------------------------------------------------------------------------
 ; Runtime: OPEN "R": Fopen read/write, Fcreate if that fails, then takes a free random-file
-; buffer number 1..10 (the bytes at $b7c(a4) = table + $390 hold those in use; none free:
-; error 53) and sets up its record at $b60(a4) + number*128: record length, 0, 0.
+; buffer number 1..10 (the bytes at $bda(a4) = table + $390 hold those in use; none free:
+; error 53) and sets up its record at $bbe(a4) + number*128: record length, 0, 0.
 ;------------------------------------------------------------------------------
 rt_open_random:
 	pea	(a0)                            ; keep the table entry
@@ -15801,7 +15774,7 @@ rt_close_all:
 	moveq	#99,d7                          ; all channels 99..0
 .loop:
 	move.w	d7,d0                           ; d0 = channel
-	jsr	rn_close(a6)                    ; CLOSE #d0 (07314)
+	jsr	rn_close(a6)                    ; CLOSE #d0 (0738c)
 	dbra	d7,.loop                        ; next channel
 	rts
 
@@ -15910,7 +15883,7 @@ rt_dir_path_to:
 
 ;------------------------------------------------------------------------------
 ; Runtime: the directory listing shared by FILES and DIR. (sp) word = attribute (0 = DIR,
-; $17 = FILES), a0 = path descriptor, a1 = TO file descriptor (the empty string at $ad2(a4)
+; $17 = FILES), a0 = path descriptor, a1 = TO file descriptor (the empty string at $b30(a4)
 ; when not given). See the header at 73bc.
 ;------------------------------------------------------------------------------
 rt_dir_files_list:
@@ -15966,7 +15939,7 @@ rt_dir_files_list:
 	cmpi.w	#$ffcf,d0                       ; -49 no more files
 	beq.s	.end
 	move.w	d0,-(sp)
-	jsr	rn_close_temp_channel_if_open(a6) ; close the temporary channel (07196)
+	jsr	rn_close_temp_channel_if_open(a6) ; close the temporary channel (0720e)
 	move.w	(sp)+,d0                        ; d0 = the error
 	jmp	rn_error_entry(a6)              ; raise the GEMDOS error
 .end:
@@ -16002,11 +15975,11 @@ rt_dir_files_list:
 .date_time:
 	move.b	#$20,(a0)+
 	move.w	$16(a2),d0                      ; DTA time word
-	jsr	rn_write_time_word(a6)          ; write it as hh:mm:ss (089fc)
+	jsr	rn_write_time_word(a6)          ; write it as hh:mm:ss (08a74)
 	movea.l	a1,a0                           ; a0 = end of the time text
 	move.b	#$20,(a0)+
 	move.w	$18(a2),d0                      ; DTA date word
-	jsr	rn_write_date_word(a6)          ; write it as dd.mm.yy (0833a)
+	jsr	rn_write_date_word(a6)          ; write it as dd.mm.yy (083b2)
 	movea.l	a1,a0                           ; a0 = end of the date text
 .line_end:
 	move.b	#$d,(a0)+                       ; CR LF
@@ -16014,7 +15987,7 @@ rt_dir_files_list:
 	move.l	a0,d0                           ; length of the line
 	lea	$94(a4),a1
 	sub.l	a1,d0                           ; a1 = the line
-	jsr	rn_print_text(a6)               ; print it (06d52)
+	jsr	rn_print_text(a6)               ; print it (06dca)
 	move.w	#$4f,-(sp)                      ; GEMDOS $4f Fsnext
 	trap	#1                              ; Fsnext
 	addq.l	#2,sp                           ; drop the function number
@@ -16108,13 +16081,13 @@ rt_bload:
 	move.l	d0,-(sp)                        ; keep the address
 	moveq	#73,d1                          ; "I"
 	movea.l	a1,a0                           ; a0 = name descriptor
-	jsr	rn_open_temp_channel(a6)        ; open the temporary channel (07166)
+	jsr	rn_open_temp_channel(a6)        ; open the temporary channel (071de)
 	move.w	$228(a4),d6                     ; d6 = handle
 	bmi.s	rt_close_temp_channel           ; device: nothing to read
 	move.l	#$ffffff,-(sp)                  ; read up to 16 MB
 	move.w	d6,-(sp)
 	move.w	#$3f,-(sp)                      ; GEMDOS $3f Fread
-	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d26)
+	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d9e)
 	trap	#1                              ; GEMDOS
 	adda.w	#$c,sp                          ; drop the arguments
 	tst.l	d0                              ; error?
@@ -16128,7 +16101,7 @@ rt_bload:
 ; Runtime: closes the temporary channel ($18b(a6)).
 ;------------------------------------------------------------------------------
 rt_close_temp_channel:
-	jmp	rn_close_temp_channel_if_open(a6) ; close the temporary channel (07196)
+	jmp	rn_close_temp_channel_if_open(a6) ; close the temporary channel (0720e)
 
 ; Data: the address of the last BSAVE, used by BLOAD without an address.
 dat_bsave_address:
@@ -16142,11 +16115,11 @@ rt_bsave:
 	movem.l	d0-d1,-(sp)                     ; keep length and address
 	moveq	#79,d1                          ; "O"
 	movea.l	a1,a0                           ; a0 = name descriptor
-	jsr	rn_open_temp_channel(a6)        ; open the temporary channel (07166)
+	jsr	rn_open_temp_channel(a6)        ; open the temporary channel (071de)
 	movem.l	(sp)+,d0/a1                     ; d0 = length, a1 = address
 	lea	dat_bsave_address(pc),a0
 	move.l	a1,(a0)                         ; kept for BLOAD without an address
-	jsr	rn_print_text(a6)               ; write them (06d52)
+	jsr	rn_print_text(a6)               ; write them (06dca)
 	jmp	rn_close_temp_channel_if_open(a6) ; close the temporary channel
 
 ;------------------------------------------------------------------------------
@@ -16363,7 +16336,7 @@ dat_wave_envelope:
 ; count is odd, otherwise by words (continues past this range's first part).
 ;------------------------------------------------------------------------------
 rt_bmove:
-	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d26)
+	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d9e)
 	movea.l	d1,a0                           ; a0 = source
 	move.l	a1,d2                           ; a1 = destination
 	or.l	d2,d1                           ; odd address or count: bit 0
@@ -16404,9 +16377,9 @@ rt_bmove_words:
 	bhi.s	.up_words                       ; source above: copy upwards
 	adda.l	d0,a0                           ; copy downwards from the end
 	adda.l	d0,a1
-	jmp	rn_copy_bytes_backward(a6)      ; word copy downwards (094d4)
+	jmp	rn_copy_bytes_backward(a6)      ; word copy downwards (0954c)
 .up_words:
-	jmp	rn_copy_bytes_forward(a6)       ; word copy upwards (0955a)
+	jmp	rn_copy_bytes_forward(a6)       ; word copy upwards (095d2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: RESERVE d0: changes the program's memory so that d0 bytes are free. Takes the free
@@ -16477,7 +16450,7 @@ rt_reserve:
 ; (a2), two string descriptors (d5, d4) and the mode (d6); a0 is the third descriptor. The
 ; three strings are copied to $94(a4) as NUL-terminated C strings (at most 127 characters
 ; each, rt_exec_copy_string), the a0 one pushed first (environment), then d5 (command line),
-; then d4 (name). d0 = the Pexec result; $11f(a6) (09d52) is called before and after.
+; then d4 (name). d0 = the Pexec result; $11f(a6) (09dca) is called before and after.
 	dc.w	$00b8                           ; word $00b8, not code: EXEC starts at 77e6
 
 rt_exec:
@@ -16497,9 +16470,9 @@ rt_exec:
 	bsr.s	rt_exec_copy_string             ; copy it
 	move.w	d6,-(sp)                        ; Pexec mode
 	move.w	#$4b,-(sp)                      ; GEMDOS $4b Pexec
-	jsr	rn_mouse_show(a6)               ; show the mouse (09d52)
+	jsr	rn_mouse_show(a6)               ; show the mouse (09dca)
 	trap	#1                              ; GEMDOS
-	jsr	rn_mouse_show(a6)               ; show the mouse (09d52)
+	jsr	rn_mouse_show(a6)               ; show the mouse (09dca)
 	adda.w	#$10,sp                         ; drop the arguments
 	rts
 
@@ -16555,7 +16528,7 @@ rt_field_raise_error:
 
 ;------------------------------------------------------------------------------
 ; Runtime: FIELD #d0 start: the channel must be open (error 23/24) as a random file (buffer
-; number at table + $390, else error 50 Not an "R"-File). a0 = the buffer record at $b60(a4) +
+; number at table + $390, else error 50 Not an "R"-File). a0 = the buffer record at $bbe(a4) +
 ; number*128: +0 record length, +2 record number, +4 the field list ([width.w][descriptor.l]
 ; entries, a 0 word after the last), +$7c a non-zero end mark. $10e0(a4) = bytes left in the
 ; record, $10e2(a4) = where the next field entry goes; a second FIELD gives error 51.
@@ -16597,8 +16570,8 @@ rt_field_item:
 	clr.w	(a1)                            ; end of the list
 	sub.w	d1,$10e0(a4)                    ; bytes left in the record
 	bmi.s	rt_field_error_too_long         ; not enough left: error 52
-	move.w	d1,d0                           ; a string of d1 bytes for the variable (08472)
-	jsr	rn_string_alloc_var(a6)         ; new string, a1 = its text, d0 = length (08472)
+	move.w	d1,d0                           ; a string of d1 bytes for the variable (084ea)
+	jsr	rn_string_alloc_var(a6)         ; new string, a1 = its text, d0 = length (084ea)
 	bra.s	.space_next
 .space:
 	move.b	#$20,(a1)+                      ; filled with spaces
@@ -16652,7 +16625,7 @@ rt_record_transfer:
 	move.w	d7,$10e0(a4)                    ; Fread or Fwrite
 	move.l	d0,-(sp)                        ; keep the record number
 	move.w	d1,d0                           ; d0 = channel
-	jsr	rn_select_channel(a6)           ; select channel d1 (070fc)
+	jsr	rn_select_channel(a6)           ; select channel d1 (07174)
 	move.b	$390(a0),d1                     ; random buffer number
 	beq.w	rt_field_error_not_random       ; not random: error 50
 	asl.w	#7,d1                           ; * 128
@@ -16725,7 +16698,7 @@ rt_write_string:
 	pea	(a0)                            ; keep the descriptor
 	bsr.s	rt_write_quote                  ; '"'
 	movea.l	(sp)+,a0                        ; a0 = descriptor
-	jsr	rn_print_string(a6)             ; the string (06cd4)
+	jsr	rn_print_string(a6)             ; the string (06d4c)
 
 ;------------------------------------------------------------------------------
 ; Runtime: prints '"'.
@@ -16737,7 +16710,7 @@ rt_write_quote:
 ; Runtime: prints the character in d0 for WRITE ($123(a6) = 06d4a).
 ;------------------------------------------------------------------------------
 rt_write_print_char:
-	jmp	rn_print_char(a6)               ; print character d0 (06d4a)
+	jmp	rn_print_char(a6)               ; print character d0 (06dc2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: prints ',' (between WRITE items).
@@ -16755,9 +16728,9 @@ rt_mul_int_var_float:
 	move.l	d1,d4
 	move.l	d2,d5
 	move.l	(a0),d0                         ; the integer variable
-	jsr	rn_long_to_float(a6)            ; integer to float (06316)
-	jsr	rn_float_mul(a6)                ; float multiply (05ce2)
-	jsr	rn_float_to_long(a6)            ; float to integer (02b10)
+	jsr	rn_long_to_float(a6)            ; integer to float (0638e)
+	jsr	rn_float_mul(a6)                ; float multiply (05d5a)
+	jsr	rn_float_to_long(a6)            ; float to integer (02b6e)
 	move.l	d0,(a0)                         ; back into the variable
 	rts
 
@@ -16770,9 +16743,9 @@ rt_div_int_var_float:
 	move.l	d1,d4
 	move.l	d2,d5
 	move.l	(a0),d0                         ; the integer variable
-	jsr	rn_long_to_float(a6)            ; integer to float (06316)
-	jsr	rn_float_div(a6)                ; float divide (05d58)
-	jsr	rn_float_to_long(a6)            ; float to integer (02b10)
+	jsr	rn_long_to_float(a6)            ; integer to float (0638e)
+	jsr	rn_float_div(a6)                ; float divide (05dd0)
+	jsr	rn_float_to_long(a6)            ; float to integer (02b6e)
 	move.l	d0,(a0)                         ; back into the variable
 	rts
 
@@ -16791,31 +16764,31 @@ rt_sub_float_var:
 ; 79c8 DIV divides (8(a6) = 05d52: variable / value).
 ;------------------------------------------------------------------------------
 rt_add_float_var:
-	jsr	rn_float_load_d3_d5(a6)         ; variable into d3-d5 (05b82)
-	jsr	rn_float_add(a6)                ; float add (05c00)
+	jsr	rn_float_load_d3_d5(a6)         ; variable into d3-d5 (05bfa)
+	jsr	rn_float_add(a6)                ; float add (05c78)
 	subq.l	#6,a0                           ; back to the variable
-	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05bae)
+	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05c26)
 
 rt_mul_float_var:
 	jsr	rn_float_load_d3_d5(a6)
 	jsr	rn_float_mul(a6)                ; float multiply
 	subq.l	#6,a0                           ; a0 back at the variable
-	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05bae)
+	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05c26)
 
 rt_div_float_var:
 	jsr	rn_float_load_d3_d5(a6)
-	jsr	rn_float_reverse_div(a6)        ; float divide (05d52)
+	jsr	rn_float_reverse_div(a6)        ; float divide (05dca)
 	subq.l	#6,a0                           ; a0 back at the variable
-	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05bae)
+	jmp	rn_float_store(a6)              ; pack d0-d2 into it (05c26)
 
 ;------------------------------------------------------------------------------
-; Runtime: RANDOM(x): INT(RND * x): RND ($54(a6) = 07ccc), multiply, $26(a6) (0627a).
+; Runtime: RANDOM(x): INT(RND * x): RND ($54(a6) = 07ccc), multiply, $26(a6) (062f2).
 ;------------------------------------------------------------------------------
 rt_random:
 	move.l	d0,d3                           ; d3-d5 = x
 	move.l	d1,d4
 	move.l	d2,d5
-	jsr	rn_rnd(a6)                      ; RND (07ccc)
+	jsr	rn_rnd(a6)                      ; RND (07d44)
 	jsr	rn_float_mul(a6)                ; float multiply
 	jmp	rn_float_trunc(a6)              ; 0627a, presumably INT
 
@@ -16850,7 +16823,7 @@ rt_defline_style:
 ; Runtime: VDI call d3 with intin[0] = d0 ($21f(a6) = 0595a).
 ;------------------------------------------------------------------------------
 rt_vdi_d3_intin_d0:
-	jmp	rn_vdi_call_opcode_d3(a6)       ; VDI call d3 with intin[0] = d0 (0595a)
+	jmp	rn_vdi_call_opcode_d3(a6)       ; VDI call d3 with intin[0] = d0 (059d2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DEFTEXT height: d0 into ptsin ($40e(a4)), vst_height (VDI 12).
@@ -16875,7 +16848,7 @@ rt_defline_width:
 rt_vdi_one_ptsin:
 	moveq	#0,d1                           ; no intin
 	moveq	#1,d2                           ; one point
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DEFLINE end styles: d1, d0 swapped; 7a26 vsl_ends (VDI 108) with intin = d0, d1.
@@ -16905,9 +16878,9 @@ rt_vdi_two_intin:
 rt_graphics_defaults:
 	clr.l	$b32(a4)                        ; origin 0,0
 	moveq	#1,d0
-	jsr	rn_graphmode(a6)                ; GRAPHMODE 1 (05958)
+	jsr	rn_graphmode(a6)                ; GRAPHMODE 1 (059d0)
 	moveq	#1,d0
-	jsr	rn_color(a6)                    ; COLOR 1 (0594c)
+	jsr	rn_color(a6)                    ; COLOR 1 (059c4)
 	moveq	#0,d0
 	bsr.s	rt_defline_style                ; line type 0
 	moveq	#1,d0
@@ -16940,7 +16913,7 @@ rt_graphics_defaults:
 	move.w	#$81,d0                         ; VDI 129 vs_clip
 	moveq	#1,d1                           ; one intin
 	moveq	#2,d2                           ; two points
-	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 	moveq	#1,d0
 	bsr.s	rt_vsm_color                    ; marker colour 1
 	moveq	#1,d0
@@ -16968,7 +16941,7 @@ rt_vsm_color:
 ; Runtime: VDI attribute call d3 with intin[0] = d0 ($21f(a6)).
 ;------------------------------------------------------------------------------
 rt_vdi_attribute:
-	jmp	rn_vdi_call_opcode_d3(a6)       ; VDI call d3 with intin[0] = d0 (0595a)
+	jmp	rn_vdi_call_opcode_d3(a6)       ; VDI call d3 with intin[0] = d0 (059d2)
 
 rt_vsm_type:
 	moveq	#18,d3                          ; VDI 18 vsm_type
@@ -17013,7 +16986,7 @@ rt_vst_font:
 ;------------------------------------------------------------------------------
 ; Runtime: PLOT d1,d0: makes the point the first point and draws a one-point polyline from it
 ; to itself. 7ae8 (LINE end point d1,d0): v_pline (VDI 6) from the first point $856(a4) to
-; it, the origin $b32/$b34(a4) added; the end point is kept at $852(a4) for DRAW.
+; it, the origin $b32/$b34(a4) added; the end point is kept at $8b0(a4) for DRAW.
 ;------------------------------------------------------------------------------
 rt_plot:
 	exg	d0,d1                           ; d0 = x, d1 = y
@@ -17031,7 +17004,7 @@ rt_line_to_xy:
 
 ;------------------------------------------------------------------------------
 ; Runtime: v_pline (VDI 6) from the first point $856(a4) to d0,d1 (origin already added);
-; the end point is kept at $852(a4) for DRAW. Shared by PLOT and LINE.
+; the end point is kept at $8b0(a4) for DRAW. Shared by PLOT and LINE.
 ;------------------------------------------------------------------------------
 rt_line_from_first_point:
 	move.l	$856(a4),$40e(a4)               ; ptsin: first point
@@ -17040,10 +17013,10 @@ rt_line_from_first_point:
 	moveq	#6,d0                           ; VDI 6 v_pline
 	moveq	#0,d1                           ; no intin
 	moveq	#2,d2                           ; two points
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
-; Runtime: first point d1,d0 of LINE, BOX, CIRCLE ... : the origin added, kept at $856(a4).
+; Runtime: first point d1,d0 of LINE, BOX, CIRCLE ... : the origin added, kept at $8b4(a4).
 ;------------------------------------------------------------------------------
 rt_first_point:
 	exg	d0,d1                           ; d0 = x, d1 = y
@@ -17078,11 +17051,11 @@ rt_box_xy:
 	moveq	#6,d0                           ; VDI 6 v_pline
 	moveq	#0,d1                           ; no intin
 	moveq	#5,d2                           ; five points
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: PELLIPSE with radii d1,d0 round the first point: GDP 5 (ellipse) through $245(a6)
-; (07b80: v_gdp, VDI 11, sub-opcode d3 into contrl[5]).
+; (07bf8: v_gdp, VDI 11, sub-opcode d3 into contrl[5]).
 ;------------------------------------------------------------------------------
 rt_pellipse:
 	exg	d0,d1                           ; d0 = x radius, d1 = y radius
@@ -17091,7 +17064,7 @@ rt_pellipse_xy:
 	move.l	$856(a4),$40e(a4)               ; centre
 	movem.w	d0-d1,$412(a4)                  ; radii
 	moveq	#5,d3                           ; GDP 5 ellipse
-	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07b80)
+	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07bf8)
 
 ;------------------------------------------------------------------------------
 ; Runtime: PELLIPSE with angles d1,d0 (radii $85a(a4)): GDP 7 (elliptical pie).
@@ -17104,7 +17077,7 @@ rt_pellipse_angles_xy:
 	move.l	$856(a4),$40e(a4)               ; centre
 	move.l	$85a(a4),$412(a4)               ; radii
 	moveq	#7,d3                           ; GDP 7 elliptical pie
-	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07b80)
+	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07bf8)
 
 ;------------------------------------------------------------------------------
 ; Runtime: v_gdp (VDI 11) with sub-opcode d3 ($245(a6)): two intin, two ptsin.
@@ -17114,10 +17087,10 @@ rt_vdi_gdp:
 	moveq	#11,d0                          ; VDI 11 v_gdp
 	moveq	#2,d1                           ; two intin
 	moveq	#2,d2                           ; two points
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
-; Runtime: keeps the radii of an ellipse or circle with angles at $85a(a4): 7b8e both
+; Runtime: keeps the radii of an ellipse or circle with angles at $8b8(a4): 7b8e both
 ; radii d0, 7b90 x radius d1 and y radius d0 (swapped), 7b92 x d0, y d1.
 ;------------------------------------------------------------------------------
 rt_ellipse_radius_both:
@@ -17163,7 +17136,7 @@ rt_gdp_rectangle:
 	add.w	$b34(a4),d1
 	move.l	$856(a4),$40e(a4)               ; first corner
 	movem.w	d0-d1,$412(a4)                  ; second corner
-	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07b80)
+	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07bf8)
 
 ;------------------------------------------------------------------------------
 ; Runtime: ELLIPSE with radii d1,d0: GDP 6 (elliptical arc) from 0 to 3600.
@@ -17176,10 +17149,10 @@ rt_ellipse_xy:
 	movem.w	d0-d1,$412(a4)                  ; radii
 	move.l	#$e10,$30e(a4)                  ; angles 0 and 3600
 	moveq	#6,d3                           ; GDP 6 elliptical arc
-	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07b80)
+	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07bf8)
 
 ;------------------------------------------------------------------------------
-; Runtime: ELLIPSE with angles d1,d0 (radii at $85a(a4)): GDP 6.
+; Runtime: ELLIPSE with angles d1,d0 (radii at $8b8(a4)): GDP 6.
 ;------------------------------------------------------------------------------
 rt_ellipse_angles:
 	exg	d0,d1                           ; d0 = start, d1 = end angle
@@ -17189,7 +17162,7 @@ rt_ellipse_angles_xy:
 	move.l	$85a(a4),$412(a4)               ; radii
 	movem.w	d0-d1,$30e(a4)                  ; angles
 	moveq	#6,d3                           ; GDP 6 elliptical arc
-	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07b80)
+	jmp	rn_vdi_gdp(a6)                  ; v_gdp (07bf8)
 
 ;------------------------------------------------------------------------------
 ; Runtime: PCIRCLE with radius d0: GDP 4 (circle) round the first point.
@@ -17203,11 +17176,11 @@ rt_pcircle:
 	move.w	#$4,$2d6(a4)                    ; GDP 4 circle
 	moveq	#11,d0                          ; VDI 11 v_gdp
 	moveq	#3,d2                           ; three points
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968), d1 = intin count from the caller
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0), d1 = intin count from the caller
 
 ;------------------------------------------------------------------------------
 ; Runtime: PCIRCLE with angles d1,d0 (GDP 3 pie); 7c1a CIRCLE with radius d0 (GDP 2 arc,
-; 0..3600; the radius is kept at $85a(a4) for the angle forms).
+; 0..3600; the radius is kept at $8b8(a4) for the angle forms).
 ;------------------------------------------------------------------------------
 rt_pcircle_angles:
 	exg	d0,d1                           ; d0 = start, d1 = end angle
@@ -17228,7 +17201,7 @@ rt_circle_angles_xy:
 	moveq	#2,d7                           ; GDP 2 arc
 
 ;------------------------------------------------------------------------------
-; Runtime: GDP d7 (2 arc or 3 pie) round the first point with the radius at $85a(a4): d0,d1
+; Runtime: GDP d7 (2 arc or 3 pie) round the first point with the radius at $8b8(a4): d0,d1
 ; = start and end angle (intin), ptsin = centre, two empty points, radius.
 ;------------------------------------------------------------------------------
 rt_gdp_arc_pie:
@@ -17243,7 +17216,7 @@ rt_gdp_arc_pie:
 	moveq	#11,d0                          ; VDI 11 v_gdp
 	moveq	#4,d2                           ; four points
 	moveq	#2,d1                           ; two intin
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: FILL d1,d0: v_contourfill (VDI 103) at the point (origin added), colour -1.
@@ -17259,7 +17232,7 @@ rt_fill_xy:
 	moveq	#1,d1                           ; one intin
 	moveq	#1,d2                           ; one point
 	moveq	#103,d0                         ; VDI 103 v_contourfill
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: MOUSEX: vq_mouse, d0 = x - origin x. 7c7a MOUSEK: the buttons. 7c84 MOUSEY.
@@ -17303,7 +17276,7 @@ rt_mouse:
 ; ($206(a6) = 09d46).
 ;------------------------------------------------------------------------------
 rt_vq_mouse:
-	jsr	rn_mouse_show_if_hidden(a6)     ; show the mouse if hidden (09d46)
+	jsr	rn_mouse_show_if_hidden(a6)     ; show the mouse if hidden (09dbe)
 	move.w	#$7c,$2cc(a4)                   ; contrl[0] = VDI 124 vq_mouse
 	clr.w	$2ce(a4)                        ; contrl[1] = 0 points
 	clr.w	$2d2(a4)                        ; contrl[3] = 0 intin
@@ -17346,7 +17319,7 @@ rt_point_xy:
 	moveq	#105,d0                         ; VDI 105 v_get_pixel
 	moveq	#0,d1                           ; no intin
 	moveq	#1,d2                           ; one point
-	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 	moveq	#0,d0
 	move.w	$610(a4),d0                     ; intout[1] = colour index
 	rts
@@ -17354,11 +17327,11 @@ rt_point_xy:
 ;------------------------------------------------------------------------------
 ; Runtime: SGET to a string: a0 = the variable; gives it a 32000-byte string ($45(a6)) and
 ; copies the screen (Logbase) into it. 7d1e SPUT: copies 32000 bytes from the string at a0 to
-; the screen. The copy is $ec(a6) (0955a) with the mouse hidden.
+; the screen. The copy is $ec(a6) (095d2) with the mouse hidden.
 ;------------------------------------------------------------------------------
 rt_sget:
 	move.w	#$7d00,d0                       ; 32000 bytes
-	jsr	rn_string_alloc_var(a6)         ; a string of d0 bytes for the variable (08472)
+	jsr	rn_string_alloc_var(a6)         ; a string of d0 bytes for the variable (084ea)
 	move.l	a1,d3                           ; destination: the string
 	move.w	#$3,-(sp)                       ; XBIOS 3 Logbase
 	trap	#14                             ; Logbase
@@ -17379,8 +17352,8 @@ rt_screen_copy:
 	movea.l	d0,a1                           ; a1 = destination
 	movea.l	d3,a0                           ; a0 = source
 	move.l	#$7d00,d0                       ; 32000 bytes
-	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d26)
-	jmp	rn_copy_bytes_forward(a6)       ; memory copy (0955a)
+	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d9e)
+	jmp	rn_copy_bytes_forward(a6)       ; memory copy (095d2)
 
 ;------------------------------------------------------------------------------
 ; Data: an MFDB size line for each resolution: width, height, words per line, planes
@@ -17439,7 +17412,7 @@ rt_put_mode:
 	swap	d1
 	move.l	d1,$416(a4)                     ; destination x,y into ptsin[4..5]
 	move.l	a0,d6                           ; d6 = string descriptor
-	jsr	rn_screen_mfdbs(a6)             ; MFDBs to the screen (07d52)
+	jsr	rn_screen_mfdbs(a6)             ; MFDBs to the screen (07dca)
 	movea.l	d6,a0                           ; a0 = string descriptor
 	jsr	rn_string_text_len_212(a6)      ; a1 = text, d0 = length
 	cmpi.w	#$6,d0                          ; shorter than the header: nothing
@@ -17523,7 +17496,7 @@ rt_vro_cpyfm:
 	move.l	a0,$2da(a4)                     ; contrl: source MFDB
 	lea	$7c2(a4),a0
 	move.l	a0,$2de(a4)                     ; contrl: destination MFDB
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: GET with a rectangle off the screen: the variable gets an empty string.
@@ -17541,7 +17514,7 @@ rt_get_empty:
 rt_get:
 	movem.l	d0-d1,-(sp)                     ; the corners
 	pea	(a0)                            ; keep the variable
-	jsr	rn_screen_mfdbs(a6)             ; MFDBs to the screen (07d52)
+	jsr	rn_screen_mfdbs(a6)             ; MFDBs to the screen (07dca)
 	move.w	d4,d2                           ; d2 = planes
 	movea.l	(sp)+,a0                        ; a0 = the variable
 	move.w	(sp)+,d5                        ; the corners
@@ -17586,11 +17559,11 @@ rt_get:
 	mulu.w	d2,d0                           ; * planes
 	add.w	d0,d0                           ; bytes
 	addq.w	#6,d0                           ; + the header
-	jsr	rn_string_alloc_var(a6)         ; a string of d0 bytes for the variable (08472)
+	jsr	rn_string_alloc_var(a6)         ; a string of d0 bytes for the variable (084ea)
 	move.l	(sp)+,(a1)+                     ; the header
 	move.w	(sp)+,(a1)+
 	move.l	a1,$7c2(a4)                     ; its raster
-	jmp	rn_vro_cpyfm(a6)                ; vro_cpyfm (07e46)
+	jmp	rn_vro_cpyfm(a6)                ; vro_cpyfm (07ebe)
 
 ;------------------------------------------------------------------------------
 ; Runtime: SPRITE a$ (remove): a string of 74 bytes ($4a, the definition only) was never
@@ -17634,7 +17607,7 @@ rt_sprite_length_error:
 ;------------------------------------------------------------------------------
 rt_sprite_check:
 	move.l	a0,d7                           ; d7 = the descriptor
-	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d26)
+	jsr	rn_mouse_hide(a6)               ; hide the mouse once (09d9e)
 	move.w	#$4,-(sp)                       ; XBIOS 4 Getrez
 	trap	#14                             ; Getrez, XBIOS 4 Getrez
 	addq.l	#2,sp                           ; drop the function number
@@ -17685,7 +17658,7 @@ rt_sprite:
 	rts
 .first_use:
 	move.w	d1,d0                           ; d0 = full length
-	jsr	rn_temp_string_alloc(a6)        ; new string of the full length (084d4)
+	jsr	rn_temp_string_alloc(a6)        ; new string of the full length (0854c)
 	st	4(a0)                           ; sets byte 4(a0) to $ff (a0 from 084d4; purpose unclear)
 	movea.l	d7,a2                           ; a2 = the descriptor
 	move.l	a1,d7                           ; d7 = the new text
@@ -17774,7 +17747,7 @@ rt_alert:
 	move.b	#$5d,(a0)+                      ; "]"
 	clr.b	(a0)+                           ; NUL
 	moveq	#52,d0                          ; AES 52 form_alert
-	jsr	rn_aes_call(a6)                 ; AES call (0591a)
+	jsr	rn_aes_call(a6)                 ; AES call (05992)
 	ext.l	d0                              ; d0.l = the button
 	rts
 
@@ -17831,14 +17804,14 @@ rt_fileselect:
 	clr.b	(a0)+                           ; NUL
 	lea	$ad8(a4),a0                     ; descriptor for the saved screen
 	clr.w	4(a0)                           ; empty: SGET makes a new string
-	jsr	rn_sget(a6)                     ; SGET into it (07d0a)
+	jsr	rn_sget(a6)                     ; SGET into it (07d82)
 	moveq	#90,d0                          ; AES 90 fsel_input
-	jsr	rn_aes_call(a6)                 ; AES call (0591a)
+	jsr	rn_aes_call(a6)                 ; AES call (05992)
 	lea	$adc(a4),a0                     ; length of the saved screen
 	clr.w	(a0)                            ; length 0
 	movea.l	-(a0),a1                        ; a1 = the saved screen
 	move.l	#$ffff8300,$7d00(a1)            ; its end mark: -32000, a free block
-	jsr	rn_sput(a6)                     ; SPUT from it (07d1e)
+	jsr	rn_sput(a6)                     ; SPUT from it (07d96)
 	lea	$94(a4),a0                      ; the result is built over the path
 	movea.l	a0,a1                           ; a1 = end of the result so far
 	move.w	$774(a4),d0                     ; the exit button
@@ -17862,7 +17835,7 @@ rt_fileselect:
 	lea	$94(a4),a0
 	sub.l	a0,d0                           ; d0 = length
 	movea.l	d5,a0                           ; a0 = the variable
-	jsr	rn_string_alloc_var(a6)         ; a string for the variable (08472)
+	jsr	rn_string_alloc_var(a6)         ; a string for the variable (084ea)
 	lea	$94(a4),a0                      ; the result text
 	addq.w	#1,d0                           ; in words
 	lsr.w	#1,d0
@@ -17892,10 +17865,10 @@ rt_deffill_pattern:
 	dbra	d0,.pattern_word
 	moveq	#112,d0                         ; VDI 112 vsf_udpat
 	moveq	#0,d2                           ; no ptsin
-	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 	moveq	#4,d3                           ; interior 4: user pattern
 	moveq	#23,d0                          ; VDI 23 vsf_interior
-	jmp	rn_vdi_call_intin_d3(a6)        ; VDI call d0 with intin[0] = d3 (0595c)
+	jmp	rn_vdi_call_intin_d3(a6)        ; VDI call d0 with intin[0] = d3 (059d4)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DEFMOUSE n: graf_mouse (AES 78) with n & 7.
@@ -17904,7 +17877,7 @@ rt_defmouse_form:
 	andi.w	#$7,d0                          ; mouse form 0..7
 	move.w	d0,$74a(a4)                     ; AES intin[0]
 	moveq	#78,d0                          ; AES 78 graf_mouse
-	jmp	rn_aes_call(a6)                 ; AES call (0591a)
+	jmp	rn_aes_call(a6)                 ; AES call (05992)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DEFMOUSE a$: the string's words into intin (at most 128), vsc_form (VDI 111), then
@@ -17925,8 +17898,8 @@ rt_defmouse_string:
 	dbra	d0,.form_word
 	moveq	#0,d2                           ; no ptsin
 	moveq	#111,d0                         ; VDI 111 vsc_form
-	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
-	jmp	rn_mouse_show_if_hidden(a6)     ; show the mouse if hidden (09d46)
+	jsr	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
+	jmp	rn_mouse_show_if_hidden(a6)     ; show the mouse if hidden (09dbe)
 
 ;------------------------------------------------------------------------------
 ; Runtime: TEXT at the first point: a0 = the string, d1 = the width for justified text (817a:
@@ -17967,7 +17940,7 @@ rt_text_width:
 	moveq	#3,d2                           ; three points
 	moveq	#11,d0                          ; VDI 11 v_gdp
 	move.w	#$a,$2d6(a4)                    ; GDP 10 v_justified
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: errors 27 (too many points, max. 128), 28 (array must have one dimension),
@@ -18045,8 +18018,8 @@ rt_poly_points:
 	move.w	(sp),-(sp)                      ; count on the stack for the float loop
 	bra.s	.float_x_next
 .float_x:
-	jsr	rn_float_load(a6)               ; unpack the element (05b9a)
-	jsr	rn_float_to_long(a6)            ; float to integer (02b10)
+	jsr	rn_float_load(a6)               ; unpack the element (05c12)
+	jsr	rn_float_to_long(a6)            ; float to integer (02b6e)
 	add.w	$858(a4),d0                     ; + x offset
 	move.w	d0,(a2)+                        ; x into ptsin
 	addq.l	#2,a2                           ; skip the y slot
@@ -18095,7 +18068,7 @@ rt_poly_points:
 	moveq	#0,d1                           ; no intin
 	move.w	(sp)+,d2                        ; points
 	move.w	(sp)+,d0                        ; opcode
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: BITBLT s%(),d%(),p%(): three one-dimensional integer arrays (else error 28):
@@ -18108,14 +18081,14 @@ rt_bitblt:
 	cmpi.w	#$1,(a1)                        ; one dimension?
 	bne.s	.bitblt_bad_array
 	movem.l	4(a2),d1-d6                     ; address and 5 words
-	move.l	d1,$7c2(a4)                     ; into the MFDB at $7c2(a4)
+	move.l	d1,$7c2(a4)                     ; into the MFDB at $820(a4)
 	movem.w	d2-d6,$7c6(a4)
 	movea.l	d0,a1                           ; the array at d0
 	movea.l	(a1)+,a2                        ; a2 = its data
 	cmpi.w	#$1,(a1)
 	bne.s	.bitblt_bad_array
 	movem.l	4(a2),d1-d6                     ; address and 5 words
-	move.l	d1,$79a(a4)                     ; into the MFDB at $79a(a4)
+	move.l	d1,$79a(a4)                     ; into the MFDB at $7f8(a4)
 	movem.w	d2-d6,$79e(a4)
 	movea.l	(a0)+,a2                        ; a2 = data of the array at a0
 	cmpi.w	#$1,(a0)                        ; one dimension?
@@ -18123,7 +18096,7 @@ rt_bitblt:
 	movem.l	4(a2),d0-d7/a0                  ; 8 coordinates and the mode
 	movem.w	d0-d7,$40e(a4)
 	move.w	a0,$30e(a4)                     ; intin[0] = mode
-	jmp	rn_vro_cpyfm(a6)                ; vro_cpyfm (07e46)
+	jmp	rn_vro_cpyfm(a6)                ; vro_cpyfm (07ebe)
 .bitblt_bad_array:
 	moveq	#28,d0                          ; error 28
 	jmp	rn_error_entry(a6)              ; raise error d0
@@ -18146,7 +18119,7 @@ rt_draw_points:
 ;------------------------------------------------------------------------------
 ; Runtime: DRAW TO / DRAW with d7 points packed as longs on the stack (one point is drawn
 ; from the last point, as two); they are added to the origin, put into ptsin from a0, the last
-; one kept at $852(a4), then v_pline (VDI 6). The return address is taken off first and pushed
+; one kept at $8b0(a4), then v_pline (VDI 6). The return address is taken off first and pushed
 ; back over the points.
 ;------------------------------------------------------------------------------
 rt_draw:
@@ -18162,7 +18135,7 @@ rt_draw:
 ;------------------------------------------------------------------------------
 ; Runtime: the DRAW v_pline: d7 = points on the stack under the return address, d2 = ptsin
 ; point count, a0 = where they go in ptsin. Moves the points into ptsin with the origin
-; added, keeps the last at $852(a4) and calls v_pline (VDI 6).
+; added, keeps the last at $8b0(a4) and calls v_pline (VDI 6).
 ;------------------------------------------------------------------------------
 rt_draw_pline:
 	movea.l	(sp)+,a2                        ; return address
@@ -18181,28 +18154,28 @@ rt_draw_pline:
 	pea	(a2)                            ; return address back
 	moveq	#6,d0                           ; VDI 6 v_pline
 	moveq	#0,d1                           ; no intin
-	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (05968)
+	jmp	rn_vdi_call_intin_ptsin(a6)     ; VDI call (059e0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: writes a GEMDOS date word as dd.mm.yyyy at a0 ($89(a6)): day and month with
-; $8b(a6) (089bc), the year (+1980) as century and year with $8a(a6) (089ba).
+; $8b(a6) (08a34), the year (+1980) as century and year with $8a(a6) (08a32).
 ;------------------------------------------------------------------------------
 rt_write_date_word:
 	movea.l	a0,a1                           ; a1 = the buffer
 	move.w	d0,d1                           ; d1 = the date word
 	andi.w	#$1f,d0                         ; day
-	jsr	rn_two_digits(a6)               ; two digits (089bc)
+	jsr	rn_two_digits(a6)               ; two digits (08a34)
 	move.b	#$2e,(a1)+                      ; '.'
 	move.w	d1,d0
 	lsr.w	#5,d0                           ; month bits to the bottom
 	andi.w	#$f,d0                          ; month
-	jsr	rn_two_digits(a6)               ; two digits (089bc)
+	jsr	rn_two_digits(a6)               ; two digits (08a34)
 	move.b	#$2e,(a1)+                      ; '.'
 	rol.w	#7,d1                           ; year bits to the bottom
 	andi.l	#$7f,d1
 	addi.l	#$7bc,d1                        ; + 1980
 	divu.w	#$64,d1                         ; century and year in century
-	jsr	rn_two_digits_d1(a6)            ; century: two digits (089ba)
+	jsr	rn_two_digits_d1(a6)            ; century: two digits (08a32)
 	swap	d1                              ; remainder: year in the century
 	jmp	rn_two_digits_d1(a6)            ; year: two digits
 
@@ -18390,7 +18363,7 @@ rt_string_alloc_empty:
 ; Runtime: no room: garbage collection ($203(a6)) and one more try, then error 8.
 ;------------------------------------------------------------------------------
 rt_string_alloc_collect:
-	jsr	rn_string_garbage_collect(a6)   ; garbage collection (084ec)
+	jsr	rn_string_garbage_collect(a6)   ; garbage collection (08564)
 	movea.l	$60(a4),a1                      ; bottom of the string area
 	suba.l	d1,a1                           ; a1 = start of the new block
 	cmpa.l	a3,a1                           ; still below the control stack top?
@@ -18400,7 +18373,7 @@ rt_string_alloc_collect:
 
 ;------------------------------------------------------------------------------
 ; Runtime: a temporary string of d0 bytes ($47(a6)): takes the first free descriptor of the
-; 101 at $874(a4) (6 bytes each, free = negative length) and gives it a block as 8472 does.
+; 101 at $8d2(a4) (6 bytes each, free = negative length) and gives it a block as 8472 does.
 ; Exit a0 = the descriptor, a1 = the text. None free: error 97 (no text for it in the message
 ; list).
 ;------------------------------------------------------------------------------
@@ -18463,7 +18436,7 @@ rt_string_garbage_collect:
 	rts
 
 ;------------------------------------------------------------------------------
-; Runtime: INKEY$: Crawio($ff). No key: the empty string (the descriptor at $ad2(a4)); a key
+; Runtime: INKEY$: Crawio($ff). No key: the empty string (the descriptor at $b30(a4)); a key
 ; with an ASCII code: CHR$ of it ($42(a6) = 08562); otherwise a 2-byte string 0, scan code
 ; ($48(a6)).
 ;------------------------------------------------------------------------------
@@ -18476,14 +18449,14 @@ rt_inkey:
 	beq.s	.no_key                         ; no key
 	tst.b	d0                              ; ASCII code in the low byte
 	beq.s	.special_key                    ; no ASCII code
-	jmp	rn_chr(a6)                      ; CHR$ (08562)
+	jmp	rn_chr(a6)                      ; CHR$ (085da)
 .special_key:
 	lea	$95(a4),a0                      ; 2-byte string: 0, scan code
 	swap	d0                              ; scan code from the high word
 	move.b	d0,(a0)                         ; second byte: the scan code
 	clr.b	-(a0)                           ; first byte: 0
 	moveq	#2,d0                           ; 2 bytes
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 .no_key:
 	lea	$ad2(a4),a0                     ; the empty string
 	rts
@@ -18496,38 +18469,38 @@ rt_chr:
 	lea	$94(a4),a0                      ; 1 byte
 	move.b	d0,(a0)
 	moveq	#1,d0                           ; 1 byte
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 rt_mki:
 	lea	$94(a4),a0
 	move.w	d0,(a0)                         ; 2 bytes
 	moveq	#2,d0
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 rt_mkl:
 	lea	$94(a4),a0
 	move.l	d0,(a0)                         ; 4 bytes
 	moveq	#4,d0
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 rt_mkf:
-	jsr	rn_float_round_packed(a6)       ; pack the float (061be)
+	jsr	rn_float_round_packed(a6)       ; pack the float (06236)
 	lea	$98(a4),a0                      ; 6 bytes
 	move.w	d1,(a0)                         ; low word
 	move.l	d0,-(a0)                        ; high long
 	moveq	#6,d0
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: STR$ of the float d0-d2: formats it ($f8(a6) = 060da) and makes a temporary string
 ; of it. 859c ($48(a6)): a temporary string of the d0 bytes at a0 ($47(a6), copied by words).
 ;------------------------------------------------------------------------------
 rt_str:
-	jsr	rn_float_to_string(a6)          ; format the float (060da): a0 = text, d0 = length
+	jsr	rn_float_to_string(a6)          ; format the float (06152): a0 = text, d0 = length
 
 rt_temp_string_copy:
 	move.l	a0,d2                           ; the source
-	jsr	rn_temp_string_alloc(a6)        ; temporary of d0 bytes (084d4)
+	jsr	rn_temp_string_alloc(a6)        ; temporary of d0 bytes (0854c)
 	movea.l	d2,a2                           ; a2 = source
 	subq.w	#1,d0                           ; length 0?
 	bmi.s	.temp_done                      ; yes: nothing to copy
@@ -18616,7 +18589,7 @@ rt_cvf:
 ;------------------------------------------------------------------------------
 rt_temp_string_empty:
 	moveq	#0,d0                           ; length 0
-	jmp	rn_temp_string_alloc(a6)        ; temporary (084d4)
+	jmp	rn_temp_string_alloc(a6)        ; temporary (0854c)
 
 ;------------------------------------------------------------------------------
 ; Runtime: a string constant that follows the call ([length.w][characters]): returns past it
@@ -18627,7 +18600,7 @@ rt_string_const_even:
 	movea.l	(sp)+,a0                        ; a0 = the constant after the call
 	move.w	(a0)+,d0                        ; length
 	pea	0(a0,d0.w)                      ; return past the characters
-	jmp	rn_temp_string_copy(a6)         ; temporary string from them (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from them (08614)
 
 rt_string_const_odd:
 	movea.l	(sp)+,a0
@@ -18644,14 +18617,14 @@ rt_print_const_even:
 	movea.l	(sp)+,a1                        ; a1 = the constant after the call
 	move.w	(a1)+,d0                        ; d0 = length
 	pea	0(a1,d0.l)                      ; return past it
-	jmp	rn_print_text(a6)               ; print it (06d52)
+	jmp	rn_print_text(a6)               ; print it (06dca)
 
 rt_print_const_odd:
 	moveq	#0,d0
 	movea.l	(sp)+,a1
 	move.w	(a1)+,d0                        ; d0 = length
 	pea	1(a1,d0.l)                      ; odd length: one pad byte
-	jmp	rn_print_text(a6)               ; print it (06d52)
+	jmp	rn_print_text(a6)               ; print it (06dca)
 
 ;------------------------------------------------------------------------------
 ; Runtime: string assignment: a0 = the source descriptor, a1 = the variable's. A variable
@@ -18667,7 +18640,7 @@ rt_string_assign:
 	exg	a1,a0                           ; a0 = the variable
 	pea	(a1)                            ; keep the source
 	move.w	4(a1),d0                        ; source length
-	jsr	rn_string_alloc_var(a6)         ; a string of that length for the variable (08472)
+	jsr	rn_string_alloc_var(a6)         ; a string of that length for the variable (084ea)
 	movea.l	(sp)+,a2                        ; a2 = source descriptor
 	movea.l	(a2)+,a2                        ; source text
 	addq.w	#1,d0                           ; in words
@@ -18769,7 +18742,7 @@ rt_strcmp_second:
 ; 8730 >, 873a >= (string compare $16(a6), then scc).
 ;------------------------------------------------------------------------------
 rt_string_eq:
-	jsr	rn_string_compare(a6)           ; string compare (086ae)
+	jsr	rn_string_compare(a6)           ; string compare (08726)
 	seq	d2                              ; =
 	ext.w	d2                              ; word boolean -1 / 0
 	rts
@@ -18813,7 +18786,7 @@ rt_left_one:
 	beq.s	.left_empty
 	jsr	rn_string_text_len_212(a6)      ; a1 = text
 	move.b	(a1),d0                         ; first byte
-	jmp	rn_chr(a6)                      ; CHR$ (08562)
+	jmp	rn_chr(a6)                      ; CHR$ (085da)
 .left_empty:
 	rts                                     ; a0 = the empty string
 
@@ -18822,7 +18795,7 @@ rt_right_one:
 	beq.s	.right_empty
 	jsr	rn_string_text_len_212(a6)      ; a1 = text, d0 = length
 	move.b	-$1(a1,d0.w),d0                 ; last byte
-	jmp	rn_chr(a6)                      ; CHR$ (08562)
+	jmp	rn_chr(a6)                      ; CHR$ (085da)
 .right_empty:
 	rts                                     ; a0 = the empty string
 
@@ -18835,7 +18808,7 @@ rt_left:
 	cmp.w	4(a0),d0                        ; n at least the length: a$ itself
 	bcc.s	.whole
 	move.l	a0,d5                           ; d5 = a$
-	jsr	rn_temp_string_alloc(a6)        ; temporary of n bytes (084d4)
+	jsr	rn_temp_string_alloc(a6)        ; temporary of n bytes (0854c)
 	movea.l	d5,a2                           ; a2 = a$ descriptor
 	movea.l	(a2),a2                         ; a$'s text
 	addq.w	#1,d0
@@ -18846,7 +18819,7 @@ rt_left:
 .left_copy_next:
 	dbra	d0,.left_copy
 	exg	d5,a0                           ; a0 = a$, d5 = the result
-	jsr	rn_string_text_len_212(a6)      ; free a$ if temporary (085b2)
+	jsr	rn_string_text_len_212(a6)      ; free a$ if temporary (0862a)
 	movea.l	d5,a0                           ; a0 = the result
 .whole:
 	rts                                     ; a0 = the result
@@ -18872,7 +18845,7 @@ rt_right:
 	dbra	d0,.right_copy
 
 ;------------------------------------------------------------------------------
-; Runtime: RIGHT$ end: frees a$ if it was a temporary (085b2) and returns the result in a0.
+; Runtime: RIGHT$ end: frees a$ if it was a temporary (0862a) and returns the result in a0.
 ;------------------------------------------------------------------------------
 rt_right_free_source:
 	exg	d5,a0                           ; a0 = a$, d5 = the result
@@ -18934,7 +18907,7 @@ rt_string_concat:
 	move.l	a1,d5                           ; d5 = a1's descriptor
 	move.w	4(a0),d0                        ; first length
 	add.w	4(a1),d0                        ; + second
-	jsr	rn_temp_string_alloc(a6)        ; temporary for both (084d4)
+	jsr	rn_temp_string_alloc(a6)        ; temporary for both (0854c)
 	movea.l	d5,a2                           ; a1's string first
 	move.l	(a2)+,d0                        ; d0 = text
 	movea.w	(a2),a2                         ; a2 = length
@@ -18988,7 +18961,7 @@ rt_val:
 	beq.s	.skip_spaces
 	cmpi.b	#$26,-(a0)                      ; '&'
 	beq.s	.prefix
-	jsr	rn_text_to_float(a6)            ; decimal parse (05e6a)
+	jsr	rn_text_to_float(a6)            ; decimal parse (05ee2)
 	move.b	(sp)+,(a1)                      ; put the byte back
 .used:
 	suba.l	(sp)+,a0                        ; characters used
@@ -19049,7 +19022,7 @@ rt_val:
 	suba.l	(sp)+,a0                        ; characters used
 	tst.w	d2                              ; no digits (d2 still negative)?
 	bmi.s	.zero                           ; no digits or overflow: 0
-	jmp	rn_long_to_float(a6)            ; integer to float (06316)
+	jmp	rn_long_to_float(a6)            ; integer to float (0638e)
 .octal:
 	addq.w	#1,d2                           ; count a digit
 	move.b	(a0)+,d1                        ; next character
@@ -19104,7 +19077,7 @@ rt_bin:
 	dbra	d2,.bin_digit
 	move.l	a1,d0                           ; length
 	sub.l	a0,d0                           ; d0 = length
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: HEX$(d0) (routine $6e): the nibbles from the first non-zero one, as 0-9 and A-F,
@@ -19131,7 +19104,7 @@ rt_hex:
 	dbra	d2,.hex_out
 	move.l	a1,d0
 	sub.l	a0,d0                           ; d0 = length
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: OCT$(d0): the top 2 bits, then 3-bit groups, from the first non-zero one.
@@ -19158,7 +19131,7 @@ rt_oct:
 	dbra	d2,.oct_out
 	move.l	a1,d0
 	sub.l	a0,d0                           ; d0 = length
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: writes d1 as two decimal digits at a1 ($8a(a6)); 89bc ($8b(a6)) writes d0.
@@ -19183,9 +19156,9 @@ rt_time_str:
 	trap	#1                              ; Tgettime
 	addq.l	#2,sp                           ; drop the function number
 	lea	$94(a4),a0                      ; a0 = the buffer
-	jsr	rn_write_time_word(a6)          ; hh:mm:ss (089fc)
+	jsr	rn_write_time_word(a6)          ; hh:mm:ss (08a74)
 	moveq	#8,d0                           ; 8 characters
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DATE$: Tgetdate, as "dd.mm.yyyy" ($89(a6) = 0833a), a 10-byte temporary string.
@@ -19195,9 +19168,9 @@ rt_date_str:
 	trap	#1                              ; Tgetdate
 	addq.l	#2,sp                           ; drop the function number
 	lea	$94(a4),a0                      ; a0 = the buffer
-	jsr	rn_write_date_word(a6)          ; dd.mm.yyyy (0833a)
+	jsr	rn_write_date_word(a6)          ; dd.mm.yyyy (083b2)
 	moveq	#10,d0                          ; 10 characters
-	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (0859c)
+	jmp	rn_temp_string_copy(a6)         ; temporary string from a0 (08614)
 
 ;------------------------------------------------------------------------------
 ; Runtime: writes a GEMDOS time word as hh:mm:ss at a0 ($88(a6)).
@@ -19207,16 +19180,16 @@ rt_write_time_word:
 	move.w	d0,d1                           ; d1 = the time word
 	rol.w	#5,d0                           ; hours (bits 11-15)
 	andi.w	#$1f,d0
-	jsr	rn_two_digits(a6)               ; two digits (089bc)
+	jsr	rn_two_digits(a6)               ; two digits (08a34)
 	move.b	#$3a,(a1)+                      ; ':'
 	move.w	d1,d0
 	lsr.w	#5,d0                           ; minutes bits to the bottom
 	andi.w	#$3f,d0                         ; minutes
-	jsr	rn_two_digits(a6)               ; two digits (089bc)
+	jsr	rn_two_digits(a6)               ; two digits (08a34)
 	move.b	#$3a,(a1)+                      ; ':'
 	andi.w	#$1f,d1                         ; seconds / 2
 	add.w	d1,d1                           ; * 2: seconds
-	jmp	rn_two_digits_d1(a6)            ; two digits (089ba)
+	jmp	rn_two_digits_d1(a6)            ; two digits (08a32)
 
 ;------------------------------------------------------------------------------
 ; Runtime: SPACE$(d0): STRING$ of spaces. 8a2c STRING$(d1,d0): a temporary of d1 bytes of the
@@ -19229,7 +19202,7 @@ rt_space:
 rt_string_char:
 	move.w	d0,d6                           ; d6 = the character
 	move.w	d1,d0                           ; d0 = count
-	jsr	rn_temp_string_alloc(a6)        ; temporary of d0 bytes (084d4)
+	jsr	rn_temp_string_alloc(a6)        ; temporary of d0 bytes (0854c)
 	bra.s	.fill_next
 .fill:
 	move.b	d6,(a1)+                        ; fill
@@ -19434,7 +19407,7 @@ rt_instr_start:
 ;------------------------------------------------------------------------------
 ; Runtime: one-name GEMDOS file calls: KILL (8b94, $41 Fdelete), MKDIR (8b98, $39 Dcreate),
 ; RMDIR (8b9c, $3a Ddelete), CHDIR (8ba0, $3b Dsetpath). The name is NUL-terminated
-; temporarily; an empty name points at a 0 byte inside the jmp at loc_08bcc. A GEMDOS error is
+; temporarily; an empty name points at a 0 byte inside the jmp at loc_08c44. A GEMDOS error is
 ; raised.
 ;------------------------------------------------------------------------------
 rt_kill:
@@ -19489,7 +19462,7 @@ rt_file_op_done:
 
 ;------------------------------------------------------------------------------
 ; Runtime: NAME a1$ AS a0$: Frename of the old name (a1's string) to the new (a0's), both
-; NUL-terminated temporarily; an empty name is the empty string at $ad2(a4).
+; NUL-terminated temporarily; an empty name is the empty string at $b30(a4).
 ;------------------------------------------------------------------------------
 rt_name_as:
 	move.l	a1,d6                           ; keep the a1 descriptor
@@ -19538,7 +19511,7 @@ rt_pause:
 	ext.l	d0
 	asl.l	#2,d0                           ; * 4: 200 Hz ticks
 	move.l	d0,d3                           ; d3 = ticks to wait
-	jsr	rn_timer(a6)                    ; TIMER (06c48)
+	jsr	rn_timer(a6)                    ; TIMER (06cc0)
 	add.l	d0,d3                           ; end time
 .wait:
 	jsr	rn_timer(a6)
@@ -19570,12 +19543,12 @@ rt_chain:
 	move.w	d0,$74c(a4)
 	move.w	d0,$74e(a4)
 	moveq	#121,d0                         ; AES 121 shel_write
-	jsr	rn_aes_call(a6)                 ; AES call (0591a)
+	jsr	rn_aes_call(a6)                 ; AES call (05992)
 	movea.l	d4,a0
 	move.b	d3,(a0)                         ; put the byte back
 	tst.w	$772(a4)                        ; AES intout[0]
 	beq.s	.failed
-	jmp	rn_end_program(a6)              ; end the program (05904)
+	jmp	rn_end_program(a6)              ; end the program (0597c)
 .failed:
 	moveq	#11,d0                          ; error 11
 	jmp	rn_error_entry(a6)              ; raise error d0
@@ -19666,7 +19639,7 @@ rt_mkd:
 	jmp	rn_temp_string_copy(a6)         ; temporary string of the d0 bytes at a0 ($48(a6))
 
 ;------------------------------------------------------------------------------
-; Runtime: frees all temporary strings still in use (the descriptors at $874(a4)): each gets
+; Runtime: frees all temporary strings still in use (the descriptors at $8d2(a4)): each gets
 ; the free mark after its text.
 ;------------------------------------------------------------------------------
 rt_free_temp_strings:
@@ -20080,9 +20053,9 @@ rt_bool_array_get_1d_raw:
 	ext.w	d2                              ; -1 or 0
 	rts
 .bool_read_index:
-	jmp	rn_array_index_error(a6)        ; error 16 (08f22)
+	jmp	rn_array_index_error(a6)        ; error 16 (08f9a)
 .bool_read_indices:
-	jmp	rn_array_dims_error(a6)         ; error 18/15 (08f28)
+	jmp	rn_array_dims_error(a6)         ; error 18/15 (08fa0)
 
 ; Runtime: the address of float element a(d0) in a0.
 	dc.w	$025b                           ; word $025b (not code), then the nop
@@ -20109,9 +20082,9 @@ rt_float_array_address_1d_raw:
 	adda.l	d0,a0                           ; a0 + index * 6
 	rts                                     ; a0 = the element
 .float_addr_index:
-	jmp	rn_array_index_error(a6)        ; error 16 (08f22)
+	jmp	rn_array_index_error(a6)        ; error 16 (08f9a)
 .float_addr_indices:
-	jmp	rn_array_dims_error(a6)         ; error 18/15 (08f28)
+	jmp	rn_array_dims_error(a6)         ; error 18/15 (08fa0)
 
 ; Runtime: a(index) = d0-d2 for a float array: the return address and then the index are on
 ; the stack; the value is rounded and packed into the element; returns by jmp (a2).
@@ -20160,9 +20133,9 @@ rt_float_array_put_1d_raw:
 	move.w	d1,(a0)                         ; low mantissa bits and exponent
 	jmp	(a2)                            ; return
 .float_store_indices:
-	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f26)
+	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f9e)
 .float_store_index:
-	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f98)
 
 ; Runtime: a%(index) = d0 for an integer array (index on the stack).
 	dc.w	$025d                           ; word $025d (not code); code from 8fe4
@@ -20195,9 +20168,9 @@ rt_int_array_put_1d_raw:
 	move.l	d0,0(a0,d3.l)                   ; store
 	jmp	(a2)                            ; return
 .int_store_indices:
-	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f26)
+	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f9e)
 .int_store_index:
-	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f98)
 
 ; Runtime: a!(index) = d2 for a boolean array: sets or clears the bit.
 	dc.w	$025e                           ; word $025e (not code); code from 900a
@@ -20235,9 +20208,9 @@ rt_bool_array_put_1d_raw:
 	bclr	d4,0(a0,d3.l)                   ; clear the bit
 	jmp	(a2)                            ; return
 .bool_store_index:
-	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f98)
 .bool_store_indices:
-	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f26)
+	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f9e)
 
 ; Runtime: a$(index) = the string at a0: the element's descriptor in a1, then the string
 ; assignment ($e6(a6) = 08658).
@@ -20271,11 +20244,11 @@ rt_string_array_put_1d_raw:
 	add.l	d3,d3                           ; index * 4
 	adda.l	d3,a1                           ; a1 + index * 6
 	pea	(a2)                            ; return address for the assignment
-	jmp	rn_string_assign(a6)            ; string assignment (08658)
+	jmp	rn_string_assign(a6)            ; string assignment (086d0)
 .string_store_index:
-	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; error 16 (08f98)
 .string_store_indices:
-	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f26)
+	jmp	rn_array_dims_error_a2(a6)      ; error 18/15 (08f9e)
 
 ;------------------------------------------------------------------------------
 ; Runtime: DIM of one array: d7 = number of dimensions (9064: one), d0 = the first bound, the
@@ -20369,9 +20342,9 @@ rt_dim_allocate:
 	movem.l	d1/a1,-(sp)                     ; data size and descriptor
 	move.l	d0,-(sp)                        ; total size
 	movea.l	$5c(a4),a0                      ; end of the array area
-	jsr	rn_string_collect_moved_up(a6)  ; move the string back pointers (08dd0)
+	jsr	rn_string_collect_moved_up(a6)  ; move the string back pointers (08e48)
 	move.l	(sp)+,d0                        ; d0 = total size
-	jsr	rn_array_make_room(a6)          ; make room (0949e)
+	jsr	rn_array_make_room(a6)          ; make room (09516)
 	movem.l	(sp)+,d2/a1                     ; d2 = data bytes, a1 = descriptor
 	move.l	a0,(a1)+                        ; descriptor: data address
 	move.w	d7,(a1)+                        ; and dimensions
@@ -20404,14 +20377,14 @@ rt_dim_store_next:
 	jmp	(a2)                            ; return
 
 ;------------------------------------------------------------------------------
-; Runtime: float array element of a multi-dimensional array: $ea(a6) (09166) checks the
+; Runtime: float array element of a multi-dimensional array: $ea(a6) (091de) checks the
 ; indices and gives a0, d0 = the element number; exit d0-d2 unpacked, returns by jmp (a2).
 ; 9132: integer element in d0. 9142: boolean element in d2. 9156: the address of a float
 ; element in a0.
 ;------------------------------------------------------------------------------
 rt_float_array_get:
 	movea.l	(sp)+,a2                        ; return address
-	jsr	rn_array_index_read(a6)         ; check the indices (09166)
+	jsr	rn_array_index_read(a6)         ; check the indices (091de)
 	add.l	d0,d0                           ; * 6
 	adda.l	d0,a0                           ; a0 + number * 2
 	add.l	d0,d0                           ; number * 4
@@ -20431,7 +20404,7 @@ rt_float_array_get:
 ;------------------------------------------------------------------------------
 rt_int_array_get:
 	movea.l	(sp)+,a2                        ; return address
-	jsr	rn_array_index_read(a6)         ; index check (09166): a0 = data, d0 = element number
+	jsr	rn_array_index_read(a6)         ; index check (091de): a0 = data, d0 = element number
 	add.l	d0,d0                           ; * 4
 	add.l	d0,d0                           ; * 4
 	move.l	0(a0,d0.l),d0                   ; the element
@@ -20443,7 +20416,7 @@ rt_int_array_get:
 ;------------------------------------------------------------------------------
 rt_bool_array_get:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	move.w	d0,d1                           ; bit number
 	lsr.l	#3,d0                           ; byte number
 	btst	d1,0(a0,d0.l)                   ; the bit
@@ -20456,7 +20429,7 @@ rt_bool_array_get:
 ;------------------------------------------------------------------------------
 rt_float_array_address:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	add.l	d0,d0                           ; number * 2
 	adda.l	d0,a0                           ; a0 + number * 2
 	add.l	d0,d0                           ; number * 4
@@ -20488,10 +20461,10 @@ rt_array_index_read_base_first:
 	bcs.s	rt_array_index_read_count       ; in range
 
 rt_array_index_read_dims:
-	jmp	rn_array_dims_error_a2(a6)      ; wrong indices (08f26); also the first index out of range
+	jmp	rn_array_dims_error_a2(a6)      ; wrong indices (08f9e); also the first index out of range
 
 rt_array_index_read_large:
-	jmp	rn_array_index_error_a2(a6)     ; index too large (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; index too large (08f98)
 
 rt_array_index_read_next:
 	move.l	(a0)+,d5                        ; element count of this dimension
@@ -20514,26 +20487,26 @@ rt_array_index_read_count:
 	jmp	(a1)                            ; return
 
 ;------------------------------------------------------------------------------
-; Runtime: a(i,j..) = d0-d2 for a float array: index check $ef(a6) (091ec), then packed into
+; Runtime: a(i,j..) = d0-d2 for a float array: index check $ef(a6) (09264), then packed into
 ; the element ($e1(a6) = 05bae); returns by jmp (a2). 91a8: integer element = d0. 91b8:
 ; boolean element = d2. 91d2: string element = the string at a0 ($e6(a6) = 08658).
 ;------------------------------------------------------------------------------
 rt_float_array_put:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_write(a6)        ; index check (091ec)
+	jsr	rn_array_index_write(a6)        ; index check (09264)
 	add.l	d3,d3                           ; * 6
 	adda.l	d3,a0                           ; a0 + number * 2
 	add.l	d3,d3                           ; number * 4
 	adda.l	d3,a0                           ; a0 + number * 6: the element
 	pea	(a2)                            ; return address for the pack
-	jmp	rn_float_store(a6)              ; pack d0-d2 into (a0) (05bae)
+	jmp	rn_float_store(a6)              ; pack d0-d2 into (a0) (05c26)
 
 ;------------------------------------------------------------------------------
 ; Runtime: a%(i,j..) = d0 for a multi-dimensional integer array; returns by jmp (a2).
 ;------------------------------------------------------------------------------
 rt_int_array_put:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_write(a6)        ; index check (091ec): a0 = data, d3 = element number
+	jsr	rn_array_index_write(a6)        ; index check (09264): a0 = data, d3 = element number
 	add.l	d3,d3                           ; * 4
 	add.l	d3,d3                           ; * 4
 	move.l	d0,0(a0,d3.l)                   ; store
@@ -20544,7 +20517,7 @@ rt_int_array_put:
 ;------------------------------------------------------------------------------
 rt_bool_array_put:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_write(a6)        ; index check (091ec)
+	jsr	rn_array_index_write(a6)        ; index check (09264)
 	move.w	d3,d4                           ; bit number
 	lsr.l	#3,d3                           ; byte number
 	tst.w	d2                              ; TRUE?
@@ -20562,7 +20535,7 @@ rt_bool_array_put:
 rt_string_array_put:
 	move.l	a0,d0                           ; d0 = source descriptor
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_write(a6)        ; index check (091ec)
+	jsr	rn_array_index_write(a6)        ; index check (09264)
 	add.l	d3,d3                           ; * 6: the element's descriptor
 	adda.l	d3,a0                           ; a0 + number * 2
 	add.l	d3,d3                           ; number * 4
@@ -20570,7 +20543,7 @@ rt_string_array_put:
 	movea.l	d0,a1                           ; a1 = source descriptor
 	exg	a1,a0                           ; a0 = source, a1 = element
 	pea	(a2)                            ; return address for the assignment
-	jmp	rn_string_assign(a6)            ; string assignment (08658)
+	jmp	rn_string_assign(a6)            ; string assignment (086d0)
 
 ;------------------------------------------------------------------------------
 ; Runtime: index check for stores ($ef(a6)): as 9166 with the first index in d3 (taken from
@@ -20593,10 +20566,10 @@ rt_array_index_write_base_first:
 	bcs.s	rt_array_index_write_count      ; in range
 
 rt_array_index_write_dims:
-	jmp	rn_array_dims_error_a2(a6)      ; wrong indices (08f26); also the first index out of range
+	jmp	rn_array_dims_error_a2(a6)      ; wrong indices (08f9e); also the first index out of range
 
 rt_array_index_write_large:
-	jmp	rn_array_index_error_a2(a6)     ; index too large (08f20)
+	jmp	rn_array_index_error_a2(a6)     ; index too large (08f98)
 
 rt_array_index_write_next:
 	move.l	(a0)+,d5                        ; element count of this dimension
@@ -20710,7 +20683,7 @@ rt_varptr_float_element_1d:
 ;------------------------------------------------------------------------------
 rt_varptr_float_element:
 	movea.l	(sp)+,a2                        ; return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	add.l	d0,d0                           ; * 6
 	adda.l	d0,a0                           ; a0 + index * 2
 	add.l	d0,d0                           ; index * 4
@@ -20729,7 +20702,7 @@ rt_varptr_string_element_1d:
 ;------------------------------------------------------------------------------
 rt_varptr_string_element:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	add.l	d0,d0                           ; index * 2
 	adda.l	d0,a0                           ; a0 + index * 2
 	add.l	d0,d0                           ; index * 4
@@ -20749,7 +20722,7 @@ rt_varptr_int_element_1d:
 ;------------------------------------------------------------------------------
 rt_varptr_int_element:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	add.l	d0,d0                           ; * 4
 	add.l	d0,d0                           ; * 4
 	add.l	a0,d0                           ; d0 = element address
@@ -20767,7 +20740,7 @@ rt_varptr_bool_element_1d:
 ;------------------------------------------------------------------------------
 rt_varptr_bool_element:
 	movea.l	(sp)+,a2                        ; a2 = return address
-	jsr	rn_array_index_read(a6)         ; index check (09166)
+	jsr	rn_array_index_read(a6)         ; index check (091de)
 	move.w	d0,d1                           ; d1 = bit
 	lsr.l	#3,d0                           ; byte number
 	add.l	a0,d0                           ; d0 = the byte's address
@@ -20843,7 +20816,7 @@ rt_erase_not_dimensioned:
 ; ($ec(a6) = 0955a) and lowers $5c(a4) and a3.
 ;------------------------------------------------------------------------------
 rt_erase:
-	jsr	rn_array_element_count(a6)      ; element count, a1 = data (092cc)
+	jsr	rn_array_element_count(a6)      ; element count, a1 = data (09344)
 	tst.w	(a0)                            ; not dimensioned: nothing
 	beq.s	rt_erase_not_dimensioned        ; not dimensioned: nothing
 	clr.w	(a0)                            ; no dimensions now
@@ -20871,7 +20844,7 @@ rt_erase:
 	sub.l	d6,d0                           ; d0 = bytes removed (bounds and data)
 	movem.l	d0/a2,-(sp)                     ; keep size and end
 	movea.l	d6,a0                           ; a0 = start of the removed part
-	jsr	rn_string_collect_removed(a6)   ; drop the strings, fix back pointers (08e28)
+	jsr	rn_string_collect_removed(a6)   ; drop the strings, fix back pointers (08ea0)
 	movem.l	(sp)+,d7/a2                     ; d7 = bytes removed
 	movea.l	$80(a4),a0                      ; the array descriptors
 	move.l	$90(a4),d0                      ; to the end of the area table
@@ -20891,17 +20864,17 @@ rt_erase:
 	movea.l	d6,a1                           ; to its start
 	sub.l	d7,$5c(a4)                      ; array area end lowered
 	suba.l	d7,a3                           ; control stack lowered
-	jmp	rn_copy_bytes_forward(a6)       ; memory copy (0955a)
+	jmp	rn_copy_bytes_forward(a6)       ; memory copy (095d2)
 
 ;------------------------------------------------------------------------------
 ; Runtime: ARRAYFILL a(),x: the float d0-d2 packed ($f3(a6) = 061be) into every element.
 ; 93b8: integer array, d0. 93d0: boolean array, d2 (whole words of 0 or -1).
 ;------------------------------------------------------------------------------
 rt_arrayfill_float:
-	jsr	rn_float_round_packed(a6)       ; pack the float (061be)
+	jsr	rn_float_round_packed(a6)       ; pack the float (06236)
 	move.l	d0,d5                           ; d5 = mantissa long
 	move.w	d1,d6                           ; d6 = low mantissa and exponent word
-	jsr	rn_array_element_count(a6)      ; element count, a1 = data (092cc)
+	jsr	rn_array_element_count(a6)      ; element count, a1 = data (09344)
 	bra.s	.fill_float_next                ; count down
 .fill_float:
 	move.l	d5,(a1)+                        ; one element
@@ -20917,7 +20890,7 @@ rt_arrayfill_float:
 ;------------------------------------------------------------------------------
 rt_arrayfill_int:
 	move.l	d0,d6                           ; the value
-	jsr	rn_array_element_count(a6)      ; element count, a1 = data (092cc)
+	jsr	rn_array_element_count(a6)      ; element count, a1 = data (09344)
 	bra.s	.fill_int_next                  ; count down
 .fill_int:
 	move.l	d6,(a1)+                        ; one element
@@ -20935,7 +20908,7 @@ rt_arrayfill_bool:
 	beq.s	.fill_bool_start                ; FALSE: 0
 	moveq	#-1,d6                          ; TRUE: all bits
 .fill_bool_start:
-	jsr	rn_array_element_count(a6)      ; element count, a1 = data (092cc)
+	jsr	rn_array_element_count(a6)      ; element count, a1 = data (09344)
 	addq.l	#7,d0                           ; count in words
 	lsr.l	#4,d0                           ; count bits / 16 words; carry set when count % 16 >= 8
 	bcc.s	.fill_bool_next                 ; no carry: dbra over the words
@@ -20965,8 +20938,8 @@ rt_pointer_assign_number:
 	swap	d3                              ; on an element?
 	tst.w	d3                              ; on an element?
 	bne.s	rt_pointer_error                ; no: error
-	movea.l	a1,a0                           ; pack d0-d2 into (a0) (05bae)
-	jmp	rn_float_store(a6)              ; pack d0-d2 into (a0) (05bae)
+	movea.l	a1,a0                           ; pack d0-d2 into (a0) (05c26)
+	jmp	rn_float_store(a6)              ; pack d0-d2 into (a0) (05c26)
 .poke_not_float:
 	cmpa.l	$7c(a4),a1                      ; boolean area or above?
 	bcc.s	.poke_boolean                   ; yes
@@ -20974,7 +20947,7 @@ rt_pointer_assign_number:
 	sub.l	$78(a4),d3                      ; offset in the integer area
 	andi.b	#$3,d3                          ; a multiple of 4?
 	bne.s	rt_pointer_error                ; no: error
-	jsr	rn_float_to_long(a6)            ; float to integer (02b10)
+	jsr	rn_float_to_long(a6)            ; float to integer (02b6e)
 	move.l	d0,(a1)                         ; store it
 	rts
 .poke_boolean:
@@ -21007,7 +20980,7 @@ rt_pointer_assign_string:
 	swap	d3                              ; remainder
 	tst.w	d3                              ; on a descriptor?
 	bne.s	rt_pointer_error                ; no: error 64
-	jmp	rn_string_assign(a6)            ; string assignment (08658)
+	jmp	rn_string_assign(a6)            ; string assignment (086d0)
 
 ;------------------------------------------------------------------------------
 ; Data: word $015a, not code (decoded as bchg).
@@ -21072,13 +21045,13 @@ rt_array_make_room:
 	lea	0(a0,d0.l),a1                   ; new top
 	cmpa.l	$60(a4),a1                      ; below the string area?
 	bcs.s	.room                           ; room: move
-	jsr	rn_string_garbage_collect(a6)   ; garbage collection (084ec)
+	jsr	rn_string_garbage_collect(a6)   ; garbage collection (08564)
 	cmpa.l	$60(a4),a1                      ; room now?
 	bcc.s	.no_room                        ; still no room
 .room:
 	move.l	a0,d0                           ; bytes to move: array end .. a3
 	sub.l	$5c(a4),d0                      ; minus the end of the array area
-	jsr	rn_copy_bytes_backward(a6)      ; copy from the end (094d4)
+	jsr	rn_copy_bytes_backward(a6)      ; copy from the end (0954c)
 	movea.l	$5c(a4),a0                      ; a0 = the room
 	add.l	d1,$5c(a4)                      ; array area end raised
 	adda.l	d1,a3                           ; control stack raised
@@ -21089,7 +21062,7 @@ rt_array_make_room:
 	jmp	rn_error_entry(a6)              ; runtime error d0
 
 ;------------------------------------------------------------------------------
-; Runtime routine $eb (copied into compiled programs; also called by the compiler at $04b12):
+; Runtime routine $eb (copied into compiled programs; also called by the compiler at $04b92):
 ; copy d0.l bytes downwards, from below a0 to below a1 (move -(a0),-(a1)).
 ; The low bits of d0 select 1, 2, 4, 8, 16 and 32 byte moves, then 128-byte blocks
 ; (bit 6 enters the loop half way); only the low word of the block count is used.
@@ -21306,7 +21279,7 @@ rt_inp:
 ; the line buffer $f8(a4), position $86c(a4). With no line buffered it prints
 ; '? ' on the console (channel $22a = -4) and calls $40 to read a line.
 ; A quoted item runs to the closing quote before CR or ','.
-; Exit: string descriptor at $ad8(a4) (address) / $adc(a4) (length), a1 =
+; Exit: string descriptor at $b36(a4) (address) / $adc(a4) (length), a1 =
 ; address; an odd-address item is first moved down one byte to an even one.
 ;------------------------------------------------------------------------------
 rt_input_rest_of_line:
@@ -21494,8 +21467,8 @@ rt_input_read_line:
 
 ;------------------------------------------------------------------------------
 ; Runtime: read one byte from channel d6 to (a0)+. d6 < 0 is a BIOS
-; device (routine $49 enters at $97b2, Bconin), d6 >= 0 a GEMDOS handle
-; (routine $4a enters at $97c8, Fread 1 byte). Exit: d0 = byte; end of file
+; device (routine $49 enters at $982a, Bconin), d6 >= 0 a GEMDOS handle
+; (routine $4a enters at $9840, Fread 1 byte). Exit: d0 = byte; end of file
 ; gives error 26, a GEMDOS error goes to the error routine.
 ;------------------------------------------------------------------------------
 rt_read_channel_byte:
@@ -21594,7 +21567,7 @@ rt_vdi_escape:
 ;------------------------------------------------------------------------------
 ; Runtime routine $5a: get cursor position, d0 = column, d1 = row (1-based).
 ; In a GEM window ($b36(a4) set) from rt_window_cursor_get, else
-; vq_curaddress (escape 15), intout at $60e(a4).
+; vq_curaddress (escape 15), intout at $66c(a4).
 ;------------------------------------------------------------------------------
 rt_cursor_get:
 	move.w	$b36(a4),d2                     ; printing into a GEM window?
@@ -21811,7 +21784,7 @@ rt_console_key_in:
 
 ;------------------------------------------------------------------------------
 ; Runtime: print d0 through routine $123 on channel -1 (raw screen),
-; keeping d3-d7. loc_099aa does the same for channel d1.
+; keeping d3-d7. loc_09a22 does the same for channel d1.
 ;------------------------------------------------------------------------------
 rt_editor_put_raw:
 	moveq	#-1,d1                          ; channel -1: raw screen output
@@ -21824,7 +21797,7 @@ rt_editor_put_channel:
 	rts
 
 ;------------------------------------------------------------------------------
-; Runtime: redraw the edited line: cursor to $85e/$860, print the
+; Runtime: redraw the edited line: cursor to $8bc/$860, print the
 ; text raw with the character at the cursor in reverse (ESC p / ESC q),
 ; then a reversed space if the cursor is at the end and a blank to
 ; erase a deleted character. If the line scrolled the screen, the start
@@ -21900,7 +21873,7 @@ rt_editor_bell:
 
 ;------------------------------------------------------------------------------
 ; Runtime routine $6d: READ a string item: copy the next NUL-terminated
-; DATA item from $ade(a4)+$ae2(a4) to $f8(a4), advance $ae2. Past the
+; DATA item from $b3c(a4)+$ae2(a4) to $f8(a4), advance $ae2. Past the
 ; end ($ae6) error 34 'Out of data'. Exit: descriptor $ad8/$adc(a4).
 ;------------------------------------------------------------------------------
 rt_read_data_string:
@@ -21965,7 +21938,7 @@ rt_inp_channel:
 ; channel d0 0..100): INPUT$(d1 bytes). The handle comes from the channel
 ; table $7ec(a4); 0 = error 24 'File not open', above 100 error 23.
 ; A string of d1 bytes is made with $47 (a0 = descriptor, a1 = text);
-; routine $18c enters at $9aae after that. Handles >= 0 use Fread
+; routine $18c enters at $9b26 after that. Handles >= 0 use Fread
 ; (short read = error 26), devices read byte by byte with Bconin.
 ; Exit: a0 = string descriptor.
 ;------------------------------------------------------------------------------
@@ -22197,7 +22170,7 @@ rt_err:
 
 ;------------------------------------------------------------------------------
 ; Runtime routine $a0: return the byte of runtime routine $1ff
-; (at $9eca) as a long in d0; it looks like FATAL.
+; (at $9f42) as a long in d0; it looks like FATAL.
 ;------------------------------------------------------------------------------
 rt_fatal:
 	move.b	rn_fatal_byte(a6),d0            ; the byte of routine $1ff
@@ -22483,7 +22456,7 @@ rt_break_stop:
 ; code; a6 most likely points here, with the error entry at 2(a6)).
 ; Saves the caller's PC in $213 and a3 in $232(a4); with BREAK not off
 ; ($b38(a4).w >= 0) and Shift+Ctrl+Alt held (kbshift address patched
-; into routine $1c8 at $9d80) it calls the ON BREAK GOSUB handler
+; into routine $1c8 at $9df8) it calls the ON BREAK GOSUB handler
 ; $b38(a4) through $204, or stops with error -128. Also shows the mouse
 ; again when a runtime routine hid it.
 ;------------------------------------------------------------------------------
@@ -22619,13 +22592,9 @@ rt_hex_digit:
 rt_text_pc:
 	dc.b	'| PC>$',0                      ; '| PC>$'
 rt_text_error_number:
-	dc.b	'Error # ',0                    ; 'Error # '
+	dc.b	'Erreur # ',0                   ; 'Error # '
 rt_text_abort_button:
-	dc.b	'][Abort]',0                    ; '][Abort]'
-
-; Runtime data: pad byte, then routine $1ff (one byte, read by $a0) and
-; a pad byte.
-	dc.b	$00                             ; pad; $9eca = routine $1ff; pad
+	dc.b	$5d,$5b,$41,$72,$72,$88,$74,$5d,$00 ; '][Abort]'
 rt_fatal_byte:
 	dc.w	$0000
 
@@ -22665,331 +22634,292 @@ rt_clear:
 	jmp	rn_error_entry(a6)              ; runtime error
 
 ; Runtime data: dc.w $01b9, the dependency word that makes routine $1b9
-; (the table end) follow. The error texts start at $9f1c (routine $1b8,
+; (the table end) follow. The error texts start at $9f94 (routine $1b8,
 ; copied with the Errors option): error number byte, text with '|'
 ; line breaks, NUL. Numbers 0-127 are GFA errors (0 Division by zero,
 ; 102-109 the bombs), $ff-$bd TOS errors -1..-67. Decoded as
 ; instructions; the labels inside are branch targets of that decoding.
 rt_error_text_link:
-	dc.w	$01b9                           ; dc.w $01b9 marker; error texts from $9f1c: 0 Division by zero
+	dc.w	$01b9                           ; dc.w $01b9 marker; error texts from $9f94: 0 Division by zero
 rt_error_texts:
 	dc.b	$00                             ; text: error number 0, then 'Div' (data, not code)
-	dc.b	'Division by zero',0
-	dc.b	$01
-	dc.b	'Overflow',0
+	dc.b	'Division par z'
+	dc.b	$82,$72,$6f,$00,$01,$44,$82
+	dc.b	'passement de capacit'
+	dc.w	$8200
 	dc.b	$02
-	dc.b	'Number not integer|-2147483648 .. 2147483647',0
+	dc.b	'Le nombre n',$27,'est pas un Integer|-2147483648 .. 2147483647',0
 	dc.b	$03                             ; text $03 'Num' (data, not code)
-	dc.b	'Number not byte|0 .. 255',0
+	dc.b	'Le nombre n',$27,'est pas un octet|0 .. 255',0
 	dc.b	$04
-	dc.b	'Number not word|0 '
+	dc.b	'Le nombre n',$27,'est pas un mot|0 '
 errtext_word_range_dots:
 	dc.b	$2e,$2e
 errtext_word_range_max:
 	dc.b	' 65535',0
-	dc.w	$0553,$7175                     ; text $05 'S' (data, not code)
-	dc.b	$61
-errtext_sqr_re_root:
-	dc.b	$72,$65,$20,$72
-errtext_sqr_root_only:
-	dc.b	'oot only|f'
-errtext_sqr_positive:
-	dc.b	'or positive numbers',0
+	dc.b	$05                             ; text $05 'S' (data, not code)
+	dc.b	'Racine carr'
+	dc.b	$82
+	dc.b	' d',$27,'un nombre|n'
+	dc.b	$82
+	dc.b	'gatif impossible',0
 	dc.b	$06
-	dc.b	'Logarithm onl'
-errtext_log_only_for:
-	dc.b	'y for|numbers '
-errtext_log_greater:
-	dc.b	'greater than z'
-errtext_log_zero:
-	dc.b	$65,$72,$6f,$00,$07
-	dc.b	'Undefined error ',0
-	dc.b	$08
-	dc.b	'Out of memory',0
-	dc.b	9,'Function or command|not yet implemented',0
-	dc.b	10,'String too long|max. 32767 characters',0
-	dc.b	$0b                             ; text $0b 'Not' (data, not code)
-	dc.b	'Not GfA-BASIC V1.0 program'
+	dc.b	'Logarithme d',$27,'un nombre|inf'
+	dc.w	$8272,$6965,$7572,$2085,$207a
+	dc.b	$82
+	dc.b	'ro impossible',0
+	dc.b	$07
+	dc.b	'Erreur inconnue ',0
+	dc.b	$08,$4d,$82
+	dc.b	'moire pleine',0
+	dc.b	9,'Fonction ou instruction|impossible',0
+	dc.b	10,'Chaine trop longue|max 32767 caract'
+	dc.b	$8a,$72,$65,$73,$00,$0b
+	dc.b	'Le programme n',$27,'est pas|en GFA BASIC Version 2.0'
 errtext_not_v1_end:
-	dc.b	$00,$0c
-	dc.b	'Program too long|memory full|NEW',0
-	dc.b	13,'Not GfA-BA'
-errtext_not_gfa_program:
-	dc.b	'SIC program|file too short|NEW',0
+	dc.w	$000c
+	dc.b	'Programme trop grand|m'
+	dc.b	$82
+	dc.b	'moire pleine',0
+	dc.b	13,'Le fichier programme|n',$27,'est pas en GFA BASIC',0
 	dc.b	$0e
-	dc.b	'Array dimensioned twice',0
+	dc.b	'Champ dimensionn'
+	dc.b	$82
+	dc.b	' deux fois',0
 	dc.b	$0f
-	dc.b	'Array not dimen'
+	dc.b	'Champ non dimen'
 errtext_array_not_dim_sio:
-	dc.b	$73,$69,$6f
+	dc.w	$7369
+	dc.b	$6f
 errtext_array_not_dim_ned:
-	dc.w	$6e65,$6400                     ; text 'ne' (data, not code)
-	dc.b	$10
-	dc.b	'Array index too large',0
+	dc.b	$6e,$6e,$82,$00,$10             ; text 'ne' (data, not code)
+	dc.b	'Index de champ trop grand',0
 	dc.b	$11
-	dc.b	'Dim index too large',0
+	dc.b	'Index de dim trop grand',0
 	dc.b	$12
-	dc.b	'Wrong number of indices',0
-	dc.b	$13
-	dc.b	'Procedure not found',0
+	dc.b	'Mauvais nombre d',$27,'indices',0
+	dc.b	$13,$20,$50,$72,$6f,$63,$82
+	dc.b	'dure introuvable',0
 	dc.b	$14
-	dc.b	'Label no'
-errtext_label_not_found:
-	dc.b	't found',0
+	dc.b	'Label introuvable',0
 	dc.b	$15
-	dc.b	'On Open only|"I"npu'
+	dc.b	'Pour OPEN utiliser|"I"npu'
 errtext_open_input:
-	dc.b	$74,$20,$20,$22,$4f
+	dc.w	$7420,$2022
+	dc.b	$4f
 errtext_open_output:
-	dc.b	'"utput "R"andom|"A"ppend "U"pdate|allowed',0
+	dc.b	'"utput "R"andom|"A"ppend "U"pdate',0
 	dc.b	$16
-	dc.b	'File already open',0
+	dc.b	'Fichier d'
+	dc.b	$82,$6a,$85
+	dc.b	' ouvert',0
 	dc.b	$17
-	dc.b	'File # wrong',0
+	dc.b	'Mauvais num'
+	dc.b	$82
+	dc.b	'ro de fichier',0
 	dc.b	$18
-	dc.b	'File not open',0
+	dc.b	'Fichier non ouvert',0
 	dc.b	$19
-	dc.b	'Input wrong|not numeric',0
+	dc.b	'Mauvaise saisie|Ce n',$27,'est pas un nombre',0
 	dc.b	$1a
-	dc.b	'End of file reached',0
-	dc.b	$1b                             ; text $1b 'Too' (data, not code)
-	dc.b	'Too many points for|Polyline/Polyfill/Polymark|max. 128',0
+	dc.b	'Fin de fichier atteinte|EOF',0
+	dc.b	$1b
+	dc.b	'Trop de point pour|Polyline/fill/mark|max 128',0
 	dc.b	$1c
-	dc.b	'Array must have|one dimension',0
+	dc.b	'Le champ ne peut avoir|qu',$27,'une dimension',0
 	dc.b	$1d
-	dc.b	'Number of points too|large for array',0
+	dc.b	'Nombre de points|plus grand que le champ',0
 	dc.b	$1e
-	dc.b	'Merge - Not an ASCII file',0
+	dc.b	'Merge, ce n',$27,'est pas|un fichier ASCII',0
 	dc.b	$1f
-	dc.b	'Merge - Line too long|aborted',0
-	dc.b	' ==> Syntax error|program aborted',0
-	dc.b	'!Undefined label',0
-	dc.b	'"Out of data',0
-	dc.b	'#Data not numeric',0
-	dc.b	'$Syntax error in data|unpaired quotes',0
-	dc.b	'%Disk full',0
-	dc.b	'&Command not allowed|in direct mode',0
-	dc.b	$27,'Program error|Gosub not '
+	dc.b	'Merge, ligne trop longue',0
+	dc.b	' ==> Syntaxe incorrecte|arr'
+	dc.b	$8a
+	dc.b	't du programme',0
+	dc.b	'!Marque non d'
+	dc.b	$82
+	dc.b	'finie',0
+	dc.b	'"Trop peu de donn'
+	dc.w	$8265,$7300,$2344,$6f6e
+	dc.b	$82
+	dc.b	'e non num'
+	dc.b	$82
+	dc.b	'rique',0
+	dc.b	'$Erreur de syntaxe dans la|donn'
+	dc.b	$82
+	dc.b	'e, utiliser les ""|par paires',0
+	dc.b	'%Disquette pleine',0
+	dc.b	'&Instruction impossible|en mode direct',0
+	dc.b	$27,'Erreur de programmation|GOSUB im'
 errtext_gosub_possible:
 	dc.b	'possible',0                    ; text 'po' (data, not code)
-	dc.b	'(Clear not allowed in|For-Next-loops or|Procedures',0
-	dc.b	')Cont not possible',0
-	dc.b	'*Parameter missing',0
-	dc.b	'+Expression too complex',0
-	dc.b	',Undefined function',0
-	dc.b	'-Too many parameters',0
-	dc.b	'.Parameter wrong|must be a number',0
-	dc.b	'/Parameter wrong|must be a string',0
-	dc.b	'0Open "R"|Record lenght wrong',0
-	dc.b	'2Not an "R"-File',0
-	dc.b	'3Only one Field per|Open "R" allowed',0
-	dc.b	'4Fields larger|than record lenght',0
-	dc.b	'5Too many Fields (max. 19)',0
-	dc.b	'6GET/PUT|Field string lenght changed',0
-	dc.b	'7GET/PUT|Record number wrong',0
-	dc.b	'<Sprite|String lenght wrong',0
-	dc.b	'=RESERVE error',0
-	dc.b	'>MENU error',0
-	dc.b	'?RESERVE error',0
-	dc.b	'@Pointer (*x) error',0
-	dc.b	'ZLOCAL error',0
-	dc.b	'[FOR error',0
-	dc.b	'\Resume (next) not possible|Fatal, For oder Local',0
-	dc.b	'dGFA BASIC Version 2.02 GB|  ' ; text 100: 'GFA BASIC Version 2.02 GB|  Copyright ...' (data)
+	dc.b	'(CLEAR n',$27,'est pas possible dans|une boucle FOR NEXT|ou une proc'
+	dc.b	$82
+	dc.b	'dure',0
+	dc.b	')CONT impossible',0
+	dc.b	'*Trop peu de param'
+	dc.b	$8a
+	dc.b	'tres',0
+	dc.b	'+Expression trop complexe',0
+	dc.b	',Fonction ind'
+	dc.b	$82
+	dc.b	'finie',0
+	dc.b	'-Trop de param'
+	dc.b	$8a
+	dc.b	'tres',0
+	dc.b	$2e,$50,$61,$72,$61,$6d,$8a
+	dc.b	'tre inexact|ce doit '
+	dc.b	$88
+	dc.b	'tre un nombre',0
+	dc.b	$2f,$50,$61,$72,$61,$6d,$8a
+	dc.b	'tre inexact|ce doit '
+	dc.b	$88
+	dc.b	'tre une chaine',0
+	dc.b	'0Open "R", Enregistrement trop long',0
+	dc.b	'1Trop de fichier "R" (max 10)',0
+	dc.b	'2Pas de fichier "R"',0
+	dc.b	'3Seul un champ est possible|avec un Open "R"',0
+	dc.b	'4Champ plus grand que l',$27,'enregistrement',0
+	dc.b	'5Trop de champs (max 19)',0
+	dc.b	'6Mauvaise longueur|d',$27,'enregistrement GET/PUT',0
+	dc.b	'7Mauvais num'
+	dc.b	$82
+	dc.b	'ro de phrase GET/PUT',0
+	dc.b	'<Longueur de chaine de SPRITE erron'
+	dc.w	$8265
+	dc.b	$00
+	dc.b	'>Erreur dans Menu',0
+	dc.b	'?Erreur dans Reserve',0
+	dc.b	'@Erreur dans Pointer',0
+	dc.b	'ZErreur dans Local',0
+	dc.b	'[Erreur dans For',0
+	dc.b	'\Resume (next) impossible|fatal, For ou Local',0
+	dc.b	'dGFA BASIC Version 2.02|'      ; text 100: 'GFA BASIC Version 2.02 GB|  Copyright ...' (data)
 	dc.b	$bd
-	dc.b	' Copyright 1986/1987|  GFA Systemtechnik Gm'
+	dc.b	' Copyright 1986/1987|GFA Systemtechnik Gm'
 errtext_copyright_gmbh:
 	dc.b	$62,$48,$00
-	dc.b	'f2 bombs - bus error|Peek or Poke possibly wrong',0 ; text 102: '2 bombs - bus error|Peek or Poke
+	dc.b	'f2 bombes - erreur bus|peut etre mauvais Peek ou Poke',0 ; text 102: '2 bombs - bus error|Peek or Poke
                                                 ;   possibly wrong'
-	dc.b	$67,$33,$20
+	dc.w	$6733
+	dc.b	$20
 errtext_bombs_address:
-	dc.b	'bombs - adress error|Odd word adress! Possibly at|Dpoke, Dpeek, Lpoke or Lpeek' ; text 'bo' (data, not code)
-	dc.b	0
-	dc.b	'h4 bombs - illegal instruction|ex'
-errtext_bombs_illegal_executed:
-	dc.b	'ecuted in machine code',0      ; text 'ec' (data, not code)
-	dc.b	'i5 bombs - divide by zero|in 68000 Machine Code',0
-	dc.b	'j6 bombs - CHK exeption|68000 '
-errtext_bombs_chk_interrupted:
-	dc.b	$69,$6e,$74,$65,$72,$72
-errtext_bombs_chk_upted:
-	dc.b	$75,$70,$74
-errtext_bombs_chk_by:
-	dc.b	'ed by CHK',0                   ; text 'ed' (data, not code)
+	dc.b	'bombes - erreur d',$27         ; text 'bo' (data, not code)
+	dc.b	'adresse|adresse de mot impaire|avec Dpoke, Dpeek, Lpoke|ou Lpeek?',0
+	dc.b	'h4 bombes - ex'
+	dc.b	$82
+	dc.b	'cution d',$27,'une|instruction 68000|ne convenant pas',0
+	dc.b	'i5 bombes - division par z'
+	dc.b	$82
+	dc.b	'ro|en langage machine 68000|',0
+	dc.b	'j6 bombes - exeption CHK|interruption 68000|par instruction CHK',0
 errtext_bombs_trapv:
 	dc.w	$6b37                           ; text 'k7' (data, not code)
 errtext_bombs_trapv_text:
-	dc.b	' bombs - TRAPV exeption|68000 interrupted by TRAPV',0 ; text ' b' (data, not code)
-	dc.b	$6c,$38,$20,$62
+	dc.b	' bombes - exeption TRAPV|interruption 68000|par instruction TRAPV',0 ; text ' b' (data, not code)
+	dc.w	$6c38,$2062
 errtext_bombs_privilege:
-	dc.b	'ombs - privilege violation|68000 in'
+	dc.b	'ombes - in'
 errtext_bombs_privilege_interrupt:
-	dc.b	'terrupt by|execution of'       ; text 'te' (data, not code)
-errtext_bombs_privilege_a:
-	dc.b	' a|privi'
-errtext_bombs_privileged:
-	dc.b	'liged instru'
+	dc.b	'terruption 68000|par ex'       ; text 'te' (data, not code)
+	dc.b	$82
+	dc.b	'cution d',$27,'une|instru'
 errtext_bombs_privilege_end:
-	dc.b	'ction',0
-	dc.b	$6d,$39,$20
+	dc.b	'ction privil'
+	dc.b	$82,$67,$69,$82,$65,$00,$6d,$39,$20
 errtext_bombs_trace:
-	dc.w	$626f,$6d62,$7320               ; text 'bo' (data, not code)
-errtext_bombs_trace_text:
-	dc.b	'- trace exeption',0            ; text '- ' (data, not code)
+	dc.b	'bombes - exeption trace|interruption trace avec 68000',0 ; text 'bo' (data, not code)
 	dc.b	$ff
-	dc.b	'General error',0
+	dc.b	'Erreur g'
+	dc.b	$82,$6e,$82
+	dc.b	'rale',0
 	dc.b	$fe
-	dc.b	'Drive not ready',0
+	dc.b	'Drive not Ready|d'
+	dc.b	$82
+	dc.b	'synchronisation',0
 	dc.b	$fd
-	dc.b	'Unknown command',0
+	dc.b	'Instruction inconnue',0
 	dc.b	$fc
-	dc.b	'CRC error|disk check sum wron'
-errtext_crc_wrong:
-	dc.w	$6700,$fb42,$6164,$2072         ; text 'g' NUL $fb 'B' (data, not code)
-	dc.b	$65
-errtext_bad_request:
-	dc.b	$71,$75
-errtext_bad_request_end:
-	dc.b	$65,$73,$74,$00,$fa
-	dc.b	'Seek error|t'
-errtext_seek_track:
-	dc.w	$7261                           ; text 'ra' (data, not code)
-errtext_seek_track_ck:
-	dc.w	$636b                           ; text 'ck' (data, not code)
-errtext_seek_not_found:
-	dc.b	' not found',0                  ; text ' not' (data, not code)
+	dc.b	'Erreur CRC - test de somme|du disque incorrecte',0
+	dc.b	$fb
+	dc.b	'Bad Request|instruction ne convenant pas',0
+	dc.b	$fa
+	dc.b	'Seek Error|piste introuvable',0
 	dc.b	$f9
-	dc.b	'Unknown media|boot'
-errtext_media_boot_sector:
-	dc.b	' sector wrong',0
+	dc.b	'Unknown Media|mauvais bootsecteur',0
 	dc.b	$f8
-	dc.b	'Sector not found',0
+	dc.b	'Secteur introuvable',0
 	dc.b	$f7
-	dc.b	'Out of pape'
-errtext_out_of_paper:
-	dc.w	$7200                           ; text 'r' NUL (data, not code)
+	dc.b	'Pas de papier',0
 	dc.b	$f6
-	dc.b	'Write fault',0
+	dc.b	'Erreur d',$27
+	dc.b	$82
+	dc.b	'criture',0
 	dc.b	$f5
-	dc.b	'Read fault',0
-	dc.b	$f4,$47,$65,$6e,$65,$72
-errtext_general_error:
-	dc.b	$61,$6c,$20
-errtext_general_error_number:
-	dc.b	'error 12',0                    ; text 'er' (data, not code)
-	dc.b	$f3,$57,$72,$69,$74,$65
-errtext_write_protected:
-	dc.b	' protected',0
-	dc.b	$f2
-	dc.b	'Media change detected',0
+	dc.b	'Erreur de lecture',0
+	dc.b	$f4
+	dc.b	'Erreur g'
+	dc.b	$82,$6e,$82
+	dc.b	'rale 12',0
+	dc.b	$f3
+	dc.b	'Disquette prot'
+	dc.b	$82,$67,$82,$65,$00,$f2
+	dc.b	'Vous avez chang'
+	dc.b	$82
+	dc.b	' de disquette',0
 	dc.b	$f1
-	dc.b	'Unknown device',0
+	dc.b	'Appareil inconnu',0
 	dc.b	$f0
-	dc.b	'Bad sector (verify)',0
-	dc.b	$ef                             ; text $ef 'I' (data, not code)
-	dc.b	'Insert other disk|(request)',0
-	dc.b	$e0
-errtext_invalid_function:
-	dc.b	'Invalid function number',0
-	dc.b	$df                             ; text $df 'F' (data, not code)
-	dc.b	'File not found',0
+	dc.b	'Mauvais secteur (Verify)',0
+	dc.b	$ef,$49,$6e,$73,$82             ; text $ef 'I' (data, not code)
+	dc.b	'rer une autre disquette',0
+	dc.w	$e04e,$756d
+	dc.b	$82
+	dc.b	'ro de fonction incorrect',0
+	dc.b	$df
+	dc.b	'Fichier introuvable',0
 	dc.b	$de
-	dc.b	'Path not found',0
+	dc.b	'Nom de "PATH" introuvable|chemin dans directory',0
 	dc.b	$dd
-	dc.b	'Too many open files',0
-	dc.b	$dc
-errtext_access_denied:
-	dc.w	$4163,$6365
-	dc.b	$73
-errtext_access_denied_s:
-	dc.b	$73,$20,$64,$65,$6e,$69
-errtext_access_denied_ed:
-	dc.b	$65
-errtext_access_denied_d:
-	dc.w	$6400,$db49,$6e76               ; text 'd' NUL $db 'I' (data, not code)
-errtext_invalid_handle:
-	dc.b	'alid handle',0                 ; text 'al' (data, not code)
-	dc.b	$d9
-	dc.b	'Out of memory',0
+	dc.b	'Trop de fichiers ouverts',0
+	dc.w	$dc41,$6363
+	dc.b	$8a
+	dc.b	's impossible',0
+	dc.b	$db
+	dc.b	'Handle incorrect',0
+	dc.w	$d94d
+	dc.b	$82
+	dc.b	'moire pleine',0
 	dc.b	$d8
-	dc.b	'Invalid memo'
-errtext_memory_block:
-	dc.w	$7279,$2062,$6c6f               ; text 'ry' (data, not code)
-errtext_memory_block_ck:
-	dc.w	$636b,$2061                     ; text 'ck' (data, not code)
-errtext_memory_block_address:
-	dc.b	'dress',0                       ; text 'dr' (data, not code)
-	dc.w	$d249,$6e76,$616c               ; text $d2 'I' (data, not code)
-errtext_drive_id:
-	dc.w	$6964                           ; text 'id' (data, not code)
-errtext_drive_space:
-	dc.w	$2064                           ; text ' d' (data, not code)
-errtext_drive_rive:
-	dc.b	'rive spe'                      ; text 'ri' (data, not code)
-errtext_drive_cification:
-	dc.w	$6369,$6669                     ; text 'ci' (data, not code)
-errtext_drive_cation:
-	dc.b	'cation',0                      ; text 'ca' (data, not code)
+	dc.b	'Adresse de bloc m'
+	dc.b	$82
+	dc.b	'moire|incorrecte',0
+	dc.w	$d24e,$756d
+	dc.b	$82
+	dc.b	'ro de lecteur incorrect',0
 	dc.b	$cf
-	dc.b	'No more files',0
-	dc.w	$c047,$454d                     ; text $c0 'G' (data, not code)
-errtext_gemdos_range:
-	dc.w	$444f,$5320,$7261
-errtext_gemdos_range_nge:
-	dc.b	'nge erro'                      ; text 'ng' (data, not code)
-errtext_gemdos_range_r:
-	dc.b	'r|seek wrong?',0               ; text 'r' (data, not code)
-	dc.b	$bf                             ; text $bf 'G' (data, not code)
-	dc.b	'GEMDOS intern'
-errtext_gemdos_internal:
-	dc.b	'al error',0                    ; text 'al' (data, not code)
-errtext_executable_format:
-	dc.b	$be,$49
-errtext_executable_nvalid:
-	dc.b	$6e,$76,$61,$6c,$69,$64,$20
-errtext_executable_word:
-	dc.w	$6578                           ; text 'ex' (data, not code)
-errtext_executable_ecutable:
-	dc.w	$6563                           ; text 'ec' (data, not code)
-	dc.b	$75
-errtext_executable_table:
-	dc.b	$74
-errtext_executable_able:
-	dc.w	$6162,$6c65,$2066               ; text 'ab' (data, not code)
-errtext_executable_ile:
-	dc.w	$696c                           ; text 'il' (data, not code)
-errtext_executable_e_format:
-	dc.w	$6520                           ; text 'e ' (data, not code)
-errtext_executable_format_word:
-	dc.w	$666f                           ; text 'fo' (data, not code)
-errtext_executable_rmat:
-	dc.b	'rmat',0                        ; text 'rm' (data, not code)
-	dc.b	$bd,$4d,$65,$6d,$6f,$72,$79
-errtext_memory_growth:
-	dc.b	' block growth fail'            ; text ' b' (data, not code)
-errtext_memory_growth_ure:
-	dc.w	$7572
-	dc.b	$65
-
-; Runtime data: NUL ending the last error text, $7f ending the table
-; block $1b8, a pad byte, then routine $1b9 at $aa76: $7f $7f, the end
-; of the table alone (without the Errors option every error is shown
-; as 'Error # n').
-errtext_table_end:
-	dc.b	$00,$7f,$00                     ; NUL, $7f table end, pad, routine $1b9 = $7f $7f
-rt_error_texts_end:
-	dc.w	$7f7f
+	dc.b	'Il n',$27,'y a pas d',$27,'autres donn'
+	dc.w	$8265,$7300
+	dc.b	$c0
+	dc.b	'Erreur GEMDOS|seek incorrect',0
+	dc.b	$bf
+	dc.b	'Erreur interne de GEMDOS',0
+	dc.b	$be
+	dc.b	'Ce n',$27,'est pas un fichier binaire',0
+	dc.b	$bd
+	dc.b	'Erreur de bloc m'
+	dc.b	$82
+	dc.b	'moire',0
+	dc.b	$7f,$7f,$7f
 
 ; Compiler data, not copied (its table block has no routine number):
 ; the alert "[1][Can't compile|Check with Interpreter][Abort]", used
 ; at $05494. Decoded as instructions up to $aaa9.
 cant_compile_alert:
-	dc.b	'[1][Can',$27,'t '              ; compiler alert text, used at $05494 (data)
-cant_compile_alert_compile:
-	dc.b	'compile|Check with Interpr'    ; text 'co' (data, not code)
-cant_compile_alert_interpreter:
-	dc.b	'eter][Abort'                   ; text 'et' (data, not code)
+	dc.b	'[1][Erreur de structure|--> interpr' ; compiler alert text, used at $05494 (data)
+	dc.b	$82
+	dc.b	'teur][Arr'
+	dc.b	$88,$74
 cant_compile_alert_bracket:
 	dc.b	$5d
 cant_compile_alert_end:
@@ -22999,8 +22929,8 @@ cant_compile_alert_end:
 ; Runtime routine $bb: MENU n,mode for a menu item. d0 = mode: bit 0 =
 ; state, bit 1 = 0 menu_icheck (AES 31) / 1 menu_ienable (AES 32);
 ; d1 = item number counted over the strings of the tree built by MENU
-; a$() (objects from $18ca(a4); a non-G_STRING object counts twice).
-; Does nothing without a menu ($aea(a4) = 0). The word $00ba at $aaf8
+; a$() (objects from $1928(a4); a non-G_STRING object counts twice).
+; Does nothing without a menu ($aea(a4) = 0). The word $00ba at $adbe
 ; is a dependency marker (needs routine $ba).
 ;------------------------------------------------------------------------------
 rt_menu_item_state:
@@ -23098,10 +23028,10 @@ rt_menu_kill:
 
 ;------------------------------------------------------------------------------
 ; Runtime: remove the menu bar (menu_bar(tree,0), AES 30) if one is
-; shown and rebuild the template object tree at $17aa(a4): 100 objects
+; shown and rebuild the template object tree at $1808(a4): 100 objects
 ; of 24 bytes, root G_IBOX the size of the screen, bar G_BOX, 8 titles
 ; G_TITLE and the drop-down parent box. $aee(a4) = end of the text
-; area at $2f1a(a4).
+; area at $2f78(a4).
 ;------------------------------------------------------------------------------
 rt_menu_reset_tree:
 	lea	$2f1a(a4),a0                    ; end of the menu text area
@@ -23202,7 +23132,7 @@ rt_menu_next_string:
 ; objects 3.. as ' text ' (max 10 characters); each title's items follow
 ; until the next empty string, in a G_BOX of their widest width; an
 ; item starting with '-' is DISABLED. At most 11 titles and 99 objects
-; (else error 62 'MENU error'). Texts are stored from $210e(a4). In
+; (else error 62 'MENU error'). Texts are stored from $216c(a4). In
 ; colour resolutions y/height values are halved. Ends with menu_bar
 ; (AES 30, intin 1). a3-a5 are kept in routine 4 meanwhile.
 ;------------------------------------------------------------------------------
@@ -23321,7 +23251,7 @@ rt_menu_next_object:
 	rts                                     ; d7 = the new object
 
 ;------------------------------------------------------------------------------
-; Runtime: finish the menu tree, store it at $aea(a4) and show it.
+; Runtime: finish the menu tree, store it at $b48(a4) and show it.
 ;------------------------------------------------------------------------------
 rt_menu_finish_tree:
 	addq.l	#4,sp                           ; drop the element count
@@ -23377,8 +23307,8 @@ rt_menu_error:
 ; Runtime routines $d0 ($add8, timer 0) and $1f2 ($adda, timer d0):
 ; ON MENU. $add6 dc.w $00ba is the dependency marker. Calls evnt_multi
 ; (AES 25) for keyboard, button, both mouse boxes, messages and timer
-; with the parameters from $b62..$b7a(a4), message buffer $2f2e(a4);
-; copies intout to $111a(a4) and $2f3e(a4), then calls the handlers
+; with the parameters from $bc0..$b7a(a4), message buffer $2f2e(a4);
+; copies intout to $1178(a4) and $2f3e(a4), then calls the handlers
 ; through $204: message (MN_SELECTED -> ON MENU GOSUB $b4a, else ON MENU
 ; MESSAGE $b5e), box 1 $b56, box 2 $b5a, button $b52, key $b4e.
 	dc.w	$00ba                           ; dependency marker: needs routine $ba
@@ -23408,8 +23338,8 @@ rt_on_menu_timer:
 	moveq	#25,d0                          ; evnt_multi
 	jsr	rn_aes_call(a6)                 ; AES evnt_multi
 	movem.w	$772(a4),d0-d6                  ; intout: events, mouse x/y, button, shift, key, clicks
-	movem.w	d0-d6,$111a(a4)                 ; copy at $111a(a4), its use is not in this range
-	movem.w	d0-d6,$2f3e(a4)                 ; and at $2f3e(a4): MENU(9) to MENU(15)
+	movem.w	d0-d6,$111a(a4)                 ; copy at $1178(a4), its use is not in this range
+	movem.w	d0-d6,$2f3e(a4)                 ; and at $2f9c(a4): MENU(9) to MENU(15)
 	clr.w	$2f2c(a4)                       ; MENU(0) = 0
 .event_dispatch:
 	bclr	#$4,d0                          ; message event?
@@ -23483,8 +23413,8 @@ rt_menu_value:
 	rts                                     ; done
 
 ;------------------------------------------------------------------------------
-; Runtime routine $cc: ON MENU BUTTON ... GOSUB: handler d7 to $b52,
-; clicks/mask from d1 (halves swapped) to $b76, state d0 to $b7a.
+; Runtime routine $cc: ON MENU BUTTON ... GOSUB: handler d7 to $bb0,
+; clicks/mask from d1 (halves swapped) to $bd4, state d0 to $bd8.
 ;------------------------------------------------------------------------------
 rt_on_menu_button:
 	move.l	d7,$b52(a4)                     ; ON MENU BUTTON GOSUB handler
@@ -23529,10 +23459,10 @@ rt_on_menu_box_store:
 
 ;------------------------------------------------------------------------------
 ; Runtime routine $214: window system start: work area of the desktop
-; (wind_get 0,WF_WORKXYWH) to $b26(a4), centre to $b2e(a4), clears the
-; 4 title and 4 info buffers at $2f7e(a4) ($50 bytes each).
-; Routine $d1 enters at $af2a: compute the 4 window rectangles in the
-; table at $af2(a4) (12 bytes: handle, kind, x, y, w, h) from the
+; (wind_get 0,WF_WORKXYWH) to $b84(a4), centre to $b8c(a4), clears the
+; 4 title and 4 info buffers at $2fdc(a4) ($50 bytes each).
+; Routine $d1 enters at $b1f0: compute the 4 window rectangles in the
+; table at $b50(a4) (12 bytes: handle, kind, x, y, w, h) from the
 ; centre and wind_set WF_CURRXYWH (AES 105) for the open ones.
 ;------------------------------------------------------------------------------
 rt_window_system_init:
@@ -23541,7 +23471,7 @@ rt_window_system_init:
 	moveq	#104,d0                         ; wind_get
 	jsr	rn_aes_call(a6)                 ; AES wind_get
 	movem.w	$774(a4),d0-d3                  ; work area of the desktop
-	movem.w	d0-d3,$b26(a4)                  ; kept at $b26(a4)
+	movem.w	d0-d3,$b26(a4)                  ; kept at $b84(a4)
 	lsr.w	#1,d2                           ; half the width ...
 	lsr.w	#1,d3                           ; ... and height
 	add.w	d2,d0                           ; centre x
@@ -23722,7 +23652,7 @@ rt_window_top:
 	move.w	#$a,$74c(a4)                    ; WF_TOP
 
 ;------------------------------------------------------------------------------
-; Runtime: wind_set with intin from $74a(a4), then the work area as the output area.
+; Runtime: wind_set with intin from $7a8(a4), then the work area as the output area.
 ;------------------------------------------------------------------------------
 rt_window_set:
 	moveq	#105,d0                         ; wind_set
@@ -23778,7 +23708,7 @@ rt_window_set_clip:
 
 ;------------------------------------------------------------------------------
 ; Runtime routine $d5: CLOSEW n (1-4); n = 0 goes back to the desktop.
-; sub_0b0f0: wind_close/wind_delete (AES 102/103) on window index d0,
+; sub_0b3b6: wind_close/wind_delete (AES 102/103) on window index d0,
 ; then output goes to the top window (wind_get WF_TOP) or the desktop.
 ;------------------------------------------------------------------------------
 rt_closew:
@@ -24040,7 +23970,7 @@ rt_window_print_bell:
 ; and $00a3 (block $b32e), the last two decoded as an ori.l. Then
 ; runtime routines $d8 (INFOW n,a$, $b330) and $d9 (TITLEW n,a$,
 ; $b336): store up to 78 characters in the info/title buffer of window
-; n at $2f7e(a4), set INFO/NAME in its kind, and wind_set WF_INFO/WF_NAME
+; n at $2fdc(a4), set INFO/NAME in its kind, and wind_set WF_INFO/WF_NAME
 ; if it is open.
 	dc.w	$00da,$00a3,$00a3               ; data: dependency marker $00da
 
@@ -25122,12 +25052,12 @@ rt_last_return:
 	rts                                     ; end of the runtime; table at +2
 
 ; Compiler data: the runtime routine table, decoded as instructions up
-; to $d028. One block per routine group, from loc_0570c on, in order:
+; to $d2ee. One block per routine group, from loc_05784 on, in order:
 ;   n,offset   routine n starts at block+offset (n > 0)
 ;   0,offset   the word at block+offset is a routine number this block
 ;              needs (the jsr n(a6) displacements and dc.w markers)
 ;   $ffff,len  end of the block; the next starts len ($7fff mask) later
-; sub_047c4 builds the offset table at bss_end+$b0, sub_04802 marks a
+; sub_04822 builds the offset table at bss_end+$b0, sub_04860 marks a
 ; routine and what it needs. It ends at bas_file_handle ($d028).
 runtime_routine_table:
 	dc.w	$0001                           ; routine table (data): 1 at +0, needs at +$68, +$70 ...
@@ -25231,7 +25161,7 @@ runtime_table_end_6c92:
 	dc.w	$0144,$003c,$0000,$0052,$0146,$00a8,$0000,$00c6
 	dc.w	$ffff
 runtime_table_end_6fb8:
-	dc.w	$013a,$ffff,$0000,$0126,$000a,$010a,$001e,$010b ; data: $013a, length of block $6fb8 ($ffff at $c068)
+	dc.w	$013a,$ffff,$0000,$0126,$000a,$010a,$001e,$010b ; data: $013a, length of block $6fb8 ($ffff at $c32e)
 	dc.w	$0022,$ffff,$0032,$01c2,$0000,$0000,$0008,$ffff
 	dc.w	$000a,$010d,$0000,$0000,$0002,$0000,$000c,$010e
 	dc.w	$0010,$0000,$0012,$ffff,$0016,$00ab,$0000,$0000
@@ -25445,7 +25375,7 @@ runtime_table_end_6fb8:
 	dc.w	$006e,$0000,$0096,$0002,$00b4,$010f,$00b6,$0000
 	dc.w	$00de,$0000,$0160,$0000,$0164,$01ff,$01b8,$0004
 	dc.w	$01ba,$0154,$01ce,$0000,$0208,$ffff,$020a,$01b8
-	dc.w	$0000,$ffff,$0b5a,$01b9,$0000,$ffff,$0002,$ffff
+	dc.w	$0000,$ffff,$0da8,$01b9,$0000,$ffff,$0002,$ffff
 	dc.w	$0032,$00bb,$0000,$0000,$0046,$0000,$004e,$ffff
 	dc.w	$0050,$00bd,$0000,$0000,$002c,$0000,$0036,$ffff
 	dc.w	$0038,$0000,$0000,$00bc,$0002,$0000,$0026,$00ba
@@ -25461,7 +25391,7 @@ runtime_table_end_6fb8:
 	dc.w	$0184,$00d6,$01a6,$00d7,$01cc,$0000,$01de,$0000
 	dc.w	$0250,$0000,$02be,$0000,$0336,$0000
 runtime_table_dep_b2ce:
-	dc.w	$033a,$0000,$0374,$0000,$037c,$0000,$0396,$0000 ; data: $033a, block $af94 needs the word at $b2ce
+	dc.w	$033a,$0000,$0374,$0000,$037c,$0000,$0396,$0000 ; data: $033a, block $af94 needs the word at $b594
 	dc.w	$0398,$ffff,$039a,$0000,$0000,$00d8,$0002,$00d9
 	dc.w	$0008,$0000,$001c,$ffff,$0076,$01c1,$0000,$0000
 	dc.w	$000a,$ffff,$000e,$00cf,$0000,$0000,$001e,$ffff
@@ -25485,13 +25415,13 @@ runtime_table_dep_b2ce:
 	dc.w	$012e,$0000,$01f2,$0000,$02ce
 	dc.b	$00
 
-; Compiler: label only used as dat_0d011+$1b = bas_header (sub_04a44);
+; Compiler: label only used as dat_0d2d7+$1b = bas_header (sub_04ac2);
 ; it lies inside the routine table.
 bas_header_ref_base:
 	dc.b	$00,$03,$52,$ff,$ff,$03,$80,$ff,$ff,$00,$00,$ff,$ff,$00,$00,$00
 	dc.b	$03,$00,$00,$ff,$ff,$00,$00
 
-; Compiler data: GEMDOS handle of the .BAS file (Fopen at $04980);
+; Compiler data: GEMDOS handle of the .BAS file (Fopen at $049e4);
 ; also the end address of the routine table.
 bas_file_handle:
 	dc.w	$0000                           ; word: .BAS file handle
