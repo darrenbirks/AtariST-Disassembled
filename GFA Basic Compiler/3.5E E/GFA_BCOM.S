@@ -18,6 +18,10 @@
 ; 3.5E E linker with its messages translated the same way, and its GFA3BLIB.NDX is the same file.  Its
 ; GFA3BLIB differs in one byte: the rts ending CVDSTR.O ($4e75 at code offset $e) reads $4c75, one bit
 ; changed, which looks like damage to that copy rather than a change by GFA.
+;
+; An earlier release, 3.5E E early, came with this same program and the same GL.PRG and GFA3BLIB.NDX; only
+; its GFA3BLIB is its own: 3.5E F's modules with 3.5E E's English error texts.  Three of them (OPEN.O,
+; WIND_GET.O and FIELD.O) are in the earlier forms 3.5E F has, where this release's are the ones 3.6 keeps.
 
 
 	section	text
