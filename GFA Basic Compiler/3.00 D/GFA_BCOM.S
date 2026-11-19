@@ -1,6 +1,6 @@
 ; GFA_BCOM.PRG  -  GFA-BASIC Compiler 3.00 D
 ;
-; Devpac source of the compiler, disassembled by Darren Birks, 4 November 2026.  Assembled, it gives
+; Devpac source of the compiler, disassembled by Darren Birks, 19 November 2026.  Assembled, it gives
 ; GFA_BCOM.PRG byte for byte, relocations included:
 ;
 ;     vasmm68k_mot -devpac -m68000 -Ftos -o GFA_BCOM.PRG GFA_BCOM.S
@@ -12,6 +12,14 @@
 ; Registers through most of the compiler: a5 reads the source tokens, a4 writes the IR, a1 writes the
 ; generated code, a6 holds the branch list, a3 the end of the IR.  The names of the library routines
 ; are the 8-byte table at library_name_table (routine n at +n*8).
+;
+; The later of the two releases of 3.00 D, found as COMPILER.300\GFA_BCOM.PRG in SPEAK_06.LZH (ST User 2,
+; SuperGAU CD), with the GL.PRG of the earlier release (3.00 D early) and a GFA3BLIB that is 3.00 E's with
+; German error texts (DEUTSCH.O).  Against the earlier release this program writes the structure error
+; message without its tabs, clears the word at (a4) in one more place, marks a block with $11111111 at
+; start-up, copies one more long in a block move, adjusts the stack one statement earlier, writes three more
+; runtime routine numbers ($35a to $35c) and in two places makes the code it wrote a nop (bne.s first).
+; Both name themselves 3.00 D; the folder name tells the two apart.
 
 
 	section	text
@@ -137,9 +145,9 @@ scan_environment:
 	move.w	#$4c,-(sp)                      ; Pterm
 	trap	#1                              ; Pterm
 structure_error_message:
-	dc.b	13,10,9,'Programm enth'
+	dc.b	13,10,'Programm enth'
 	dc.b	$84
-	dc.b	'lt Strukturfehler',13,10,9,' -- Mit Interpreter pr'
+	dc.b	'lt Strukturfehler',13,10,' -- Mit Interpreter pr'
 	dc.b	$81
 	dc.b	'fen! --',13,10,0
 
@@ -1665,9 +1673,10 @@ compile_end_of_program:
 	bsr.w	reclaim_compiled_source         ; give back the source memory
 	move.w	#$3b,(a4)+                      ; IR: library routine $3b END
 	tst.b	error_names_flag                ; option E$ on?
-	beq.s	.generate
+	beq.s	.l00f72
 	move.w	#$350,(a4)+                     ; IR: library routine $350 ERRNAMES (option E$)
-.generate:
+.l00f72:
+	clr.w	(a4)
 	bra.w	generate_and_append             ; generate and copy
 
 compile_end:
@@ -1677,7 +1686,7 @@ compile_nothing:
 	rts                                     ; commands that make no code
 
 ; Statement dispatch table: one word per command, indexed by 2 x command, each entry relative to its own address.
-; Commands 0-255 are written as labels; the entries for commands 256-453 continue as raw words from $1186 to $133a.
+; Commands 0-255 are written as labels; the entries for commands 256-453 continue as raw words from $1186 to $1346.
 statement_dispatch_table:
 	dc.w	compile_do_repeat-statement_dispatch_table
 	dc.w	compile_loop_end-(statement_dispatch_table+2)
@@ -2122,6 +2131,8 @@ statement_dispatch_table:
 ; Repeats until a pass changes nothing, puts $11111111 after the code, and resets a6 to the list start.
 ;------------------------------------------------------------------------------
 shorten_branches:
+	movea.l	code_write_pointer,a0
+	move.l	#$11111111,(a0)
 	lea	branch_offset_list,a0           ; a0 walks the branch list
 	cmpa.l	a0,a6                           ; empty list
 	beq.w	.shortening_done                ; no branches recorded
@@ -2407,6 +2418,7 @@ move_code_down:
 	move.l	(a1)+,(a0)+
 	cmpa.l	a2,a1                           ; up to the end of the code
 	bls.s	.move_28_bytes                  ; until past the end of the code
+	move.l	(a1)+,(a0)+
 	sub.l	d0,code_write_pointer           ; the code is d0 bytes shorter
 	suba.l	code_buffer_start,a3            ; offset of the moved part
 	lea	branch_offset_list,a0           ; a0 walks the branch list
@@ -4302,7 +4314,7 @@ stmt_procedure:
 	bsr.w	shorten_branches
 	bsr.w	reclaim_compiled_source
 	bsr.s	emit_end_unless_returned
-	movea.l	next_line_pointer(pc),a2        ; dat_00e96 = next source line
+	movea.l	next_line_pointer(pc),a2        ; dat_00e94 = next source line
 	addq.l	#2,a2
 	cmpi.w	#$336,(a2)+                     ; $336 = token word of a "$" compiler option line
 	bne.s	.store_address
@@ -4978,7 +4990,7 @@ emit_select_jump:
 	movea.l	next_line_pointer(pc),a5        ; look at the next line
 	addq.l	#2,a5                           ; skip the line length
 	cmpi.w	#$70,(a5)                       ; $70 = token word of CASE
-	beq.s	take_case_line
+	beq.s	loc_02d4a
 	bra.w	next_statement                  ; frame stays on the stack
 
 ;------------------------------------------------------------------------------
@@ -4995,6 +5007,9 @@ stmt_cont_in_select:
 	beq.s	take_case_line
 	rts
 
+loc_02d4a:
+	subq.l	#4,sp
+
 ;------------------------------------------------------------------------------
 ; Consumes the CASE/DEFAULT line at a5 (advances next_line_pointer and source_line_number), puts a nop
 ; ($4e71) into statement_code_buffer instead of the jump to ENDSELECT, then opens the CASE frame
@@ -5007,7 +5022,6 @@ take_case_line:
 	addq.w	#1,source_line_number           ; count it
 	lea	statement_code_buffer,a1
 	move.w	#$4e71,(a1)+                    ; nop instead of the jump to ENDSELECT
-	subq.l	#4,sp
 	addq.l	#4,a5                           ; skip length and command: a5 = the CASE values
 	bra.s	open_case_block
 
@@ -5649,7 +5663,7 @@ stmt_lprint:
 	bra.s	print_item_list                 ; join the item loop
 
 ;------------------------------------------------------------------------------
-; Statement PRINT (tokens $93, $94; LPRINT enters at $326c). PRINT #n calls PXInit ($25e) after the channel.
+; Statement PRINT (tokens $93, $94; LPRINT enters at $327a). PRINT #n calls PXInit ($25e) after the channel.
 ; Items: AT( -> LOCATE, TAB( -> PRTAB, SPC( -> PRSPC, "," -> PRKOMMA, "'" -> PRTICK, ";" nothing,
 ; numbers (marked by token $37) -> PRNUM, strings -> PRSTR, USING -> PUSIinit/PUSINUM/PUSISTR/PUSIexit,
 ; end of line -> PRCR. Until the output channel is set (print_channel_set) the first item uses the P0R
@@ -6561,11 +6575,11 @@ store_result_array_element:
 	exg	d1,d0                           ; d0 = array number, d1 = token
 	andi.w	#$f,d1                          ; array type 4-13
 	add.w	d1,d1                           ; word table index
-	move.w	array_result_ir_table(pc,d1.w),d1 ; d1 = store IR (table from $391e)
+	move.w	array_result_ir_table(pc,d1.w),d1 ; d1 = store IR (table from $392c)
 	bsr.s	emit_result_array_store         ; indexes, pop and store
 
 array_result_ir_table:
-	movem.w	(sp)+,d5-d7                     ; table base: array types 4-13 index the words at $391e
+	movem.w	(sp)+,d5-d7                     ; table base: array types 4-13 index the words at $392c
 	bra.w	next_stacked_result             ; on with the next result
 	dc.w	$80cb,$0000,$80c7,$80ca,$0000,$0000,$0000,$0000
 	dc.w	$80c8,$80c9
@@ -6672,7 +6686,7 @@ dispatch_operator:
 ; Self-relative handlers for every token byte of the general expression parser. Operators 0-$1f
 ; (precedence 4 AND OR XOR IMP EQV, 10 float compares, 30 + -, 35 MOD DIV, 40 * /, 50 ^, 60 string compares,
 ; 65 string +), functions $24-$c4, constants $b8-$dd, string literal $de, variables $e0-$ff, $d0 = secondary
-; function prefix. Terminators (")" "," ";" $46 ...) point at $3bb8 (end of expression).
+; function prefix. Terminators (")" "," ";" $46 ...) point at $3bc6 (end of expression).
 expression_token_table:
 	dc.w	parse_op_and-expression_token_table
 	dc.w	parse_op_or-(expression_token_table+2)
@@ -7508,7 +7522,7 @@ integer_token_table:
 .bad_token:
 	illegal                                 ; token that may not appear here
 
-; Option $C+ / $C- (set by the option parser at $61b2, read at $657a, $67a8, $67b4, $681a).
+; Option $C+ / $C- (set by the option parser at $61cc, read at $6594, $67a8, $67b4, $681a).
 option_c_flag:
 	dc.w	$0000                           ; option $C+ / $C-
 
@@ -10193,14 +10207,17 @@ parse_address_and_value:
 
 parse_ksingle:
 	bsr.s	parse_address_and_value
+	move.w	#$35b,(a4)+
 	rts
 
 parse_kfloat:
 	bsr.s	parse_address_and_value
+	move.w	#$35c,(a4)+
 	rts
 
 parse_kdouble:
 	bsr.s	parse_address_and_value
+	move.w	#$35a,(a4)+
 	rts
 
 parse_menu:
@@ -12797,7 +12814,7 @@ parse_rcall:
 ;------------------------------------------------------------------------------
 ; Parses a call argument list in which every argument is a long. Each argument's IR is moved
 ; to the stack and written back in reverse order, so the last argument is pushed first.
-; Then IR $8022 and IR $8016 with the argument byte count. With option C+ (dat_04006) the call
+; Then IR $8022 and IR $8016 with the argument byte count. With option C+ (dat_04014) the call
 ; is bracketed by IR $8206 ... $8205.
 ;------------------------------------------------------------------------------
 parse_call_long_arguments:
@@ -13662,7 +13679,7 @@ peephole_int_constant:
 	moveq	#2,d0
 	bsr.w	ir_insert_bytes
 	move.l	(sp)+,d0                        ; the constant
-	bsr.w	int_to_float                    ; sub_0e9ca: convert the long in d0 to a float
+	bsr.w	int_to_float                    ; sub_0e9e4: convert the long in d0 to a float
 	movem.w	d1-d2,(a4)                      ; replace the $8006 and the next word
 	move.l	d0,-(a4)                        ; float mantissa high long
 	move.w	#$8000,-(a4)                    ; IR $8000 = float constant (8 bytes)
@@ -13960,7 +13977,7 @@ fold_float_constant_push:
 	bra.w	optimise_restart
 
 ;------------------------------------------------------------------------------
-; $8000 c, $805d v (float variable as operand), op: when sub_07f86 gives the reversed operator,
+; $8000 c, $805d v (float variable as operand), op: when sub_07fa0 gives the reversed operator,
 ; rewrite as $803e v (load variable), $8001 c, reversed op.
 ;------------------------------------------------------------------------------
 fold_float_constant_with_variable:
@@ -13985,7 +14002,7 @@ fold_float_constant_with_variable:
 ; $8000 c then $8005 (float to int): the constant is converted at compile time and written as $8007 n.
 ;------------------------------------------------------------------------------
 fold_float_constant_to_int:
-	move.l	d3,d0                           ; $8000 c then $8005 (float to int): sub_0ec22 converts, rewritten as
+	move.l	d3,d0                           ; $8000 c then $8005 (float to int): sub_0ec3c converts, rewritten as
                                                 ;   $8007
 	move.w	d4,d1                           ; d0-d2 = the float constant
 	move.w	d5,d2
@@ -13999,8 +14016,8 @@ fold_float_constant_to_int:
 
 ;------------------------------------------------------------------------------
 ; $8000 c1 $8001 c2 op with two float constants: computes the result at compile time.
-;  $804a c1+c2 (sub_0e6e0)  $804b c1-c2  $804c c2-c1  $804d c1*c2 (sub_0ed7c)
-;  $804e and $804f divide (sub_0e7ca, skipped when the divisor is 0)
+;  $804a c1+c2 (sub_0e6fa)  $804b c1-c2  $804c c2-c1  $804d c1*c2 (sub_0ed96)
+;  $804e and $804f divide (sub_0e7e4, skipped when the divisor is 0)
 ;  $805a = and $805b <> give integer constants; $8056-$8059 order tests: $8056 computes c1>c2,
 ;  $8057 c1>=c2, $8058 c1<=c2, $8059 c1<c2 (exponent first, then mantissa).
 ;------------------------------------------------------------------------------
@@ -14465,7 +14482,7 @@ optimise_int_constant:
 	bra.w	optimise_restart
 
 ;------------------------------------------------------------------------------
-; Calls sub_09166 for the operator in d0. Exit: d0 = operator to use with the operands
+; Calls sub_09180 for the operator in d0. Exit: d0 = operator to use with the operands
 ; exchanged, Z set (d1 = 0) when that is possible.
 ;------------------------------------------------------------------------------
 test_operator_swappable:
@@ -14843,8 +14860,8 @@ delete_operator_pair:
 
 ;------------------------------------------------------------------------------
 ; $8007 c1 $8008 c2 op with two integer constants: computes the result.
-;  $8063/$814c add, $8064/$814d subtract, $805e/$814e multiply (sub_0ec26), $805f divide (sub_0eefc),
-;  $8065 MOD (sub_0eccc), $8060 AND, $8061 OR, $8062 XOR, $8066 EQV, $8067 c1 OR NOT c2,
+;  $8063/$814c add, $8064/$814d subtract, $805e/$814e multiply (sub_0ec40), $805f divide (sub_0ef2a),
+;  $8065 MOD (sub_0ece6), $8060 AND, $8061 OR, $8062 XOR, $8066 EQV, $8067 c1 OR NOT c2,
 ;  $8074-$8077 BTST/BSET/BCLR/BCHG, $8068-$806b long SHL/SHR/ROL/ROR, $806c-$806f word,
 ;  $8070-$8073 byte shifts and rotates, $807b = $807c <> $807d >= $807e > $807f <= $8080 <.
 ;  $8083 swaps the two constants.
@@ -15334,8 +15351,9 @@ optimise_int_to_float:
 	bra.w	ir_delete_four_bytes            ; delete $8006 and the following word
 	dc.w	$0000
 .int_then_float_push:
-	bsr.w	measure_ir_operand              ; find the pop ($8004) that ends the right operand; a2 = after it, d7 =
-                                                ;   IR word before it
+	bsr.w	measure_ir_operand              ; $8006 $8002: integer pushed as the left operand of a float operator:
+                                                ;   find the pop ($8004) that ends the right operand; a2 = after it, d7
+                                                ;   = IR word before it
 	not.l	d0
 	beq.w	optimise_retry_word
 	cmpi.w	#$8006,d7                       ; right operand also an integer converted to float?
@@ -16597,7 +16615,7 @@ optimise_byte_var_pair:
 ; $802f / $802e (word / byte cast) after it are deleted. $8099 -> optimise_byte_var_pair; $8017 -> fuse with X+$7e when
 ; X <= $8022;
 ; $8008 c op with a store back into v -> $80e4-$80e7; $8084/$808d -> other variable op-assign.
-; The code at $8ba8-$8e14 (byte compare with an out-of-range constant) has no label and is never reached.
+; The code at $8bc2-$8e14 (byte compare with an out-of-range constant) has no label and is never reached.
 ;------------------------------------------------------------------------------
 optimise_load_byte_var:
 	move.w	(a4)+,d3                        ; d3 = variable number
@@ -16733,7 +16751,7 @@ optimise_load_byte_var:
 	not.l	d0                              ; d0 = -1: the operand cannot be followed
 	beq.w	optimise_retry_word
 	move.w	-$2(a2),d0                      ; d0 = X, the popping IR code
-	cmpi.w	#$8022,d0                       ; only pops up to $8022
+	cmpi.w	#$8022,d0                       ; only pops up to $803c
 	bhi.w	optimise_retry_word
 	move.w	d0,-(sp)                        ; save X
 	movea.l	a4,a0                           ; delete '$803d v $8017'
@@ -16960,7 +16978,7 @@ optimise_float_constant_operand:
 	exg	d3,d0                           ; c2 into d0-d2, c1 into d3-d5
 	exg	d4,d1
 	exg	d5,d2
-	tst.w	d5                              ; c1 = 0.0? (cannot be: checked at $8e10)
+	tst.w	d5                              ; c1 = 0.0? (cannot be: checked at $8e2a)
 	beq.s	.divisor_zero
 	bsr.w	float_divide                    ; c2 / c1: x / c1 * c2 = x * (c2 / c1)
 	move.w	#$804d,-(a4)                    ; the multiply
@@ -17699,7 +17717,7 @@ optimise_ir_803b:
 .no_string_var_fold:
 	bra.w	optimise_reread
 ext_l_d1_code_address:
-	dc.w	$0000,$0000                     ; address where the last ext.l d1 was written (set at $c1f6, checked
+	dc.w	$0000,$0000                     ; address where the last ext.l d1 was written (set at $c210, checked
                                                 ;   before muls/divs)
 
 ;------------------------------------------------------------------------------
@@ -18646,7 +18664,7 @@ float_op_constant_routines:
 ; Codegen for IR $8002 (save the float accumulator d0/d1/d2 before the right operand).
 ; If the right operand up to its $8004 contains only integer constants, integer variables and the integer operators
 ; $801b,
-; $8063, $8064, $8083, $814c, $814d, $805e, $8028 (code that does not touch d3-d5), the $8004 is changed to $7e04 (no
+; $8063, $8064, $8083, $814c, $814d, $805e, $8028 (code that does not touch d3-d5), the $8004 is changed to $7e1e (no
 ; code) and
 ; the value is copied: move.l d0,d3 / move.l d1,d4 / move.l d2,d5. Otherwise move.l d0,-(sp) / move.w d2,-(sp) / move.w
 ; d1,-(sp).
@@ -18729,7 +18747,7 @@ emit_pop_float_operand:
 
 ;------------------------------------------------------------------------------
 ; Emits a load of the word constant d0 into data register d2: moveq #d0,Dn when it fits a byte, else move.w #d0,Dn.
-; The code at $9d1e-$9f64 after it has no label and is never called.
+; The code at $9d38-$9f64 after it has no label and is never called.
 ;------------------------------------------------------------------------------
 emit_load_word_constant:
 	move.b	d0,d1                           ; fits a signed byte?
@@ -19860,7 +19878,7 @@ emit_bset_constant:
 	rts
 
 ;------------------------------------------------------------------------------
-; IR $8008 n $8076: bclr #n,d0. The bset code at $a578 after it has no label and is never used.
+; IR $8008 n $8076: bclr #n,d0. The bset code at $a592 after it has no label and is never used.
 ;------------------------------------------------------------------------------
 emit_bclr_constant:
 	andi.w	#$1f,d0                         ; bit number 0-31
@@ -25595,7 +25613,7 @@ gen_push_a1:
 
 ;------------------------------------------------------------------------------
 ; IR $8018: save the string address in a0 for a later string operation.
-; $803b followed by $8023: emit movea.l a0,a1 ($2248) and turn the $8023 into $7e04 (no code).
+; $803b followed by $8023: emit movea.l a0,a1 ($2248) and turn the $8023 into $7e1e (no code).
 ; A special constant ($80e9 empty, $80ea CHR$, $80eb MKI$, $80ec MKL$, $80ed constant) followed by $8023 and a string
 ; routine from string_routine_table: emit the constant and call the specialised routine (EMSxx, CHSxx, MISxx, MLSxx,
 ; COSxx).
@@ -25965,7 +25983,7 @@ gen_ir_812b_float_max:
 	bra.w	emit_library_call
 
 ;------------------------------------------------------------------------------
-; IR $812c: MIN of the integers d0 and d1 (the optimiser turns $812a into $7f08 for integer operands).
+; IR $812c: MIN of the integers d0 and d1 (the optimiser turns $812a into $7f22 for integer operands).
 ; d0 = $6f (ble) for emit_min_max_exchange: cmp.l d1,d0 / ble.s +2 / exg d1,d0.
 ;------------------------------------------------------------------------------
 gen_ir_812c_integer_min:
@@ -26568,7 +26586,7 @@ emit_string_element_recall:
 	move.w	#$23e,d0                        ; RCAS
 	bra.w	emit_library_call
 
-; Self-modified long in the text (address stored in a table at $06a2a): 0 for OPTION BASE 0, non-zero for BASE 1.
+; Self-modified long in the text (address stored in a table at $06a44): 0 for OPTION BASE 0, non-zero for BASE 1.
 ; The instruction shown is that long decoded as code.
 option_base_flag:
 	dc.w	$0000,$0000
@@ -28062,7 +28080,7 @@ gen_sub_constant_d0:
 	move.w	d7,(a1)+                        ; moveq #-n,d0
 .emit_add_variable:
 	move.w	#$d0ad,(a1)+                    ; $d0ad = add.l d16(a5),d0
-	move.l	d2,(a1)+                        ; move.l: writes $202d and the offset, unlike the .w at $e426
+	move.l	d2,(a1)+                        ; move.l: writes $202d and the offset, unlike the .w at $e440
 	bra.w	mark_result_modified
 .word_constant:
 	move.w	#$303c,(a1)+                    ; $303c = move.w #n,d0
@@ -28342,7 +28360,7 @@ gen_ir_81bd_delete_byte_array:
 
 ;------------------------------------------------------------------------------
 ; IR $81c1: the lea/movea ...,a0 just emitted is turned to ...,a2 (two steps of retarget_to_next_address_register).
-; Written by the parser after an array reference whose descriptor a library routine wants in a2 (e.g. at $675c, $6aa2).
+; Written by the parser after an array reference whose descriptor a library routine wants in a2 (e.g. at $6776, $6aa2).
 ;------------------------------------------------------------------------------
 gen_ir_81c1_retarget_address_a2:
 	addq.b	#2,-$4(a1)                      ; a0 -> a1, and the next step a1 -> a2
@@ -29739,8 +29757,8 @@ float_mul_full_mantissa:
 
 ;------------------------------------------------------------------------------
 ; Combine the partial sums d5/d0/d1 into the 48-bit result d0:d1 and normalise it by one bit. Exponent above
-; $1fff gives the largest value ($ffffffff/$ffff/$1fff, no error), below zero gives zero. The code from $0ebc8
-; to $0ec1a (a general normalise) has no label and is not reached.
+; $1fff gives the largest value ($ffffffff/$ffff/$1fff, no error), below zero gives zero. The code from $0ebe2
+; to $0ec34 (a general normalise) has no label and is not reached.
 ;------------------------------------------------------------------------------
 float_mul_normalise:
 	swap	d1                              ; d1.w = high word of the weight-32 sum
@@ -30474,7 +30492,9 @@ relocate_line_table:
 	addq.w	#2,d2                           ; +2: the target's displacement is relative to its pc
 	bvs.s	.branch_done
 	move.w	d2,(a0)                         ; store the threaded displacement
-	bra.s	.follow_word_branch
+	bne.s	.follow_word_branch
+	move.l	#$4e714e71,-$2(a0)
+	bra.s	.branch_done
 .skip_marker:
 	move.b	#$6,-$1(a0)                     ; the $ff marker becomes displacement 6
 	rts
@@ -30513,6 +30533,10 @@ relocate_line_table:
 	cmp.w	d1,d2
 	bne.s	.short_branch_done              ; no: keep the branch as it is
 	move.b	d2,-$1(a0)                      ; store the threaded displacement
+	bne.s	.next_hop
+	move.w	#$4e71,-$2(a0)
+	rts
+.next_hop:
 	lea	0(a0,d2.w),a2                   ; a2 = the new target
 	bra.s	.follow_short_branch
 .line_8:
@@ -31347,7 +31371,7 @@ copy_memory_forwards:
 ; Library routine names, 8 bytes each, indexed by routine number (0 blank, 1 BOX, ... $102 MID3STR, ...).
 ; Used for the external symbols of the .O file.
 library_name_table:
-	dc.b	'        BOX     CIRCLE  DRAWTO  ELLARC  ELLIPSE FFTOI   FITOF   FADD    FADDV   FDIV    FDIVV   FEQ     FEQEQ   FEVEN   FGE     FGT     FIDIV   FLE     FLT     FMOD    FMUL    FMULV   FNE     FODD    FPOW    FSQUARE FSUB    FSUBV   FXDIV   FXIDIV  FXMOD   FXPOW   FXSUB   ISQUARE LDIV    LINE    LMOD    LMUL    PARC    PBOX    PCIRCLE PELLARC PELLIPSEPLOT    PRBOX   RBOX    TIMER   VFADD   VFDIV   VFMUL   VFSUB   FADDQ1  FSUBQ1  VFADDQ1 VFSUBQ1 XLDIV   XLMOD   INIT    END     PRCR    PRKOMMA PRTICK  PRNUM   PRINUM  BMOVE   ACHAR   ATEXT   PSET    HLINE   ACLIP   PTST    ALINE   ARECT   APOLY   VDI     VDI1    VDI3    VDI4    AES     AES1    COLOR   GRAPHMODDEFLI1  DEFLI2  DEFLI34 ERROR   FILL    FILL3   RANDOMIZRANDOM  RND     RAND    FORI1   ADDRIN  ADDROUT CONTRL  GCONTRL GINTIN  GINTOUT HIMEM   BASEPAGEINTIN   INTOUT  PTSIN   PTSOUT  VDIBASE WINDTAB GB      SWINDTABCRSLIN  CRSCOL  MOUSEX  MOUSEY  MOUSEK  RADDRIN RADDROUTRCONTRL RGCONTRLRGINTIN RGINTOUTRINTIN  RINTOUT RPTSIN  RPTSOUT RWINDTABSADDRIN SADDROUTSCONTRL SGCONTRLSGINTIN SGINTOUTSINTIN  SINTOUT SPTSIN  SPTSOUT SPOKE   SDPOKE  SLPOKE  DELAY   LOCATE  SOBNEXT SOBHEAD SOBTAIL SOBTYPE SOBFLAGSSOBSTATESOBSPEC SOBX    SOBY    SOBW    SOBH    ROBADR  ROBNEXT ROBHEAD ROBTAIL ROBTYPE ROBFLAGSROBSTATEROBSPEC ROBX    ROBY    ROBW    ROBH    EMPSTR  CHRSTR  MKISTR  MKLSTR  PRSTR   PRCHR   PRMKI   PRMKL   LENSTR  ASCSTR  CVISTR  CVLSTR  CPRSTR  CONSTR  FINT    FTRUNC  FFRAC   FSIN    FCOS    FTAN    FATN    FEXP    FLOG    FLOG10  FASIN   FACOS   FSQR    FDEG    FRAD    ROUND   FSINQ   FCOSQ   VFINT   VFTRUNC VFFRAC  VFSIN   VFCOS   VFTAN   VFATN   VFEXP   VFLOG   VFLOG10 VFASIN  VFACOS  VFSQR   VFDEG   VFRAD   VROUND  VFSINQ  VFCOSQ  VFXSUB  VFXDIV  VFEQ    VFNE    VFGE    VFGT    VFLE    VFLT    VFMOD   VFXMOD  VFIDIV  VFXIDIV DIMF    DIMS    DIMI    DIMB    DIMW    DIMC    AFILLF  AFILLI  AFILLW  AFILLC  AFILLB  MOUSE   FREx    FRE     STOS    PXNUM   PXINUM  PXSTR   PXCSTR  EMPSTOS CONSTOS CHRSTOS MKISTOS MKLSTOS PEEK    DPEEK   LPEEK   LEFT1STRRIGHT1STLEFTSTR RIGHTSTRMID2STR MID3STR INKEYSTRINKEY   DFREE   PRSPC   PRTAB   ERRSTR  INPAUX  VAL     INPMID  TIMESTR PI      FLOATK  DOUBLEK INPSTR1 INPSTR2 CHARK   MKSSTR  MKFSTR  MKDSTR  CVSSTR  CVFSTR  CVDSTR  NROUND  BINSTR  BINISTR SINGLEK DATESTR UPPER   SPACESTRSTRINGN STRINGS SUCCSTR DIRSTR  PREDSTR DRAWFN  TRIMSTR STRSTR  STRISTR STRIISTRHEXSTR  HEXISTR OCTSTR  OCTISTR POINT   VALQ    EOF     LOF     LOC     EXIST   ERR     FATAL   POS     LPOS    MENUFN  W_HAND  W_INDEX GDOSQ   LA_BASE VDI_H   FSFIRST SADD    SGE     SLE     SGT     SLT     SEQ     SNE     EMSADD  EMSGE   EMSLE   EMSGT   EMSLT   EMSEQ   EMSNE   CHSADD  CHSGE   CHSLE   CHSGT   CHSLT   CHSEQ   CHSNE   MISADD  MISGE   MISLE   MISGT   MISLT   MISEQ   MISNE   MLSADD  MLSGE   MLSLE   MLSGT   MLSLT   MLSEQ   MLSNE   COSADD  COSGE   COSLE   COSGT   COSLT   COSEQ   COSNE   APPL_INIAPPL_REAAPPL_WRIAPPL_FINAPPL_TPLAPPL_TREAPPL_EXIEVNT_KEYEVNT_BUTEVNT_MOUEVNT_MESEVNT_TIMEVNT_MULEVNT_DCLMENU_BARMENU_ICHMENU_IENMENU_TNOMENU_TEXMENU_REGOBJC_ADDOBJC_DELOBJC_DRAOBJC_FINOBJC_OFFOBJC_ORDOBJC_EDIOBJC_CHAFORM_DO FORM_DIAFORM_ALEFORM_ERRFORM_CENGRAF_RUBGRAF_DRAGRAF_MOVGRAF_GROGRAF_SHRGRAF_WATGRAF_SLIGRAF_HANGRAF_MOUGRAF_MKSSCRP_REASCRP_WRIFSEL_INPWIND_CREWIND_OPEWIND_CLOWIND_DELWIND_GETWIND_SETWIND_FINWIND_UPDWIND_CALRSRC_LOARSRC_FRERSRC_GADRSRC_SADRSRC_OBFSHEL_REASHEL_WRISHEL_GETSHEL_PUTSHEL_FINSHEL_ENVTEXTXY  TEXTXYL FORI2   FORW1   FORW2   PRWNUM  PXWNUM  FORC1   FORC2   V_CLRWK STICK   STRIG   WORK_OUTFMIN    FMAX    FORM_KEYFORM_BUTSET2COLOSET4COLOSGET    SPUT    SPUTM   RC_INTERALERT   CHDIR   MKDIR   RMDIR   KILL    RENAME  CHDRIVE SCHDRIVESHOWM   HIDEM   SYSTEMN MODE    RC_COPY8HARDCOPYVSYNC   PAUSE   BOUNDARYSAPUT   SAGET   PRVAR   PXVAR   ISTOF   VFFTOI  SMIN    SMAX    FADDQ1V FSUBQ1V FORF1   NEXTF1  FORF1D  NEXTF1D FORFX   NEXTFX  XRCA    ARCLI   ARCLW   ARCLC   ARCLF   ASTOI   ASTOW   ASTOC   ASTOF   RCAI    RCAW    RCAC    RCAF    ACLRI   ACLRW   ACLRC   ACLRF   FI_DIV  FI_MUL  FI_ADD  FI_SUB  FIV_DIV FIV_MUL FIV_ADD FIV_SUB RCAB    ARCLB   ACLRB   ASETB   ASTOB   FI_DIV0 FI_MUL0 FI_ADD0 FI_SUB0 FDIV0   FMUL0   FADD0   FSUB0   OPENW   OPENW6  OPENWXY TOPW    TITLEW  INFOW   CLOSEW  CLEARW  NCLEARW CLIPW   CLIPXYXYCLIPXYWHCLIPOFFSCLIPOFF FULLW   FULLWN  DEFMOUSEDEFSMOUSDEFNUM  ONM_MEN ONM_KEY ONM_BUT ONM_MSG ONM_IBX ONM_OBX POLLMENUTPOLLMENDRAW    RC_COPY9DEFMA1  DEFMA2  DEFMA3  DEFTX1  DEFTX2  DEFTX3  DEFTX4  DEFTX5  DEFTXX  DEFSFILLDEFFI1  DEFFI2  DEFFI3  FWTOF   CLS     INPBIOS INPFILE MUL2P   DIV2P   VMUL2P  VDIV2P  ASTOS   ASTOS1  ASTOS2  RCAS    RCAS1   RCAS2   READSTR READNUM READINT MENU    MENUOFF MENUKILLMENUXY  MENUXSTRSEEK    RELSEEK OPENX   OPENI   OPENO   OPENU   OPENA   OPENR   OPENR128OPENXN  CLOSE   CLOSEALLP0RCR   P0RMKI  P0RMKL  P0RCHR  P0RTICK C0PRSTR P0XCSTR P0RKOMMAP0Init  PXInit  LP0Init P0XINUM P0RINUM P0RNUM  P0XNUM  P0RWNUM P0XWNUM P0RCNUM PX0CNUM P0RVAR  P0XVAR  HTAB    VTAB    FILESEL BITBLT  BITABLT BITXBLT TOUCH   P0RSTR  P0XSTR  P0RTAB  P0RSPC  FORMINP FORMIAS LINEINP INPUT0  GOSUB   RETURN  VARPAR  LOCALF  LOCALS  LOCALI  LOCALB  LOCALW  LOCALC  VALPARF VALPARS VALPARI VALPARB VALPARW VALPARC LSET    RSET    MID2SET MID3SET INPQ    OUTQ    ERASE   DOUBLE  VDOUBLE HALF    VHALF   ENDFUNC RETSTR  SWAPS   VVFADD  VVFSUB  VVFXSUB VVFEQ   VVFNE   VVFGT   VVFGE   VVFLT   VVFLE   VVFMUL  VVFDIV  VVFXDIV LINEINQ LINEINF FIELDSETFIELDN  FIELDS  RECORD  RECORDX FGET    FGETX   FPUT    FPUTX   SET3MOUSSET2MOUSKEYPAD  KEYTEST KEYGET  KEYLOOK KEYPRESSKEYDEF  RINSTR1 INSTR   INSTR0  INSTR1  RINSTR  RINSTR0 EXEC    INPUTN  INPUTS  INPUTI  IXInit  INPUTQ  RESERVE UNRESERVBGET    BPUT    CLEAR   CLSN    SETXDRAWBLOAD   BSAVE   TIMESET DATESET TYPE    BLOAD0  OUTB    OUTWB   OUTLB   OUTF    OUTWF   OUTLF   INPWB   INPLB   INPWF   INPLF   SOUND0  SOUND1  SOUND2  SOUND3  SOUND4  SOUNDP  WAVE1   WAVE2   WAVE3   WAVE4   SPRITE  SPRITEXYSETYDRAWSETHDRAWVSET2COLVSET4COLWRITESTRWRKOMMA RCALL   RCW_INTESTORE1  STORE2  RECALL1 RECALL2 INSAF   INSAS   INSAI   INSAW   INSAC   DELAF   DELAS   DELAI   DELAW   DELAC   N_SS    S_SS    I_SS    W_SS    C_SS    N_SSX   S_SSX   I_SSX   W_SSX   C_SSX   S_SSK   S_SSKX  N_QS    S_QS    I_QS    W_QS    C_QS    N_QSX   S_QSX   I_QSX   W_QSX   C_QSX   S_QSK   S_QSKX  V_HSET  DIMQ    STARLN  STARLS  SWAPIA  CINT    V_OPNWK VxOPNWK V_OPNVWKVxOPNVWKV_UPDWK V_CLSWK V_CLSVWKVST_LOADVST_UNLOVQT_NAMEVQT_EXTEKCHAR   DIR0    DIR1    DIR2    FILES0  FILES1  FILES2  DRAWS0  DRAWS1  DRAWS2  XFILESELRESTORE PUSIinitPUSISTR PUSINUM PUSIexitPUSIexCRSELSTR  VFMIN   VVFMIN  VFMAX   VVFMAX  EVERY   EVEHOLD EVECONT AFTER   AFTHOLD AFTCONT IRQON   IRQOFF  ONBRKCONOFFBRK  ONBREAK OFFERR  ONERROR POLYFILLPOLYLINEPOLYMARKXSTICK  ONGOSUB OPTB0   OPTB1   SWPBVA  SWPBAV  SWPBAA  ERRNAMESRUN     CHAIN   RESUME  RESUNEXTRESUMAINRESUPROCBOMBON  ARC     CURVE   ' ; routine n at +n*8,
+	dc.b	'        BOX     CIRCLE  DRAWTO  ELLARC  ELLIPSE FFTOI   FITOF   FADD    FADDV   FDIV    FDIVV   FEQ     FEQEQ   FEVEN   FGE     FGT     FIDIV   FLE     FLT     FMOD    FMUL    FMULV   FNE     FODD    FPOW    FSQUARE FSUB    FSUBV   FXDIV   FXIDIV  FXMOD   FXPOW   FXSUB   ISQUARE LDIV    LINE    LMOD    LMUL    PARC    PBOX    PCIRCLE PELLARC PELLIPSEPLOT    PRBOX   RBOX    TIMER   VFADD   VFDIV   VFMUL   VFSUB   FADDQ1  FSUBQ1  VFADDQ1 VFSUBQ1 XLDIV   XLMOD   INIT    END     PRCR    PRKOMMA PRTICK  PRNUM   PRINUM  BMOVE   ACHAR   ATEXT   PSET    HLINE   ACLIP   PTST    ALINE   ARECT   APOLY   VDI     VDI1    VDI3    VDI4    AES     AES1    COLOR   GRAPHMODDEFLI1  DEFLI2  DEFLI34 ERROR   FILL    FILL3   RANDOMIZRANDOM  RND     RAND    FORI1   ADDRIN  ADDROUT CONTRL  GCONTRL GINTIN  GINTOUT HIMEM   BASEPAGEINTIN   INTOUT  PTSIN   PTSOUT  VDIBASE WINDTAB GB      SWINDTABCRSLIN  CRSCOL  MOUSEX  MOUSEY  MOUSEK  RADDRIN RADDROUTRCONTRL RGCONTRLRGINTIN RGINTOUTRINTIN  RINTOUT RPTSIN  RPTSOUT RWINDTABSADDRIN SADDROUTSCONTRL SGCONTRLSGINTIN SGINTOUTSINTIN  SINTOUT SPTSIN  SPTSOUT SPOKE   SDPOKE  SLPOKE  DELAY   LOCATE  SOBNEXT SOBHEAD SOBTAIL SOBTYPE SOBFLAGSSOBSTATESOBSPEC SOBX    SOBY    SOBW    SOBH    ROBADR  ROBNEXT ROBHEAD ROBTAIL ROBTYPE ROBFLAGSROBSTATEROBSPEC ROBX    ROBY    ROBW    ROBH    EMPSTR  CHRSTR  MKISTR  MKLSTR  PRSTR   PRCHR   PRMKI   PRMKL   LENSTR  ASCSTR  CVISTR  CVLSTR  CPRSTR  CONSTR  FINT    FTRUNC  FFRAC   FSIN    FCOS    FTAN    FATN    FEXP    FLOG    FLOG10  FASIN   FACOS   FSQR    FDEG    FRAD    ROUND   FSINQ   FCOSQ   VFINT   VFTRUNC VFFRAC  VFSIN   VFCOS   VFTAN   VFATN   VFEXP   VFLOG   VFLOG10 VFASIN  VFACOS  VFSQR   VFDEG   VFRAD   VROUND  VFSINQ  VFCOSQ  VFXSUB  VFXDIV  VFEQ    VFNE    VFGE    VFGT    VFLE    VFLT    VFMOD   VFXMOD  VFIDIV  VFXIDIV DIMF    DIMS    DIMI    DIMB    DIMW    DIMC    AFILLF  AFILLI  AFILLW  AFILLC  AFILLB  MOUSE   FREx    FRE     STOS    PXNUM   PXINUM  PXSTR   PXCSTR  EMPSTOS CONSTOS CHRSTOS MKISTOS MKLSTOS PEEK    DPEEK   LPEEK   LEFT1STRRIGHT1STLEFTSTR RIGHTSTRMID2STR MID3STR INKEYSTRINKEY   DFREE   PRSPC   PRTAB   ERRSTR  INPAUX  VAL     INPMID  TIMESTR PI      FLOATK  DOUBLEK INPSTR1 INPSTR2 CHARK   MKSSTR  MKFSTR  MKDSTR  CVSSTR  CVFSTR  CVDSTR  NROUND  BINSTR  BINISTR SINGLEK DATESTR UPPER   SPACESTRSTRINGN STRINGS SUCCSTR DIRSTR  PREDSTR DRAWFN  TRIMSTR STRSTR  STRISTR STRIISTRHEXSTR  HEXISTR OCTSTR  OCTISTR POINT   VALQ    EOF     LOF     LOC     EXIST   ERR     FATAL   POS     LPOS    MENUFN  W_HAND  W_INDEX GDOSQ   LA_BASE VDI_H   FSFIRST SADD    SGE     SLE     SGT     SLT     SEQ     SNE     EMSADD  EMSGE   EMSLE   EMSGT   EMSLT   EMSEQ   EMSNE   CHSADD  CHSGE   CHSLE   CHSGT   CHSLT   CHSEQ   CHSNE   MISADD  MISGE   MISLE   MISGT   MISLT   MISEQ   MISNE   MLSADD  MLSGE   MLSLE   MLSGT   MLSLT   MLSEQ   MLSNE   COSADD  COSGE   COSLE   COSGT   COSLT   COSEQ   COSNE   APPL_INIAPPL_REAAPPL_WRIAPPL_FINAPPL_TPLAPPL_TREAPPL_EXIEVNT_KEYEVNT_BUTEVNT_MOUEVNT_MESEVNT_TIMEVNT_MULEVNT_DCLMENU_BARMENU_ICHMENU_IENMENU_TNOMENU_TEXMENU_REGOBJC_ADDOBJC_DELOBJC_DRAOBJC_FINOBJC_OFFOBJC_ORDOBJC_EDIOBJC_CHAFORM_DO FORM_DIAFORM_ALEFORM_ERRFORM_CENGRAF_RUBGRAF_DRAGRAF_MOVGRAF_GROGRAF_SHRGRAF_WATGRAF_SLIGRAF_HANGRAF_MOUGRAF_MKSSCRP_REASCRP_WRIFSEL_INPWIND_CREWIND_OPEWIND_CLOWIND_DELWIND_GETWIND_SETWIND_FINWIND_UPDWIND_CALRSRC_LOARSRC_FRERSRC_GADRSRC_SADRSRC_OBFSHEL_REASHEL_WRISHEL_GETSHEL_PUTSHEL_FINSHEL_ENVTEXTXY  TEXTXYL FORI2   FORW1   FORW2   PRWNUM  PXWNUM  FORC1   FORC2   V_CLRWK STICK   STRIG   WORK_OUTFMIN    FMAX    FORM_KEYFORM_BUTSET2COLOSET4COLOSGET    SPUT    SPUTM   RC_INTERALERT   CHDIR   MKDIR   RMDIR   KILL    RENAME  CHDRIVE SCHDRIVESHOWM   HIDEM   SYSTEMN MODE    RC_COPY8HARDCOPYVSYNC   PAUSE   BOUNDARYSAPUT   SAGET   PRVAR   PXVAR   ISTOF   VFFTOI  SMIN    SMAX    FADDQ1V FSUBQ1V FORF1   NEXTF1  FORF1D  NEXTF1D FORFX   NEXTFX  XRCA    ARCLI   ARCLW   ARCLC   ARCLF   ASTOI   ASTOW   ASTOC   ASTOF   RCAI    RCAW    RCAC    RCAF    ACLRI   ACLRW   ACLRC   ACLRF   FI_DIV  FI_MUL  FI_ADD  FI_SUB  FIV_DIV FIV_MUL FIV_ADD FIV_SUB RCAB    ARCLB   ACLRB   ASETB   ASTOB   FI_DIV0 FI_MUL0 FI_ADD0 FI_SUB0 FDIV0   FMUL0   FADD0   FSUB0   OPENW   OPENW6  OPENWXY TOPW    TITLEW  INFOW   CLOSEW  CLEARW  NCLEARW CLIPW   CLIPXYXYCLIPXYWHCLIPOFFSCLIPOFF FULLW   FULLWN  DEFMOUSEDEFSMOUSDEFNUM  ONM_MEN ONM_KEY ONM_BUT ONM_MSG ONM_IBX ONM_OBX POLLMENUTPOLLMENDRAW    RC_COPY9DEFMA1  DEFMA2  DEFMA3  DEFTX1  DEFTX2  DEFTX3  DEFTX4  DEFTX5  DEFTXX  DEFSFILLDEFFI1  DEFFI2  DEFFI3  FWTOF   CLS     INPBIOS INPFILE MUL2P   DIV2P   VMUL2P  VDIV2P  ASTOS   ASTOS1  ASTOS2  RCAS    RCAS1   RCAS2   READSTR READNUM READINT MENU    MENUOFF MENUKILLMENUXY  MENUXSTRSEEK    RELSEEK OPENX   OPENI   OPENO   OPENU   OPENA   OPENR   OPENR128OPENXN  CLOSE   CLOSEALLP0RCR   P0RMKI  P0RMKL  P0RCHR  P0RTICK C0PRSTR P0XCSTR P0RKOMMAP0Init  PXInit  LP0Init P0XINUM P0RINUM P0RNUM  P0XNUM  P0RWNUM P0XWNUM P0RCNUM PX0CNUM P0RVAR  P0XVAR  HTAB    VTAB    FILESEL BITBLT  BITABLT BITXBLT TOUCH   P0RSTR  P0XSTR  P0RTAB  P0RSPC  FORMINP FORMIAS LINEINP INPUT0  GOSUB   RETURN  VARPAR  LOCALF  LOCALS  LOCALI  LOCALB  LOCALW  LOCALC  VALPARF VALPARS VALPARI VALPARB VALPARW VALPARC LSET    RSET    MID2SET MID3SET INPQ    OUTQ    ERASE   DOUBLE  VDOUBLE HALF    VHALF   ENDFUNC RETSTR  SWAPS   VVFADD  VVFSUB  VVFXSUB VVFEQ   VVFNE   VVFGT   VVFGE   VVFLT   VVFLE   VVFMUL  VVFDIV  VVFXDIV LINEINQ LINEINF FIELDSETFIELDN  FIELDS  RECORD  RECORDX FGET    FGETX   FPUT    FPUTX   SET3MOUSSET2MOUSKEYPAD  KEYTEST KEYGET  KEYLOOK KEYPRESSKEYDEF  RINSTR1 INSTR   INSTR0  INSTR1  RINSTR  RINSTR0 EXEC    INPUTN  INPUTS  INPUTI  IXInit  INPUTQ  RESERVE UNRESERVBGET    BPUT    CLEAR   CLSN    SETXDRAWBLOAD   BSAVE   TIMESET DATESET TYPE    BLOAD0  OUTB    OUTWB   OUTLB   OUTF    OUTWF   OUTLF   INPWB   INPLB   INPWF   INPLF   SOUND0  SOUND1  SOUND2  SOUND3  SOUND4  SOUNDP  WAVE1   WAVE2   WAVE3   WAVE4   SPRITE  SPRITEXYSETYDRAWSETHDRAWVSET2COLVSET4COLWRITESTRWRKOMMA RCALL   RCW_INTESTORE1  STORE2  RECALL1 RECALL2 INSAF   INSAS   INSAI   INSAW   INSAC   DELAF   DELAS   DELAI   DELAW   DELAC   N_SS    S_SS    I_SS    W_SS    C_SS    N_SSX   S_SSX   I_SSX   W_SSX   C_SSX   S_SSK   S_SSKX  N_QS    S_QS    I_QS    W_QS    C_QS    N_QSX   S_QSX   I_QSX   W_QSX   C_QSX   S_QSK   S_QSKX  V_HSET  DIMQ    STARLN  STARLS  SWAPIA  CINT    V_OPNWK VxOPNWK V_OPNVWKVxOPNVWKV_UPDWK V_CLSWK V_CLSVWKVST_LOADVST_UNLOVQT_NAMEVQT_EXTEKCHAR   DIR0    DIR1    DIR2    FILES0  FILES1  FILES2  DRAWS0  DRAWS1  DRAWS2  XFILESELRESTORE PUSIinitPUSISTR PUSINUM PUSIexitPUSIexCRSELSTR  VFMIN   VVFMIN  VFMAX   VVFMAX  EVERY   EVEHOLD EVECONT AFTER   AFTHOLD AFTCONT IRQON   IRQOFF  ONBRKCONOFFBRK  ONBREAK OFFERR  ONERROR POLYFILLPOLYLINEPOLYMARKXSTICK  ONGOSUB OPTB0   OPTB1   SWPBVA  SWPBAV  SWPBAA  ERRNAMESRUN     CHAIN   RESUME  RESUNEXTRESUMAINRESUPROCBOMBON  ARC     CURVE   KDOUBLE KSINGLE KFLOAT  ' ; routine n at +n*8,
                                                 ;   blank-padded; $ff follows the last
 	dc.b	$ff                             ; end of the name table
 default_gfa_name:

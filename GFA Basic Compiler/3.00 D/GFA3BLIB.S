@@ -1,6 +1,6 @@
 ; GFA3BLIB  -  the GFA-BASIC runtime library 3.00 D
 ;
-; Devpac source of the library, disassembled by Darren Birks, 4 November 2026.  Assembled as a plain
+; Devpac source of the library, disassembled by Darren Birks, 19 November 2026.  Assembled as a plain
 ; binary it gives the library file byte for byte:
 ;
 ;     vasmm68k_mot -devpac -m68000 -Fbin -o GFA3BLIB GFA3BLIB.S
@@ -12156,26 +12156,20 @@ circle_polyline_jump_xvdi:
 	dc.w	$0000,$0000,$0000,$0016
 
 ;==============================================================================
-; Module DEFXXX.O: 324 bytes of code, 0 of data, 0 of bss; exports GRAPHINI, DEFLI1, DEFLI2, DEFLI34, DEFFI1, DEFFI2, DEFFI3, DEFMA1, DEFMA3, DEFTX1, DEFTX2, DEFTX3, DEFTX4, DEFTX5, DEFTXX, GRAPHMOD, COLOR, BOUNDARY, CLIPXYWH, CLIPXYXY, CLIPOFFS, CLIPOFF
+; Module DEFXXX.O: 312 bytes of code, 0 of data, 0 of bss; exports GRAPHINI, DEFLI1, DEFLI2, DEFLI34, DEFFI1, DEFFI2, DEFFI3, DEFMA1, DEFMA2, DEFMA3, DEFTX1, DEFTX2, DEFTX3, DEFTX4, DEFTX5, DEFTXX, GRAPHMOD, COLOR, BOUNDARY, CLIPXYWH, CLIPXYXY, CLIPOFFS, CLIPOFF
 ;==============================================================================
 	dc.b	$44,$45,$46,$58,$58,$58,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name DEFXXX.O
-	dc.w	$b369,$12a2,$0000,$01b6,$0000,$03e6,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$5e8a,$12dd,$0000,$01b6,$0000,$03dc,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$144,$0,$0,$142		; text, data and bss lengths, symbol table length
+	dc.l	$138,$0,$0,$150		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_defxxx:
-GRAPHINI:
-	lea	$146(a6),a0
-	moveq	#12,d0
-.clear_word:
-	clr.w	(a0)+
-	dbra	d0,.clear_word
-
 ;------------------------------------------------------------------------------
 ; Sets the default graphics state: text alignment, clipping to the whole screen, fill perimeter on, origin 0,0, replace
 ; mode, line colour, type, width, ends, fill, marker and text settings, then reads back the text attributes.
 ; Exit: VDI attributes reset; TEXT_WRITE_MODE and TEXT_CELL_SIZE updated.
 ;------------------------------------------------------------------------------
+graphics_defaults:
 	clr.l	$6a0(a6)                        ; intin[0..1] = 0: left, baseline
 	moveq	#39,d0                          ; vst_alignment
 	moveq	#2,d1                           ; two intin words
@@ -12494,76 +12488,77 @@ vdi_clip_off:
 	dc.l	$0
 	dc.b	$44,$45,$46,$4c,$49,$31,$00,$00		; DEFLI1
 	dc.w	$a200				; defined global text
-	dc.l	$7c
+	dc.l	$70
 	dc.b	$44,$45,$46,$4c,$49,$32,$00,$00		; DEFLI2
 	dc.w	$a200				; defined global text
-	dc.l	$8c
+	dc.l	$80
 	dc.b	$44,$45,$46,$4c,$49,$33,$34,$00		; DEFLI34
 	dc.w	$a200				; defined global text
-	dc.l	$98
+	dc.l	$8c
 	dc.b	$44,$45,$46,$46,$49,$31,$00,$00		; DEFFI1
 	dc.w	$a200				; defined global text
-	dc.l	$aa
+	dc.l	$9e
 	dc.b	$44,$45,$46,$46,$49,$32,$00,$00		; DEFFI2
 	dc.w	$a200				; defined global text
-	dc.l	$ba
+	dc.l	$ae
 	dc.b	$44,$45,$46,$46,$49,$33,$00,$00		; DEFFI3
 	dc.w	$a200				; defined global text
-	dc.l	$be
+	dc.l	$b2
 	dc.b	$44,$45,$46,$4d,$41,$31,$00,$00		; DEFMA1
 	dc.w	$a200				; defined global text
-	dc.l	$c2
+	dc.l	$b6
+	dc.b	$44,$45,$46,$4d,$41,$32,$00,$00		; DEFMA2
+	dc.w	$a200				; defined global text
+	dc.l	$ba
 	dc.b	$44,$45,$46,$4d,$41,$33,$00,$00		; DEFMA3
 	dc.w	$a200				; defined global text
-	dc.l	$ca
+	dc.l	$be
 	dc.b	$44,$45,$46,$54,$58,$31,$00,$00		; DEFTX1
 	dc.w	$a200				; defined global text
-	dc.l	$d8
+	dc.l	$cc
 	dc.b	$44,$45,$46,$54,$58,$32,$00,$00		; DEFTX2
 	dc.w	$a200				; defined global text
-	dc.l	$dc
+	dc.l	$d0
 	dc.b	$44,$45,$46,$54,$58,$33,$00,$00		; DEFTX3
 	dc.w	$a200				; defined global text
-	dc.l	$e0
+	dc.l	$d4
 	dc.b	$44,$45,$46,$54,$58,$34,$00,$00		; DEFTX4
 	dc.w	$a200				; defined global text
-	dc.l	$e4
+	dc.l	$d8
 	dc.b	$44,$45,$46,$54,$58,$35,$00,$00		; DEFTX5
 	dc.w	$a200				; defined global text
-	dc.l	$ec
+	dc.l	$e0
 	dc.b	$44,$45,$46,$54,$58,$58,$00,$00		; DEFTXX
 	dc.w	$a200				; defined global text
-	dc.l	$f0
+	dc.l	$e4
 	dc.b	$47,$52,$41,$50,$48,$4d,$4f,$44		; GRAPHMOD
 	dc.w	$a200				; defined global text
-	dc.l	$108
+	dc.l	$fc
 	dc.b	$43,$4f,$4c,$4f,$52,$00,$00,$00		; COLOR
 	dc.w	$a200				; defined global text
-	dc.l	$10c
+	dc.l	$100
 	dc.b	$42,$4f,$55,$4e,$44,$41,$52,$59		; BOUNDARY
 	dc.w	$a200				; defined global text
-	dc.l	$110
+	dc.l	$104
 	dc.b	$43,$4c,$49,$50,$58,$59,$57,$48		; CLIPXYWH
 	dc.w	$a200				; defined global text
-	dc.l	$114
+	dc.l	$108
 	dc.b	$43,$4c,$49,$50,$58,$59,$58,$59		; CLIPXYXY
 	dc.w	$a200				; defined global text
-	dc.l	$11c
+	dc.l	$110
 	dc.b	$43,$4c,$49,$50,$4f,$46,$46,$53		; CLIPOFFS
 	dc.w	$a200				; defined global text
-	dc.l	$136
+	dc.l	$12a
 	dc.b	$43,$4c,$49,$50,$4f,$46,$46,$00		; CLIPOFF
 	dc.w	$a200				; defined global text
-	dc.l	$140
+	dc.l	$134
 	dc.b	$58,$76,$64,$69,$00,$00,$00,$00		; Xvdi
 	dc.w	$8800				; defined external
 	dc.l	$0
 ; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
 ; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
 ; number is the word >> 3
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$00b6,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$00be,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
@@ -12571,17 +12566,18 @@ vdi_clip_off:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$00b6,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$00b6,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$00b6,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$00be,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$00be,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$00b6,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$00be,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$00be,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$00b6,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$00be,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000
 
 ;==============================================================================
 ; Module DEFFILL.O: 44 bytes of code, 0 of data, 0 of bss; exports DEFSFILL
@@ -20559,12 +20555,12 @@ CVSSTR:
 	dc.w	$0000,$0000,$0000,$0000
 
 ;==============================================================================
-; Module STRING.O: 392 bytes of code, 0 of data, 0 of bss; exports EMPSTR, CONSTR, CHRSTOS, MKISTOS, MKLSTOS, EMPSTOS, Screat, STcreat, CHRSTR, MKISTR, MKLSTR, GarColl, FREx, FRE, XStr0Kil, XStrKill
+; Module STRING.O: 396 bytes of code, 0 of data, 0 of bss; exports EMPSTR, CONSTR, CHRSTOS, MKISTOS, MKLSTOS, EMPSTOS, Screat, STcreat, CHRSTR, MKISTR, MKLSTR, GarColl, FREx, FRE, XStr0Kil, XStrKill
 ;==============================================================================
 	dc.b	$53,$54,$52,$49,$4e,$47,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name STRING.O
-	dc.w	$b4a7,$12a2,$0000,$01b6,$0000,$040c,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$92f0,$12dd,$0000,$01b6,$0000,$0422,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$188,$0,$0,$e0		; text, data and bss lengths, symbol table length
+	dc.l	$18c,$0,$0,$ee		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_string:
 ;------------------------------------------------------------------------------
@@ -20717,7 +20713,10 @@ string_temp_alloc:
 	bra.s	string_heap_alloc               ; give it the data
 .none_free:
 	moveq	#14,d0                          ; too many temporary strings
-	jmp	(a6)
+
+string_temp_jump_error:
+	dc.w	$6000,$0000                     ; bra.w string_temp_jump_error+2 -> ERROR (filled in by the linker),
+                                                ;   tail call ERROR
 
 ;------------------------------------------------------------------------------
 ; Collects garbage and tries the allocation again.
@@ -20731,7 +20730,10 @@ string_heap_full:
 	cmpa.l	a3,a1                           ; room now?
 	bcc.s	string_heap_link                ; yes: link it
 	moveq	#8,d0                           ; out of memory
-	jmp	(a6)
+
+string_heap_jump_error:
+	dc.w	$6000,$0000                     ; bra.w string_heap_jump_error+2 -> ERROR (filled in by the linker),
+                                                ;   tail call ERROR
 
 ;------------------------------------------------------------------------------
 ; Makes a one-character temporary string from d0 (CHR$).
@@ -20934,28 +20936,31 @@ string_unlink:
 	dc.l	$76
 	dc.b	$43,$48,$52,$53,$54,$52,$00,$00		; CHRSTR
 	dc.w	$a200				; defined global text
-	dc.l	$a0
+	dc.l	$a4
 	dc.b	$4d,$4b,$49,$53,$54,$52,$00,$00		; MKISTR
 	dc.w	$a200				; defined global text
-	dc.l	$aa
+	dc.l	$ae
 	dc.b	$4d,$4b,$4c,$53,$54,$52,$00,$00		; MKLSTR
 	dc.w	$a200				; defined global text
-	dc.l	$b4
+	dc.l	$b8
 	dc.b	$47,$61,$72,$43,$6f,$6c,$6c,$00		; GarColl
 	dc.w	$a200				; defined global text
-	dc.l	$be
+	dc.l	$c2
 	dc.b	$46,$52,$45,$78,$00,$00,$00,$00		; FREx
 	dc.w	$a200				; defined global text
-	dc.l	$148
+	dc.l	$14c
 	dc.b	$46,$52,$45,$00,$00,$00,$00,$00		; FRE
 	dc.w	$a200				; defined global text
-	dc.l	$14c
+	dc.l	$150
 	dc.b	$58,$53,$74,$72,$30,$4b,$69,$6c		; XStr0Kil
 	dc.w	$a200				; defined global text
-	dc.l	$154
+	dc.l	$158
 	dc.b	$58,$53,$74,$72,$4b,$69,$6c,$6c		; XStrKill
 	dc.w	$a200				; defined global text
-	dc.l	$164
+	dc.l	$168
+	dc.b	$45,$52,$52,$4f,$52,$00,$00,$00		; ERROR
+	dc.w	$8800				; defined external
+	dc.l	$0
 ; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
 ; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
 ; number is the word >> 3
@@ -20968,6 +20973,8 @@ string_unlink:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0086,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0086,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
@@ -20981,9 +20988,7 @@ string_unlink:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000
 
 ;==============================================================================
 ; Module LEFTSTR.O: 250 bytes of code, 0 of data, 0 of bss; exports LEFT1STR, RIGHT1ST, LEFTSTR, RIGHTSTR, MID2STR, MID3STR, TRIMSTR
@@ -24666,135 +24671,6 @@ bput_call_prxsub:
 	dc.w	$0000,$0026
 
 ;==============================================================================
-; Module BSAVE.O: 102 bytes of code, 0 of data, 0 of bss; exports BSAVE, BLOAD0, BLOAD
-;==============================================================================
-	dc.b	$42,$53,$41,$56,$45,$2e,$4f,$00,$00,$00,$00,$00,$00,$00	; library entry: the name BSAVE.O
-	dc.w	$b33c,$12a2,$0000,$01b6,$0000,$0166,$0000	; entry: the rest (the member's length at +8)
-	dc.w	$601a				; DRI object module
-	dc.l	$66,$0,$0,$7e		; text, data and bss lengths, symbol table length
-	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
-m_bsave:
-;------------------------------------------------------------------------------
-; BSAVE: writes a block of memory to a new file through channel 89. The address is kept for a BLOAD without one.
-; Entry: a0 = file name, d1 = address, d0 = length.
-;------------------------------------------------------------------------------
-bsave:
-	move.l	d1,bsave_address-m_bsave        ; kept for BLOAD
-	movem.l	d0-d1,-(sp)
-	moveq	#89,d1                          ; create the file on channel 89
-
-bsave36_open_file:
-	dc.w	$6100,$0000                     ; bsr.w	bsave36_open_file+2 -> OPENO (filled in by the linker)
-	moveq	#89,d0                          ; output to channel 89
-
-bsave36_select_channel:
-	dc.w	$6100,$0000                     ; bsr.w	bsave36_select_channel+2 -> Cfhand (filled in by the linker)
-	movem.l	(sp)+,d0/a1                     ; d0 = length, a1 = address
-
-bsave36_write_block:
-	dc.w	$6100,$0000                     ; bsr.w bsave36_write_block+2 -> PRXsub (filled in by the linker), write
-                                                ;   the block
-	moveq	#89,d0                          ; close channel 89
-
-bsave36_close:
-	dc.w	$6000,$0000                     ; bra.w	bsave36_close+2 -> CLOSE (filled in by the linker)
-
-; Address of the last BSAVE, used by BLOAD without an address.
-bsave_address:
-	dc.w	$0000,$0000
-
-;------------------------------------------------------------------------------
-; BLOAD file$ without an address: loads to the address of the last BSAVE.\nEntry: a0 = file name
-;------------------------------------------------------------------------------
-BLOAD0:
-	move.l	bsave_address-m_bsave,d0        ; BLOAD entry without an address (no label)
-
-;------------------------------------------------------------------------------
-; BLOAD: reads a whole file into memory through channel 89.
-; Entry: a0 = file name, d0 = address.
-; Exit: file closed; a read error is raised after closing.
-;------------------------------------------------------------------------------
-bload:
-	move.l	d0,-(sp)                        ; address
-	moveq	#89,d1                          ; open the file on channel 89
-
-bload36_open_file:
-	dc.w	$6100,$0000                     ; bsr.w	bload36_open_file+2 -> OPENI (filled in by the linker)
-	moveq	#89,d0
-
-bload36_find_handle:
-	dc.w	$6100,$0000                     ; bsr.w bload36_find_handle+2 -> Cfhand (filled in by the linker), d6 =
-                                                ;   GEMDOS handle
-	pea	$ffffff                         ; read up to 16 MB, the whole file
-	moveq	#-1,d0                          ; error -1 if the channel is not open
-	move.w	d6,-(sp)                        ; handle
-	ble.s	bload_error                     ; not open
-	move.w	#$3f,-(sp)                      ; Fread
-	trap	#1                              ; Fread
-	lea	$c(sp),sp                       ; drop the arguments
-	tst.l	d0                              ; error
-	bmi.s	bload_error
-
-;------------------------------------------------------------------------------
-; Closes channel 89, the BSAVE/BLOAD file.
-;------------------------------------------------------------------------------
-close_bload_file:
-	moveq	#89,d0                          ; channel 89
-
-bload36_close:
-	dc.w	$6000,$0000                     ; bra.w	bload36_close+2 -> CLOSE (filled in by the linker)
-
-;------------------------------------------------------------------------------
-; Closes the file and raises the error in d0.
-;------------------------------------------------------------------------------
-bload_error:
-	move.l	d0,-(sp)                        ; keep the error
-	bsr.s	close_bload_file                ; close the file
-	move.l	(sp)+,d0                        ; the error
-
-bload36_raise_error:
-	dc.w	$6000,$0000                     ; bra.w	bload36_raise_error+2 -> ERROR (filled in by the linker)
-
-; symbol table: name, type, value
-	dc.b	$42,$53,$41,$56,$45,$00,$00,$00		; BSAVE
-	dc.w	$a200				; defined global text
-	dc.l	$0
-	dc.b	$42,$4c,$4f,$41,$44,$30,$00,$00		; BLOAD0
-	dc.w	$a200				; defined global text
-	dc.l	$28
-	dc.b	$42,$4c,$4f,$41,$44,$00,$00,$00		; BLOAD
-	dc.w	$a200				; defined global text
-	dc.l	$2e
-	dc.b	$4f,$50,$45,$4e,$4f,$00,$00,$00		; OPENO
-	dc.w	$8800				; defined external
-	dc.l	$0
-	dc.b	$43,$66,$68,$61,$6e,$64,$00,$00		; Cfhand
-	dc.w	$8800				; defined external
-	dc.l	$0
-	dc.b	$50,$52,$58,$73,$75,$62,$00,$00		; PRXsub
-	dc.w	$8800				; defined external
-	dc.l	$0
-	dc.b	$43,$4c,$4f,$53,$45,$00,$00,$00		; CLOSE
-	dc.w	$8800				; defined external
-	dc.l	$0
-	dc.b	$4f,$50,$45,$4e,$49,$00,$00,$00		; OPENI
-	dc.w	$8800				; defined external
-	dc.l	$0
-	dc.b	$45,$52,$52,$4f,$52,$00,$00,$00		; ERROR
-	dc.w	$8800				; defined external
-	dc.l	$0
-; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
-; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
-; number is the word >> 3
-	dc.w	$0000,$0005,$0002,$0000,$0000,$0000,$0000,$001e
-	dc.w	$0000,$0000,$0026,$0000,$0000,$0000,$002e,$0000
-	dc.w	$0000,$0036,$0000,$0000,$0000,$0005,$0002,$0000
-	dc.w	$0000,$0000,$003e,$0000,$0000,$0026,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0036,$0000,$0000
-	dc.w	$0000,$0000,$0046
-
-;==============================================================================
 ; Module RESERVE.O: 212 bytes of code, 0 of data, 0 of bss; exports UNRESERV, RESERVE
 ;==============================================================================
 	dc.b	$52,$45,$53,$45,$52,$56,$45,$2e,$4f,$00,$00,$00,$00,$00	; library entry: the name RESERVE.O
@@ -27257,7 +27133,7 @@ dir_put_digit:
 ; Module QUSORT.O: 344 bytes of code, 0 of data, 0 of bss; exports UPDWUX, UPDWSX, UPDWS, UPDWU, ShellIt, QuickIt
 ;==============================================================================
 	dc.b	$51,$55,$53,$4f,$52,$54,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name QUSORT.O
-	dc.w	$71e5,$12b9,$0000,$01b6,$0000,$032e,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$7a00,$12de,$0000,$01b6,$0000,$032e,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
 	dc.l	$158,$0,$0,$62		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
@@ -28465,12 +28341,12 @@ square_call_fmul:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0016
 
 ;==============================================================================
-; Module INPUT.O: 728 bytes of code, 0 of data, 0 of bss; exports GETLNV, GETLNC, BELL, GTLOUT, FORMIAS, LINEINQ, LINEINP, FORMINP
+; Module INPUT.O: 726 bytes of code, 0 of data, 0 of bss; exports GETLNV, GETLNC, BELL, GTLOUT, FORMIAS, LINEINQ, LINEINP, FORMINP
 ;==============================================================================
 	dc.b	$49,$4e,$50,$55,$54,$2e,$4f,$00,$00,$00,$00,$00,$00,$00	; library entry: the name INPUT.O
-	dc.w	$a8b3,$12c8,$0000,$01b6,$0000,$0690,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$6391,$12de,$0000,$01b6,$0000,$068c,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$2d8,$0,$0,$c4		; text, data and bss lengths, symbol table length
+	dc.l	$2d6,$0,$0,$c4		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_input:
 ;------------------------------------------------------------------------------
@@ -28518,6 +28394,7 @@ edit_line:
 	move.w	d6,$136e(a6)                    ; length shown so far
 	andi.w	#$ff,d0
 	move.w	d0,$1362(a6)                    ; maximum length
+	move.w	$1260(a6),$1372(a6)             ; text window or console
 
 edit_line_start_position:
 	dc.w	$6100,$0000                     ; bsr.w edit_line_start_position+2 -> CRSCOL (filled in by the linker),
@@ -28884,7 +28761,6 @@ form_input_as:
 ;------------------------------------------------------------------------------
 form_input_edit:
 	pea	(a0)                            ; keep the string variable
-	move.w	$1260(a6),$1372(a6)
 	move.w	#$fffc,$44(a6)                  ; screen channel
 	tst.w	d0                              ; maximum 0?
 	beq.s	form_input_done                 ; yes: done (string left on the stack)
@@ -28917,7 +28793,7 @@ form_input_done:
 
 LINEINQ:
 	moveq	#63,d0                          ; '?'
-	bsr.w	bios_put_char
+	bsr.s	bios_put_char
 	moveq	#32,d0                          ; space
 	bsr.w	bios_put_char
 
@@ -28946,22 +28822,22 @@ form_input:
 	dc.l	$e
 	dc.b	$42,$45,$4c,$4c,$00,$00,$00,$00		; BELL
 	dc.w	$a200				; defined global text
-	dc.l	$232
+	dc.l	$238
 	dc.b	$47,$54,$4c,$4f,$55,$54,$00,$00		; GTLOUT
 	dc.w	$a200				; defined global text
-	dc.l	$242
+	dc.l	$248
 	dc.b	$46,$4f,$52,$4d,$49,$41,$53,$00		; FORMIAS
 	dc.w	$a200				; defined global text
-	dc.l	$268
+	dc.l	$26e
 	dc.b	$4c,$49,$4e,$45,$49,$4e,$51,$00		; LINEINQ
 	dc.w	$a200				; defined global text
 	dc.l	$2c2
 	dc.b	$4c,$49,$4e,$45,$49,$4e,$50,$00		; LINEINP
 	dc.w	$a200				; defined global text
-	dc.l	$2ce
+	dc.l	$2cc
 	dc.b	$46,$4f,$52,$4d,$49,$4e,$50,$00		; FORMINP
 	dc.w	$a200				; defined global text
-	dc.l	$2d2
+	dc.l	$2d0
 	dc.b	$43,$52,$53,$43,$4f,$4c,$00,$00		; CRSCOL
 	dc.w	$8800				; defined external
 	dc.l	$0
@@ -28985,7 +28861,7 @@ form_input:
 ; number is the word >> 3
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0046,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0046,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
@@ -29008,27 +28884,27 @@ form_input:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$004e,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$004e,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0056,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$005e,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0046,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0056,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$005e,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0046,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0056,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0066,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0066,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$006e,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000
 
 ;==============================================================================
 ; Module SELSTR.O: 34 bytes of code, 0 of data, 0 of bss; exports SELSTR
@@ -29084,12 +28960,12 @@ SELSTR:
 	dc.w	$0000
 
 ;==============================================================================
-; Module SSORT.O: 458 bytes of code, 0 of data, 0 of bss; exports S_SSK, S_QSK, S_SSKX, S_QSKX, S_SS, S_QS, S_SSX, S_QSX
+; Module SSORT.O: 462 bytes of code, 0 of data, 0 of bss; exports S_SSK, S_QSK, S_SSKX, S_QSKX, S_SS, S_QS, S_SSX, S_QSX
 ;==============================================================================
 	dc.b	$53,$53,$4f,$52,$54,$2e,$4f,$00,$00,$00,$00,$00,$00,$00	; library entry: the name SSORT.O
-	dc.w	$71e7,$12b9,$0000,$01b6,$0000,$0458,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$7ac1,$12de,$0000,$01b6,$0000,$0460,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$1ca,$0,$0,$a8		; text, data and bss lengths, symbol table length
+	dc.l	$1ce,$0,$0,$a8		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_ssort:
 ;------------------------------------------------------------------------------
@@ -29256,7 +29132,8 @@ sort_run_strings:
 	move.w	d2,(a6)                         ; comparison start offset
 	jsr	(a5)                            ; sort
 	moveq	#-2,d3                          ; even mask
-	move.l	(sp)+,d1
+	move.l	-$4(a3),d1                      ; number of elements
+	subq.l	#1,d1                           ; count for dbra
 .next_string:
 	movea.l	(a3)+,a0                        ; text
 	move.w	(a3)+,d0                        ; length
@@ -29472,7 +29349,7 @@ swap_string_elements_array:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000
 
 ;==============================================================================
 ; Module WSORT.O: 144 bytes of code, 0 of data, 0 of bss; exports W_SS, W_QS, W_SSX, W_QSX
@@ -31931,12 +31808,12 @@ keydef_call_xstr0kil:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000
 
 ;==============================================================================
-; Module KEYIRQ.O: 1064 bytes of code, 0 of data, 672 of bss; exports EtVAL, eTIMER, aTIMER, IRQON, IRQOFF, BOMBON, KEYBUF, KEYPAD
+; Module KEYIRQ.O: 1062 bytes of code, 0 of data, 672 of bss; exports EtVAL, eTIMER, aTIMER, IRQON, IRQOFF, BOMBON, KEYBUF, KEYPAD
 ;==============================================================================
 	dc.b	$4b,$45,$59,$49,$52,$51,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name KEYIRQ.O
-	dc.w	$b8fc,$12d7,$0000,$01b6,$0000,$094c,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$7e15,$12dd,$0000,$01b6,$0000,$0948,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$428,$0,$2a0,$e0		; text, data and bss lengths, symbol table length
+	dc.l	$426,$0,$2a0,$e0		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_keyirq:
 ; EVERY interval in 200 Hz ticks, added to the due time each time the
@@ -32253,7 +32130,7 @@ IRQON:
 	addq.l	#6,sp                           ; drop the arguments
 	dc.w	$41f9,$0000,$0000               ; lea $0,a0 -> IRQPATCH (filled in by the linker), between-statement
                                                 ;   call ...
-	move.w	#$4eb9,(a0)+
+	move.w	#$4ef9,(a0)+                    ; ... becomes jmp to the event handler
 	dc.w	$20fc,$0000,$0000               ; move.l	#$0,(a0)+ -> IRQCHK (filled in by the linker), IRQCHK
 .done:
 	rts                                     ; done
@@ -32465,7 +32342,10 @@ exception_vector:
 critical_error_hook:
 	move.l	a6,-(sp)                        ; keep a6
 	dc.w	$4df9,$0000,$0000               ; lea	$0,a6 -> BssA6 (filled in by the linker), the runtime block
-	dc.w	$4eb9,$0000,$0000               ; jsr	$0 -> Showm (filled in by the linker)
+
+critical_error_show_mouse:
+	dc.w	$6100,$0000                     ; bsr.w critical_error_show_mouse+2 -> QShowm (filled in by the linker),
+                                                ;   GEM hook
 	movea.l	(sp)+,a6                        ; a6 back
 
 ;------------------------------------------------------------------------------
@@ -32508,7 +32388,7 @@ KEYPAD:
 	dc.l	$0
 	dc.b	$4b,$45,$59,$50,$41,$44,$00,$00		; KEYPAD
 	dc.w	$a200				; defined global text
-	dc.l	$420
+	dc.l	$41e
 	dc.b	$42,$73,$73,$41,$36,$00,$00,$00		; BssA6
 	dc.w	$8800				; defined external
 	dc.l	$0
@@ -32530,7 +32410,7 @@ KEYPAD:
 	dc.b	$45,$52,$52,$4f,$52,$00,$00,$00		; ERROR
 	dc.w	$8800				; defined external
 	dc.l	$0
-	dc.b	$53,$68,$6f,$77,$6d,$00,$00,$00		; Showm
+	dc.b	$51,$53,$68,$6f,$77,$6d,$00,$00		; QShowm
 	dc.w	$8800				; defined external
 	dc.l	$0
 ; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
@@ -32601,8 +32481,8 @@ KEYPAD:
 	dc.w	$0044,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0076,$0000,$0000,$0000,$0005
-	dc.w	$0044,$0000,$0005,$007c,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0005,$0054,$0000
+	dc.w	$0044,$0000,$007e,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0005,$0054,$0000
 
 ;==============================================================================
 ; Module EXEC.O: 94 bytes of code, 0 of data, 0 of bss; exports EXEC
@@ -32822,12 +32702,12 @@ pause_done:
 	dc.w	$0000,$0000,$000e,$0000,$0000,$0000
 
 ;==============================================================================
-; Module LOCATE.O: 124 bytes of code, 0 of data, 0 of bss; exports HTAB, VTAB, LOCATE, XLOCATE, CRSLIN, CRSCOL, GTSPOS
+; Module LOCATE.O: 120 bytes of code, 0 of data, 0 of bss; exports HTAB, VTAB, LOCATE, XLOCATE, CRSLIN, CRSCOL, GTSPOS
 ;==============================================================================
 	dc.b	$4c,$4f,$43,$41,$54,$45,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name LOCATE.O
-	dc.w	$9aa1,$12c5,$0000,$01b6,$0000,$0192,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$63e6,$12de,$0000,$01b6,$0000,$018a,$0000	; entry: the rest (the member's length at +8)
 	dc.w	$601a				; DRI object module
-	dc.l	$7c,$0,$0,$7e		; text, data and bss lengths, symbol table length
+	dc.l	$78,$0,$0,$7e		; text, data and bss lengths, symbol table length
 	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
 m_locate:
 ;------------------------------------------------------------------------------
@@ -32839,7 +32719,7 @@ set_cursor_column:
 	bsr.s	cursor_row                      ; current position
 	move.w	(sp)+,d1
 	exg	d1,d0
-	bra.s	LOCATE                          ; move there
+	bra.s	locate_cursor                   ; move there
 
 ;------------------------------------------------------------------------------
 ; VTAB n: moves the text cursor to row n, keeping its column.
@@ -32850,7 +32730,11 @@ set_cursor_row:
 	bsr.s	get_cursor                      ; current position
 	move.w	(sp)+,d1                        ; d1 = new row, d0 = current column
 
-LOCATE:
+;------------------------------------------------------------------------------
+; LOCATE row,column: moves the text cursor.
+; Entry: d1 = row, d0 = column
+;------------------------------------------------------------------------------
+locate_cursor:
 	exg	d1,d0
 
 ;------------------------------------------------------------------------------
@@ -32860,8 +32744,7 @@ LOCATE:
 print_at_cursor:
 	dc.w	$6100,$0000                     ; bsr.w print_at_cursor+2 -> P0Init (filled in by the linker), reset the
                                                 ;   output channel
-	tst.b	$1260(a6)
-	bra.s	set_cursor_position             ; move the cursor
+	bra.s	set_cursor                      ; move the cursor
 
 ;------------------------------------------------------------------------------
 ; CRSLIN: the row of the text cursor.
@@ -32877,7 +32760,7 @@ cursor_row:
 ; Exit: d0 = column, d1 = row (both from 1), d2 = window mode flag.
 ;------------------------------------------------------------------------------
 get_cursor:
-	move.w	$1372(a6),d2                    ; GEM text window mode?
+	move.w	$1260(a6),d2                    ; GEM text window mode?
 	lea	$12a8(a6),a0                    ; window cursor (same layout as Line-A)
 	bne.s	.read
 	movea.l	$32(a6),a0                      ; Line-A base
@@ -32887,10 +32770,13 @@ get_cursor:
 	addq.w	#1,d1
 	rts
 
-GTSPOS:
-	move.w	$1372(a6),d2
-
-set_cursor_position:
+;------------------------------------------------------------------------------
+; Moves the text cursor: in GEM text window mode sets the window cursor, otherwise sends ESC Y row column to the
+; console. Positions below 1 are sent as 255.
+; Entry: d0 = column, d1 = row (both from 1).
+;------------------------------------------------------------------------------
+set_cursor:
+	move.w	$1260(a6),d2                    ; GEM text window mode?
 	beq.s	.console
 	subq.w	#1,d0                           ; count from 0
 	subq.w	#1,d1
@@ -32948,13 +32834,13 @@ set_cursor_column_call_gtlout:
 	dc.l	$12
 	dc.b	$43,$52,$53,$4c,$49,$4e,$00,$00		; CRSLIN
 	dc.w	$a200				; defined global text
-	dc.l	$1c
+	dc.l	$18
 	dc.b	$43,$52,$53,$43,$4f,$4c,$00,$00		; CRSCOL
 	dc.w	$a200				; defined global text
-	dc.l	$22
+	dc.l	$1e
 	dc.b	$47,$54,$53,$50,$4f,$53,$00,$00		; GTSPOS
 	dc.w	$a200				; defined global text
-	dc.l	$3c
+	dc.l	$38
 	dc.b	$50,$30,$49,$6e,$69,$74,$00,$00		; P0Init
 	dc.w	$8800				; defined external
 	dc.l	$0
@@ -32970,8 +32856,8 @@ set_cursor_column_call_gtlout:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
-	dc.w	$0000,$0000,$0000,$0000,$0046,$0000,$0000,$0046
-	dc.w	$0000,$0000,$0046,$0000,$0000,$0046
+	dc.w	$0000,$0000,$0046,$0000,$0000,$0046,$0000,$0000
+	dc.w	$0046,$0000,$0000,$0046
 
 ;==============================================================================
 ; Module HARDCOPY.O: 16 bytes of code, 0 of data, 0 of bss; exports HARDCOPY
@@ -38739,6 +38625,385 @@ curve_draw:
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
 	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$000e
+
+;==============================================================================
+; Module FLOAT.O: 18 bytes of code, 0 of data, 0 of bss; exports FLOATK, KFLOAT
+;==============================================================================
+	dc.b	$46,$4c,$4f,$41,$54,$2e,$4f,$00,$00,$00,$00,$00,$00,$00	; library entry: the name FLOAT.O
+	dc.w	$6dfc,$12dd,$0000,$01b6,$0000,$005c,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$601a				; DRI object module
+	dc.l	$12,$0,$0,$1c		; text, data and bss lengths, symbol table length
+	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
+m_float:
+;------------------------------------------------------------------------------
+; FLOAT{addr}: reads the 8-byte GFA float at an address.
+; Entry: d0.l = address
+; Exit: d0-d2 = float; a0 advanced past it
+;------------------------------------------------------------------------------
+FLOATK:
+	movea.l	d0,a0                           ; a0 -> the float
+	move.l	(a0)+,d0                        ; mantissa high long
+	move.w	(a0)+,d1                        ; mantissa low word
+	move.w	(a0)+,d2                        ; sign and exponent
+	rts
+
+;------------------------------------------------------------------------------
+; FLOAT{addr} = x: stores a float as 8 bytes.
+; Entry: a0 = address, d0-d2 = float
+; Exit: a0 advanced by 8
+;------------------------------------------------------------------------------
+KFLOAT:
+	move.l	d0,(a0)+                        ; mantissa high long
+	move.w	d1,(a0)+                        ; mantissa low word
+	move.w	d2,(a0)+                        ; sign and exponent
+	rts
+
+; symbol table: name, type, value
+	dc.b	$46,$4c,$4f,$41,$54,$4b,$00,$00		; FLOATK
+	dc.w	$a200				; defined global text
+	dc.l	$0
+	dc.b	$4b,$46,$4c,$4f,$41,$54,$00,$00		; KFLOAT
+	dc.w	$a200				; defined global text
+	dc.l	$a
+; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
+; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
+; number is the word >> 3
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000
+
+;==============================================================================
+; Module SINGLE.O: 104 bytes of code, 0 of data, 0 of bss; exports DOUBLEK, KDOUBLE
+;==============================================================================
+	dc.b	$53,$49,$4e,$47,$4c,$45,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name SINGLE.O
+	dc.w	$6dfa,$12dd,$0000,$01b6,$0000,$0108,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$601a				; DRI object module
+	dc.l	$68,$0,$0,$1c		; text, data and bss lengths, symbol table length
+	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
+m_single:
+;------------------------------------------------------------------------------
+; DOUBLE{addr}: reads an IEEE double and converts it to a GFA float. Both use an 11-bit exponent with
+; bias $3ff, so only the mantissa moves and the implicit one is set; zero is not treated apart.
+; Entry: d0.l = address
+; Exit: d0-d2 = float
+; Changes d3, a0
+;------------------------------------------------------------------------------
+DOUBLEK:
+	movea.l	d0,a0                           ; a0 -> the double
+	movem.l	(a0),d0-d1                      ; d0 = high long, d1 = low long
+	move.l	d0,d2                           ; d2 = sign, exponent and top mantissa bits ...
+	swap	d2                              ; ... from the high word ...
+	lsr.w	#4,d2                           ; ... shifted to sign bit 11, exponent bits 0-10
+	bclr	#$b,d2                          ; sign bit: clear it and test
+	beq.s	.unsigned                       ; positive
+	neg.w	d2                              ; negative: the float's sign is a negated exponent
+.unsigned:
+	moveq	#10,d3                          ; shift the 52-bit mantissa 11 bits left
+.shift_mantissa:
+	add.l	d1,d1                           ; low long left ...
+	addx.l	d0,d0                           ; ... into the high long
+	dbra	d3,.shift_mantissa
+	bset	#$1f,d0                         ; set the implicit leading one
+	swap	d1                              ; d1.w = the next 16 mantissa bits
+	rts
+
+;------------------------------------------------------------------------------
+; DOUBLE{addr} = x: stores a GFA float as an IEEE double; exponents of $7ff and above store infinity.
+; Entry: a0 = address, d0-d2 = float
+; Exit: 8 bytes stored at a0
+; Changes d0-d3
+;------------------------------------------------------------------------------
+KDOUBLE:
+	swap	d1                              ; low mantissa word to the high word ...
+	clr.w	d1                              ; ... with zeros below
+	tst.w	d2                              ; positive?
+	bpl.s	kdouble_positive
+	neg.w	d2                              ; negative: convert the magnitude ...
+	bsr.s	kdouble_positive
+	bset	#$1f,d0                         ; ... and set the sign bit
+	bra.s	kdouble_store
+
+;------------------------------------------------------------------------------
+; Converts a positive float to an IEEE double and stores it.
+; Entry: a0 = address, d0.l:d1.w = mantissa (d1 already in the high word), d2 = exponent
+; Exit: d0:d1 stored at a0
+;------------------------------------------------------------------------------
+kdouble_positive:
+	cmpi.w	#$7ff,d2                        ; exponent too big for a double?
+	bcs.s	.finite
+	move.l	#$7ff00000,d0                   ; yes: infinity
+	moveq	#0,d1
+	bra.s	kdouble_store
+	bset	#$b,d2                          ; not reached
+.finite:
+	ext.l	d2                              ; exponent to a long ...
+	asl.w	#4,d2                           ; ... at bits 4-14 of its low word
+	bclr	#$1f,d0                         ; drop the implicit one
+	moveq	#10,d3                          ; shift the mantissa 11 bits right
+.shift_right:
+	lsr.l	#1,d0                           ; high long right ...
+	roxr.l	#1,d1                           ; ... into the low long
+	dbra	d3,.shift_right
+	swap	d2                              ; exponent to bits 20-30
+	or.l	d2,d0                           ; combine with the mantissa
+
+kdouble_store:
+	movem.l	d0-d1,(a0)                      ; store the double
+	rts
+
+; symbol table: name, type, value
+	dc.b	$44,$4f,$55,$42,$4c,$45,$4b,$00		; DOUBLEK
+	dc.w	$a200				; defined global text
+	dc.l	$0
+	dc.b	$4b,$44,$4f,$55,$42,$4c,$45,$00		; KDOUBLE
+	dc.w	$a200				; defined global text
+	dc.l	$26
+; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
+; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
+; number is the word >> 3
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000
+
+;==============================================================================
+; Module DOUBLE.O: 94 bytes of code, 0 of data, 0 of bss; exports SINGLEK, KSINGLE
+;==============================================================================
+	dc.b	$44,$4f,$55,$42,$4c,$45,$2e,$4f,$00,$00,$00,$00,$00,$00	; library entry: the name DOUBLE.O
+	dc.w	$6df8,$12dd,$0000,$01b6,$0000,$00f4,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$601a				; DRI object module
+	dc.l	$5e,$0,$0,$1c		; text, data and bss lengths, symbol table length
+	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
+m_double:
+;------------------------------------------------------------------------------
+; SINGLE{addr}: reads an IEEE single and converts it to a GFA float (exponent rebiased from 127 to
+; 1023 by adding $380); zero is not treated apart.
+; Entry: d0.l = address
+; Exit: d0-d2 = float
+; Changes a0
+;------------------------------------------------------------------------------
+SINGLEK:
+	movea.l	d0,a0                           ; a0 -> the single
+	move.l	(a0),d0                         ; read it
+	moveq	#0,d1                           ; no low mantissa word
+	rol.l	#8,d0                           ; sign and exponent ...
+	rol.l	#1,d0                           ; ... rotated into bits 0-8
+	move.l	d0,d2                           ; d2 = sign bit 8 and exponent bits 0-7 ...
+	andi.w	#$1ff,d2                        ; ... only
+	sub.w	d2,d0                           ; clear them out of the mantissa
+	lsr.l	#1,d0                           ; mantissa to bits 8-30 ...
+	bset	#$1f,d0                         ; ... below the implicit one
+	bclr	#$8,d2                          ; sign bit: clear it and test
+	beq.s	.positive                       ; positive
+	addi.w	#$380,d2                        ; rebias the exponent
+	neg.w	d2                              ; negative: negated exponent
+	rts
+.positive:
+	addi.w	#$380,d2                        ; rebias the exponent
+	rts
+
+;------------------------------------------------------------------------------
+; SINGLE{addr} = x: stores a GFA float as an IEEE single; underflow stores 0, overflow infinity.
+; Entry: a0 = address, d0-d2 = float
+; Exit: 4 bytes stored at a0
+; Changes d0, d2
+;------------------------------------------------------------------------------
+KSINGLE:
+	tst.w	d2                              ; positive?
+	bpl.s	ksingle_positive
+	neg.w	d2                              ; negative: convert the magnitude ...
+	bsr.s	ksingle_positive
+	bset	#$1f,d0                         ; ... and set the sign bit
+	bra.s	ksingle_store
+
+ksingle_zero:
+	moveq	#0,d0                           ; too small: store zero
+	bra.s	ksingle_store
+
+;------------------------------------------------------------------------------
+; Converts a positive float to an IEEE single and stores it.
+; Entry: a0 = address, d0.l = mantissa, d2 = exponent
+; Exit: d0.l stored at a0
+;------------------------------------------------------------------------------
+ksingle_positive:
+	subi.w	#$380,d2                        ; rebias from 1023 to 127
+	bmi.s	ksingle_zero                    ; below range: zero
+	cmpi.w	#$ff,d2                         ; fits in 8 bits?
+	bcs.s	.finite
+	move.l	#$7f800000,d0                   ; no: infinity
+	bra.s	ksingle_store
+.finite:
+	add.l	d0,d0                           ; drop the implicit one
+	move.b	d2,d0                           ; exponent into the low byte
+	ror.l	#8,d0                           ; exponent to the top byte, mantissa below
+	lsr.l	#1,d0                           ; sign bit position clear
+
+ksingle_store:
+	move.l	d0,(a0)                         ; store the single
+	rts
+
+; symbol table: name, type, value
+	dc.b	$53,$49,$4e,$47,$4c,$45,$4b,$00		; SINGLEK
+	dc.w	$a200				; defined global text
+	dc.l	$0
+	dc.b	$4b,$53,$49,$4e,$47,$4c,$45,$00		; KSINGLE
+	dc.w	$a200				; defined global text
+	dc.l	$2c
+; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
+; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
+; number is the word >> 3
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000
+
+;==============================================================================
+; Module BSAVE.O: 100 bytes of code, 0 of data, 0 of bss; exports BSAVE, BLOAD0, BLOAD
+;==============================================================================
+	dc.b	$42,$53,$41,$56,$45,$2e,$4f,$00,$00,$00,$00,$00,$00,$00	; library entry: the name BSAVE.O
+	dc.w	$920b,$12dd,$0000,$01b6,$0000,$0170,$0000	; entry: the rest (the member's length at +8)
+	dc.w	$601a				; DRI object module
+	dc.l	$64,$0,$0,$8c		; text, data and bss lengths, symbol table length
+	dc.w	$0000,$0000,$0000,$0000,$0000	; the rest of the header
+m_bsave:
+;------------------------------------------------------------------------------
+; BSAVE file$,addr,len: writes a block of memory to a file through channel 89, and keeps the address
+; for a later BLOAD without one.
+; Entry: d0.l = address, d1.l = length, file name for OPENO
+; Exit: file written and closed
+; Changes d0, d1, a1
+;------------------------------------------------------------------------------
+BSAVE:
+	move.l	d1,bload_file_last_address-m_bsave ; keep the length
+	movem.l	d0-d1,-(sp)                     ; keep address and length over the open
+	moveq	#89,d1                          ; channel 89
+
+bsave_file_call_openo:
+	dc.w	$6100,$0000                     ; bsr.w bsave_file_call_openo+2 -> OPENO (filled in by the linker), open
+                                                ;   the file for output
+	moveq	#89,d0                          ; channel 89
+
+bsave_file_call_pxinit:
+	dc.w	$6100,$0000                     ; bsr.w bsave_file_call_pxinit+2 -> PXInit (filled in by the linker),
+                                                ;   select it as the output channel
+	movem.l	(sp)+,d0/a1                     ; d0 = address, a1 = length
+
+bsave_file_call_prxsub:
+	dc.w	$6100,$0000                     ; bsr.w bsave_file_call_prxsub+2 -> PRXsub (filled in by the linker),
+                                                ;   write the block
+	moveq	#89,d0                          ; channel 89
+
+bsave_file_call_close:
+	dc.w	$6000,$0000                     ; bra.w bsave_file_call_close+2 -> CLOSE (filled in by the linker),
+                                                ;   close the file
+
+; The address of the last BSAVE, used by BLOAD with no address.
+bload_file_last_address:
+	dc.w	$0000,$0000
+
+;------------------------------------------------------------------------------
+; BLOAD file$: loads a file to the address of the last BSAVE.
+;------------------------------------------------------------------------------
+BLOAD0:
+	move.l	bload_file_last_address(pc),d0  ; address of the last BSAVE
+
+;------------------------------------------------------------------------------
+; BLOAD file$,addr: reads a whole file (up to 16 MB) to an address through channel 89; a read error
+; is reported after the file is closed.
+; Entry: d0.l = address, file name for OPENI
+; Exit: file read and closed
+; Changes d0, d1, d6
+;------------------------------------------------------------------------------
+BLOAD:
+	move.l	d0,-(sp)                        ; keep the address
+	moveq	#89,d1                          ; channel 89
+
+bload_file_call_openi:
+	dc.w	$6100,$0000                     ; bsr.w bload_file_call_openi+2 -> OPENI (filled in by the linker), open
+                                                ;   the file for input
+	moveq	#89,d0                          ; channel 89
+
+bload_file_call_cfhand:
+	dc.w	$6100,$0000                     ; bsr.w bload_file_call_cfhand+2 -> Cfhand (filled in by the linker), d6
+                                                ;   = its GEMDOS handle
+	pea	$ffffff                         ; Fread count: up to 16 MB
+	moveq	#-1,d0                          ; error if the handle is bad
+	move.w	d6,-(sp)                        ; handle
+	ble.s	bload_file_error                ; bad handle
+	move.w	#$3f,-(sp)                      ; Fread
+	trap	#1                              ; Fread
+	lea	$c(sp),sp                       ; drop the arguments
+	tst.l	d0                              ; read error?
+	bmi.s	bload_file_error                ; yes
+
+;------------------------------------------------------------------------------
+; Closes channel 89 (bra into CLOSE).
+;------------------------------------------------------------------------------
+bload_file_close:
+	moveq	#89,d0                          ; channel 89
+
+bload_file_call_close:
+	dc.w	$6000,$0000                     ; bra.w bload_file_call_close+2 -> CLOSE (filled in by the linker),
+                                                ;   close the file
+
+;------------------------------------------------------------------------------
+; Closes channel 89 and reports the GEMDOS error.
+; Entry: d0.l = GEMDOS error
+;------------------------------------------------------------------------------
+bload_file_error:
+	move.l	d0,-(sp)                        ; keep the error
+	bsr.s	bload_file_close                ; close the file
+	move.l	(sp)+,d0                        ; error back
+
+bload_file_call_error:
+	dc.w	$6000,$0000                     ; bra.w bload_file_call_error+2 -> ERROR (filled in by the linker),
+                                                ;   report the GEMDOS error
+
+; symbol table: name, type, value
+	dc.b	$42,$53,$41,$56,$45,$00,$00,$00		; BSAVE
+	dc.w	$a200				; defined global text
+	dc.l	$0
+	dc.b	$42,$4c,$4f,$41,$44,$30,$00,$00		; BLOAD0
+	dc.w	$a200				; defined global text
+	dc.l	$28
+	dc.b	$42,$4c,$4f,$41,$44,$00,$00,$00		; BLOAD
+	dc.w	$a200				; defined global text
+	dc.l	$2c
+	dc.b	$4f,$50,$45,$4e,$4f,$00,$00,$00		; OPENO
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$50,$58,$49,$6e,$69,$74,$00,$00		; PXInit
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$50,$52,$58,$73,$75,$62,$00,$00		; PRXsub
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$43,$4c,$4f,$53,$45,$00,$00,$00		; CLOSE
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$4f,$50,$45,$4e,$49,$00,$00,$00		; OPENI
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$43,$66,$68,$61,$6e,$64,$00,$00		; Cfhand
+	dc.w	$8800				; defined external
+	dc.l	$0
+	dc.b	$45,$52,$52,$4f,$52,$00,$00,$00		; ERROR
+	dc.w	$8800				; defined external
+	dc.l	$0
+; relocation words, one a code word: 0 none, 1 data, 2 text, 3 bss, 4 external, 5 a long (its low
+; word tells), 6 external pc-relative, 7 the first word of an instruction; an external's symbol
+; number is the word >> 3
+	dc.w	$0000,$0005,$0002,$0000,$0000,$0000,$0000,$001e
+	dc.w	$0000,$0000,$0026,$0000,$0000,$0000,$002e,$0000
+	dc.w	$0000,$0036,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$003e,$0000,$0000,$0046,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0000,$0000,$0000,$0000
+	dc.w	$0000,$0000,$0000,$0000,$0036,$0000,$0000,$0000
+	dc.w	$0000,$004e
 
 ; bytes after the last module (not part of any module)
 	dc.b	$00,$00

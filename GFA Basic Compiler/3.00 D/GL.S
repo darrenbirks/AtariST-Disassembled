@@ -1,4 +1,4 @@
-; GL.PRG  -  the GFA-BASIC linker of 3.00 D
+; GL.PRG  -  the GFA-BASIC linker of 3.00 D early, 3.00 D
 ;
 ; Devpac source of the linker, disassembled by Darren Birks, 4 November 2026.  Assembled, it gives GL.PRG byte
 ; for byte, relocations included:
