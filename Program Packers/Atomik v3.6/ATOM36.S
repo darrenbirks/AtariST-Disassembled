@@ -69,12 +69,12 @@
 	section	text
 
 ;------------------------------------------------------------------------------
-; start: memory shrunk and taken, mouse shown, the DTA set and the resolution kept, then the main menu.
+; start: memory shrunk and taken, mouse hidden, the DTA set and the resolution kept, then the main menu.
 ;------------------------------------------------------------------------------
 start:
 	movea.l	4(sp),a5                        ; the basepage
 	bsr.w	init_memory                     ; memory
-	bsr.w	mouse_on                        ; mouse on
+	bsr.w	mouse_off                       ; mouse off
 	bsr.w	set_dta                         ; the DTA
 	move.w	#$4,-(sp)
 	trap	#14                             ; Getrez
@@ -581,7 +581,7 @@ get_key:	; from: main_menu, unpack_menu, unpack_all_menu, unpack_program, load_c
 ;------------------------------------------------------------------------------
 choose_file:	; from: unpack_all_menu, load_chosen, save_unpacked, crunch_all_menu, print_text_hex_word
 	movem.l	d1-d3/a0-a2,-(sp)               ; saved
-	bsr.w	mouse_off                       ; mouse off
+	bsr.w	mouse_on                        ; mouse on for the file selector
 	bsr.s	get_path                        ; the current path
 	lea	path_text(pc),a2                ; the path
 	tst.b	(a2)+                           ; empty?
@@ -598,7 +598,7 @@ choose_file_copy_mask:
 	move.l	a0,d1
 	move.w	#$c8,d0                         ; AES
 	trap	#2                              ; AES/VDI
-	bsr.w	mouse_on                        ; mouse on
+	bsr.w	mouse_off                       ; mouse off again
 	tst.w	fsel_button                     ; OK?
 	beq.s	choose_file_cancel              ; no
 	bsr.s	set_path                        ; the drive and folder set
@@ -686,20 +686,20 @@ make_name_copy_name:
 	rts
 
 ;------------------------------------------------------------------------------
-; mouse_on: shows the mouse (Line-A $a).
+; mouse_off: hides the mouse (Line-A $a).
 ;------------------------------------------------------------------------------
-mouse_on:	; from: start, choose_file, load_file, write_file
+mouse_off:	; from: start, choose_file, load_file, write_file
 	movem.l	d0-d2/a0-a2,-(sp)
-	dc.w	$a00a                           ; Line-A $a, show mouse
+	dc.w	$a00a                           ; Line-A $a, hide mouse
 	movem.l	(sp)+,d0-d2/a0-a2
 	rts
 
 ;------------------------------------------------------------------------------
-; mouse_off: hides the mouse (Line-A $9).
+; mouse_on: shows the mouse (Line-A $9).
 ;------------------------------------------------------------------------------
-mouse_off:	; from: choose_file, malloc, load_file, write_file
+mouse_on:	; from: choose_file, malloc, load_file, write_file
 	movem.l	d0-d2/a0-a2,-(sp)
-	dc.w	$a009                           ; Line-A $9, hide mouse
+	dc.w	$a009                           ; Line-A $9, show mouse
 	movem.l	(sp)+,d0-d2/a0-a2
 	rts
 
@@ -762,7 +762,7 @@ malloc:	; from: take_memory
 	addq.w	#6,sp
 	rts
 quit:	; from: main_menu, take_memory
-	bsr.w	mouse_off                       ; mouse off
+	bsr.w	mouse_on                        ; mouse on for the desktop
 	clr.w	-(sp)
 	trap	#1                              ; Pterm0
 
@@ -771,7 +771,7 @@ quit:	; from: main_menu, take_memory
 ; file_length is its length; io_error is set if it fails.
 ;------------------------------------------------------------------------------
 load_file:	; from: load_chosen, crunch_file
-	bsr.w	mouse_off                       ; mouse off
+	bsr.w	mouse_on                        ; mouse on
 	tst.b	batch                           ; batch?
 	bne.s	load_file_open                  ; yes: found already
 	bsr.w	find_first                      ; Fsfirst: its length
@@ -799,7 +799,7 @@ load_file_open:
 load_file_read_error:
 	st	io_error                        ; failed
 load_file_fail:
-	bsr.w	mouse_on                        ; mouse on
+	bsr.w	mouse_off                       ; mouse off
 	st	io_error                        ; failed
 	rts
 
@@ -808,7 +808,7 @@ load_file_fail:
 ; fails; d0 is minus if the create or the close fails.
 ;------------------------------------------------------------------------------
 write_file:	; from: save_unpacked, print_text_hex_word
-	bsr.w	mouse_off                       ; mouse off
+	bsr.w	mouse_on                        ; mouse on
 	sf	io_error                        ; no error
 	clr.w	-(sp)                           ; normal file
 	pea	full_name(pc)                   ; the name
@@ -817,7 +817,7 @@ write_file:	; from: save_unpacked, print_text_hex_word
 	addq.w	#8,sp
 	tst.w	d0                              ; created?
 	bpl.s	write_file_created              ; yes
-	bsr.w	mouse_on                        ; mouse on
+	bsr.w	mouse_off                       ; mouse off
 	moveq	#-1,d0                          ; failed
 	bra.s	write_file_done
 write_file_created:
@@ -832,7 +832,7 @@ write_file_created:
 	bpl.s	close_file                      ; yes
 	st	io_error                        ; no
 close_file:	; from: load_file
-	bsr.w	mouse_on                        ; mouse on
+	bsr.w	mouse_off                       ; mouse off
 	move.w	file_handle(pc),-(sp)           ; the handle
 	move.w	#$3e,-(sp)
 	trap	#1                              ; Fclose
