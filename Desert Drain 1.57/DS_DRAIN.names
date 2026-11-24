@@ -1,0 +1,1049 @@
+# Names for DS_DRAIN.PRG (Desert Drain 1.57), worked out from the decompiled code.
+# usage: gfadec DS_DRAIN.PRG -inline -names DS_DRAIN.names -comments DS_DRAIN.comments
+func_04a80      top_window                      # handle of the top window (WF_TOP), 0 if none
+func_04abc      is_label_line                   # TRUE if a source line starts with a label (colon before the first blank) or with ";"
+func_04b62      src_search                      # search window lines for a pattern (line start / contains / ^address), wraps once, returns new top line
+func_057d2      aes_form_keybd                  # AES form_keybd (55): returns the keep-going flag, new object and remaining key code
+func_058d2      env_lookup                      # value of an environment variable NAME=value from the basepage environment, "" if absent
+func_059a8      cookie_find                     # look up a cookie in the cookie jar (_p_cookies $5A0); the loop continues in cookie_scan
+func_059e2      cookie_scan                     # scan the cookie jar entries for the id; -1 and the value if found, 0 if not
+func_068f2      option_changed                  # returns the new value, sets redraw_needed if it differs from the old one
+func_09f9e      lst_file_read                   # opens a list file, checks the "DesertDrain" magic, reads data areas or labels
+func_0ac4a      number_format                   # a long as "$hex" or decimal, following the global hex display option
+func_0b2e6      object_find_flag                # first object (from 0, by step) whose ob_flags match a mask, else a fallback
+func_0bf64      edit_obj_find                   # next/previous editable object, or the DEFAULT object, or the first editable
+func_0c7ce      object_selected                 # TRUE when an object's SELECTED state bit is set
+func_0c8c4      radio_pair_value                # 0-3 from the selected bits of two objects (first = bit 0, second = bit 1)
+func_0c8fc      object_text                     # the text of a TEDINFO object (te_ptext)
+func_0c9cc      object_number                   # the numeric value of an object's text
+func_0caae      version_string                  # BCD version word as "major.minor" (hex digits)
+func_0cb7a      number_padded                   # a long as hex or decimal, right-aligned in a field width (0 = no padding)
+func_0cc90      path_filename                   # the file name part of a path (after the last backslash)
+func_0ccb8      path_extension                  # the extension of a path's file name, "*" when there is none
+func_0cd18      path_strip_ext                  # a path without its extension
+func_0cd6a      current_dir_path                # current drive and directory as "X:\path\"
+func_0cd9c      path_locate                     # finds a file via SHEL_FIND, else program folder; VAR path, TRUE when found
+func_0ce1e      fsel_choose                     # file selector: fsel_exinput with title (AES 3.2+/4.x/MultiTOS or option) else fsel_input; VAR path updated, returns button
+func_0f69c      bool_from_file                  # read one byte from #1, bit 0 as boolean
+func_0f6ae      cstring_from_file               # read a NUL-terminated string from #1
+func_0fcd6      coord_scale                     # scale a screen coordinate to 0..32766 of the given screen size
+func_0fd04      coord_unscale                   # scale a 0..32766 value back to screen pixels (+1)
+func_144ce      reloc_label_text                # label text for a relocated long value (program-relative)
+func_14526      ea_operand                      # check an EA field of an opcode against an address class and return its text ("" + invalid flag if not allowed)
+func_14b68      fetch_byte                      # reads the byte at the disassembly offset and advances it by 1
+func_14b82      fetch_word                      # reads the word at the offset, advances by 2 unless a label falls inside the instruction
+func_14be4      fetch_uword                     # fetch_word as an unsigned 0..65535 value
+func_14bf0      fetch_long                      # reads the long at the offset, advances by 4 unless a label falls inside the instruction
+func_14c4c      sign_extend_byte                # turns a byte value 128..255 into -128..-1
+func_14c84      fp_extended_text                # FPU .x immediate (96-bit extended real) as "#<decimal>"
+func_14e0e      fp_packed_text                  # FPU .p immediate (96-bit packed decimal) as "#d.ddddE[-]eee"
+func_14f54      num8_text                       # byte operand text: decimal below 10, else $hex / -$hex when hex output is on
+func_15002      num16_text                      # word operand text: decimal 0..15, else $hex / -$hex when hex output is on
+func_150a4      num32_text                      # long operand text: decimal -15..15, else $hex / -$hex when hex output is on
+func_15170      reloc_at                        # TRUE when the relocation table marks this offset as a relocated long
+func_151ca      areg_name                       # "A0".."A6", "SP" for register 7
+func_1520c      address_label                   # label text for a program offset: symbol, user label, T_/D_/B_/A_ address label
+func_154dc      label_address_text              # absolute address of an offset in hex or decimal, for generated labels
+func_15516      indexed_ea_text                 # d8(An,Xn) brief and 68020 full-extension (bd,An,Xn*s)/([..],od) operand text
+func_15bd6      index_reg_name                  # "Dn"/"An" index register named by bits 15-12 of an extension word
+func_15f64      movem_reg_name                  # register list bit number 0..15 as "D0".."D7","A0".."A7"
+func_1679a      signed_number_at                # VAL of a string from a position, with a leading "-" handled
+func_16aba      lookback_immediate              # searches back through output lines for "#n" matching two patterns, -1 if none
+func_17ca2      printable_char                  # CHR$ of a byte with control codes shown as space; never called
+func_17cca      dc_number_text                  # dc value as $hex or decimal, by the hex dc option
+func_17d0a      printable_text                  # string with control codes replaced by spaces, for comments
+proc_000d8      program_init                    # start-up: REG file, error handler, INF install part, RESERVE, DIMs, screen and VDI data, INLINE code, option defaults, RSC, windows, help file
+proc_006b8      reg_name_decode                 # decodes the name read from DS_DRAIN.REG in place (word pairs, key 4660), halving its length
+proc_00762      rsc_init                        # finds and loads DS_DRAIN.RSC (quits when missing or defective), sets object constants once, fixes up the trees
+proc_007e2      rsc_constants_set               # sets the tree and object index constants of DS_DRAIN.RSC
+proc_00f08      rsc_tables_set                  # builds the object tables: progress legend, the two list dialogs, CPU check boxes
+proc_01510      rsc_objects_fix                 # fixes up trees 0-19: menu enable marks, extended types to USERDEF check/radio buttons, size tweaks, image halving in low res, menu bar
+proc_01962      event_handle                    # one event-loop pass: EVNT_MULTI for keys, button, messages and a 200 ms timer; dispatches menu, window and dialog events
+proc_01b2c      window_message                  # handles WM_REDRAW..WM_MOVED for the editor and help windows (the dialog window has its own handler)
+proc_01dc2      window_top_check                # tops the active window when it is not the top window
+proc_01dfc      mbar_enable_update              # enables/disables menu items for active window, loaded code, help and line counts when any of them changed
+proc_020da      mbar_source_check               # moves the menu check mark to the given source-type item
+proc_02110      command_execute                 # executes a menu item or its shortcut (scan code*256 + shift state); other keys go to keystroke_handle
+proc_02e56      source_loaded                   # after code is loaded: resets the editor window, redraws and checks the source-type item
+proc_02e84      tos_trap_remark                 # puts the GEMDOS/BIOS/XBIOS function name for the first editor line into its remark (needs help file)
+proc_02ef4      gem_trap_remark                 # puts the AES (0) or VDI (1) function name for the #number on the first editor line into its remark
+proc_02fc6      keystroke_handle                # editor/help window keys: Esc, cursor keys, Home, ^F/F find, Return/Enter switch window, Help key
+proc_035e2      window_show                     # tops an open window or opens it at its saved, current or full-screen position
+proc_0383e      window_hide                     # closes an open window with a shrink box
+proc_038b4      win_vslider_pos                 # set a window's vertical slider position (WF_VSLIDE) from its top line, clear slider_dirty
+proc_03956      win_vslider_size                # set a window's vertical slider size (WF_VSLSIZE) from visible rows / line count
+proc_039c0      win_title_set                   # build " Help: file " or " Editor: prog/source " title in title_buf and set WF_NAME
+proc_03ab4      win_top_check                   # after a window message: find the top window, make it current and refresh its work area
+proc_03b2c      win_from_handle                 # map an AES window handle to window index 0 (editor) or 1 (help)
+proc_03b6e      win_work_area                   # read a window's work area (WF_WORKXYWH) and compute the visible row count
+proc_03bb6      win_resize                      # move/size a window snapped to 8x16 cells (x optionally to 8), then refresh area and slider
+proc_03cd4      win_redraw_rects                # WM_REDRAW: walk the rectangle list and redraw the parts inside screen and redraw area
+proc_03ea2      win_redraw_all                  # redraw a window's whole work area
+proc_03f3e      win_draw_area                   # clear a clip rectangle and draw the visible lines (help via inline code, editor per line)
+proc_040d2      src_line_show                   # draw one editor line at a row: address, label/mnemonic columns, jump/call/branch highlighting
+proc_04602      win_scroll_line                 # scroll the current window one line by blitting the work area (vro_cpyfm), draw the new line
+proc_048b4      win_update_sliders              # clamp a window's top line, then reset its title and both slider values
+proc_04952      screen_redraw                   # make the AES redraw the whole screen (FORM_DIAL start/finish)
+proc_0498a      windows_redraw                  # send a redraw for both windows
+proc_049b6      win_redraw_msg                  # make the AES redraw one open window's work area (FORM_DIAL start/finish)
+proc_04e4a      operand_label_use               # take the label in the current line's operand: jump to its definition or open the rename dialog
+proc_0530a      defined_label_use               # take the label defined on the current line: find its references or open the rename dialog
+proc_053f6      src_line_to_dc                  # replace the current instruction line with dc.w words of its bytes, ASCII in the comment
+proc_05650      font_sizes_scan                 # find the first three distinct system font sizes with vst_point, store char/cell heights
+proc_056fe      font_toggle                     # switch between the two editor font sizes and re-layout the open windows
+proc_05756      font_apply                      # set the current font height, row height and visible rows of a window, update its sliders
+proc_0587e      pointer_hide                    # graf_mouse M_OFF (256)
+proc_05890      pointer_show                    # graf_mouse M_ON (257)
+proc_058a2      aes_graf_mouse                  # AES graf_mouse (78) with the mode already in GINTIN(0)
+proc_0596c      vdi_text_align                  # vst_alignment (VDI 39)
+proc_05a28      about_box                       # About dialog with version and registration, random XOR box pattern until key or click
+proc_05c40      dlg_install                     # Installation window dialog: memory reserve, custom objects, restart
+proc_05e62      dlg_dis_options                 # Disassembler - Options window dialog
+proc_062ce      dlg_asm_custom                  # Assembler - Customize window dialog (output syntax options)
+proc_06642      dlg_editor_options              # Editor - Options window dialog
+proc_06936      dlg_file_options                # File - Options window dialog
+proc_06a5c      dlg_gem_traps                   # GEM - Traps window dialog (AES/VDI comment patterns)
+proc_06c5a      dlg_tos_traps                   # TOS - Traps window dialog (GEMDOS/BIOS/XBIOS comment patterns)
+proc_06e50      dlg_find                        # modal Find dialog with a 10-entry history; returns pattern and search mode
+proc_07118      dlg_comment                     # modal dialog editing the comment of the current editor line
+proc_07216      src_comment_set                 # set, replace or remove the ";" comment of a source line and redraw it
+proc_0741e      dlg_rename_label                # modal rename-label dialog; renames definition and references in all lines
+proc_077fc      dlg_load_part                   # "Load program part" dialog: choose start/end offset in a program file and disassemble it
+proc_078fa      dlg_mem_disasm                  # memory disassembly dialog: start/end address, optional origin, checks protected area
+proc_07a3e      dlg_load_routine                # "Load routine" dialog: raw file, whole or start/end range
+proc_07b9a      dlg_prog_info                   # program info dialog: file length and TEXT/DATA/BSS/symbol sizes in decimal and hex
+proc_07c4c      dlg_mem_layout                  # Memory layout window dialog: editor text size, free memory, line array sizing
+proc_07fbc      editor_arrays_alloc             # clear and re-dimension the editor line and offset arrays
+proc_080e2      sysinfo_dialog                  # window dialog 2 "System info": TOS/AES/GEMDOS versions, number calculator, PEEK/vector lookups
+proc_0846e      calc_parse_input                # parses the calculator input field (hex/dec terms joined by + and -) into a VAR long
+proc_086c0      calc_show_result                # shows a long in the result field (hex or dec) and as 1-4 ASCII characters
+proc_08802      calc_set_input                  # writes a long (hex or dec) into the calculator input field
+proc_08868      lst_editor_dialog               # modal editor for the data area list (v09ed|=0) or the label list (v09ed|=1)
+proc_09aaa      slider_set_pos                  # sets a vertical slider's y inside its track from position and maximum, redraws track
+proc_09b32      lst_sort                        # sorts the current list by address (QSORT on packed strings) when it is out of order
+proc_0a01a      areas_file_read                 # reads the data area list from #1: size, count, start/end longs and inactive flag
+proc_0a174      areas_file_write                # writes the data area list to #1 up to the first empty entry
+proc_0a282      labels_file_read                # reads the label list from #1: size, count, address longs and 0-terminated names
+proc_0a3a6      labels_file_write               # writes the label list to #1 up to the first empty entry
+proc_0a47c      labels_resize                   # resizes the label arrays, keeping the entries that still fit
+proc_0a572      lst_redraw_rows                 # sets the list slider and rewrites/redraws the six visible rows
+proc_0a640      lst_row_show                    # formats one list entry into its row object, optional selected state and redraw
+proc_0a88c      lst_entry_store                 # copies the two edit fields back into the selected list entry
+proc_0aa16      lst_entry_fields                # copies the selected list entry into the two edit fields (and active checkbox)
+proc_0ac8a      progress_window                 # opens (TRUE) or closes (FALSE) the "Disassembling..." progress window dialog
+proc_0ae1e      progress_step_mark              # marks one step label of the progress window selected and redraws it
+proc_0ae80      progress_bar_start              # starts the bar of one progress step: total, start value, update step
+proc_0aefc      object_redraw_window            # redraws an object of a tree through a window's rectangle list
+proc_0b07c      progress_update                 # grows the progress bar, polls keys (stop alert), menu and window messages
+proc_0b1dc      wdialog_dispatch                # calls the handler of the current window dialog with an event and object
+proc_0b382      wdialog_open                    # opens a dialog tree in its own window (or tops it if already open)
+proc_0b6be      wdialog_close                   # sends the close event, closes and deletes the dialog window
+proc_0b7e4      wdialog_event                   # keyboard and mouse handling inside the topped dialog window
+proc_0b978      wdialog_cursor                  # shows or hides the edit cursor of the window dialog
+proc_0b9f4      wdialog_message                 # AES window messages for the dialog window: redraw, topped, closed, moved
+proc_0bc7a      dialog_run_until                # draws a modal dialog and runs FORM_DO until one of two objects or an exit
+proc_0bd0a      dialog_run_once                 # draws a modal dialog and runs FORM_DO once
+proc_0bd3c      dialog_wait                     # waits for an exit (click, FORM_DO or own form_do); drags dialog on its image
+proc_0c074      dialog_do_keys                  # own form_do: edit fields plus shift/alt/Help/Home keys returned as exit codes
+proc_0c3ea      dialog_open                     # loads, positions (centre or at mouse), reserves and grows a modal dialog
+proc_0c620      dialog_close                    # deselects the exit object, frees the screen area and shrinks the dialog
+proc_0c6e0      object_redraw                   # redraws one object of the current tree at its screen position
+proc_0c750      object_select                   # sets or clears the SELECTED state bit of an object
+proc_0c7fa      object_enable                   # enables (SELECTABLE|TOUCHEXIT) or disables (DISABLED) an object
+proc_0c926      object_set_number               # writes a decimal number into a button/string or TEDINFO object
+proc_0c9ee      object_set_text                 # writes a string into a button/string or TEDINFO object (cut to te_txtlen)
+proc_0ca7e      object_set_version              # writes a BCD version word as "x.yy" into an object
+proc_0caf0      object_set_size                 # writes a value in decimal into one object and in hex into another
+proc_0cc02      radio_pair_set                  # selects the first of two objects when the flag is FALSE, else the second
+proc_0cc58      screen_lock                     # WIND_UPDATE BEG_UPDATE, counting nested locks
+proc_0cc66      screen_unlock                   # WIND_UPDATE END_UPDATE, counting nested locks
+proc_0cc74      mctrl_lock                      # WIND_UPDATE BEG_MCTRL, counting nested locks
+proc_0cc82      mctrl_unlock                    # WIND_UPDATE END_MCTRL, counting nested locks
+proc_0d008      program_load                    # load a GEMDOS program (TEXT+DATA, DRI symbols, relocation) for disassembly; param TRUE = ask with file selector
+proc_0d29a      program_part_open               # ask for a program, leave it open in #1 and set file length to TEXT+DATA for the part-load dialog
+proc_0d30c      program_part_load               # load the byte range start..end of the open program's TEXT+DATA, with symbols and relocation
+proc_0d5b0      par_autoload                    # clear both lists and load <files dir>\<program name>.PAR when it exists
+proc_0d616      symbols_read                    # read the DRI/GST symbol table into sym_names()/sym_values()
+proc_0d830      relocs_read                     # read the GEMDOS relocation table and mark relocated longs in reloc_flags()
+proc_0d8ee      reloc_mark                      # mark one relocated offset if it is even and in range
+proc_0d93a      code_read                       # BGET bytes from #1 into code_buf() in 4096-byte blocks; params start word index, byte count
+proc_0d9ee      routine_open                    # ask for any file ("Load routine"), leave it open in #1, VAR returns its length
+proc_0da4c      routine_load                    # load bytes start..end of the open file as raw TEXT
+proc_0db44      memory_setup                    # set up disassembly straight from ST memory mem_start..mem_end (H<addr>.RAM/.ROM)
+proc_0dc4c      rsc_load                        # load a GEM resource file as DATA and generate rs_/rsh_ symbols and pointer relocations
+proc_0e20c      rsc_table_symbols               # name every pointer of one RSC table: header word of the offset, header word of the count, stride, prefix
+proc_0e2d2      rsc_pointer_symbol              # read the RSC pointer at an offset, add a symbol for its target and mark the offset relocated
+proc_0e352      symbol_add                      # append name/value to the symbol table at index sym_value
+proc_0e392      datafile_load                   # load any file whole as a DATA section
+proc_0e49e      ascii_load                      # load an ASCII source into the source window (DSDR header, tab removal, .ZLA line addresses)
+proc_0e91e      ascii_save                      # save the source window as ASCII (optional QED/DSDR header, tab indent, .ZLA line addresses)
+proc_0ebf4      par_load                        # load source settings .PAR (format options, ranges, trap texts, data-area and label lists)
+proc_0efd8      par_save                        # save source settings .PAR
+proc_0f320      inf_read_head                   # open DS_DRAIN.INF and read the memory settings needed before RESERVE; leaves the file open
+proc_0f38c      inf_read_rest                   # read the rest of DS_DRAIN.INF opened by inf_read_head and close it
+proc_0f6fc      windows_restore                 # close both windows, then reopen those saved as open that have lines
+proc_0f792      inf_save                        # save program settings DS_DRAIN.INF; param TRUE = ask with file selector
+proc_0fc9c      cstring_to_file                 # write a string plus NUL byte to #1
+proc_0fd34      disassemble                     # main disassembly loop: header lines, section line, decode by opcode line 0-F into source_lines()
+proc_1082c      opline0_decode                  # opcode line 0: btst/bchg/bclr/bset, movep, ori/andi/eori/subi/addi/cmpi, cmp2/chk2/cas/rtm/moves
+proc_10f7a      dis_chk2_cmp2                   # decode CHK2/CMP2 (68020+) with size parameter 0/1/2; ext bit 11 picks chk2
+proc_1101c      dis_cas                         # decode CAS Dc,Du,<ea> (68020+) with size parameter 0/1/2
+proc_110e2      dis_group4                      # decode line 4 (misc): chk, lea, negx/clr/neg/not, move sr/ccr, nbcd, swap, pea, ext, movem, tst, tas, trap, link, rts ...
+proc_11b22      dis_muldiv_long                 # 68020 mul/div .l <ea>,[Dh:]Dl; caller sets "mul" or "div" in v001c$
+proc_11c1e      dis_movec                       # 68010+ MOVEC; parameter 0 = control reg to Rn, 1 = Rn to control reg
+proc_11e8a      dis_group5                      # decode line 5: addq/subq, Scc, DBcc, TRAPcc
+proc_12150      dis_branch                      # decode line 6: Bcc/BRA/BSR .s/.w/.l, with OS/library call comments for bra/bsr
+proc_122d2      dis_group8                      # decode line 8: or, divu/divs .w, sbcd, pack, unpk
+proc_1257e      dis_add_sub                     # decode lines 9/D: add/sub, adda/suba, addx/subx; caller sets "add" or "sub"
+proc_12758      dis_group_b                     # decode line B: cmp, cmpa, cmpm, eor
+proc_12914      dis_group_c                     # decode line C: and, mulu/muls .w, abcd, exg
+proc_12bf8      dis_group_e                     # decode line E: shifts/rotates (register and memory) and 68020 bitfield ops
+proc_12ee2      dis_group_f                     # decode line F: 68030 PMMU pmove/pflusha, 68040 move16, 68881/68882 FPU ops
+proc_13d60      ops_predec_pair                 # operands "-(Ay),-(Ax)" from v09f4|/v09f5|
+proc_13dae      ops_dhigh_dlow                  # operands "Dx,Dy": D(bits 9-11),D(bits 0-2)
+proc_13df2      ops_dlow_dhigh                  # operands "Dy,Dx": D(bits 0-2),D(bits 9-11)
+proc_13e36      ops_add_dlow                    # append ",D(bits 0-2)" to operands
+proc_13e66      ops_add_dhigh                   # append ",D(bits 9-11)" to operands
+proc_13e96      ops_add_fp_dest                 # append ",FPn" with n = v09f4| (FPU destination register)
+proc_13eca      ops_fp_src                      # operands "FPn" with n = v09f5| (FPU source register)
+proc_13ef2      ops_dhigh                       # operands "D(bits 9-11)"
+proc_13f18      ops_dlow                        # operands "D(bits 0-2)"
+proc_13f3e      ops_add_ahigh                   # append ",A(bits 9-11)" (SP for 7) to operands
+proc_13f6c      ops_ea_data_alt                 # operands = source EA of the opcode, data alterable class, given size
+proc_13fa0      ops_add_ea_data_alt             # append ",<ea>" (source EA field, data alterable class, given size)
+proc_13fea      ea_text_build                   # build EA text in v039c$ from mode v0138& and register v092c&, fetching extension words
+proc_1469e      instr_emit                      # add size suffix, lay out mnemonic/operands/comment into the listing line, or reset flags when invalid
+proc_149ec      section_directive               # writes the TEXT/DATA/BSS/END directive line in the chosen assembler syntax
+proc_15c3e      movem_operands                  # builds the MOVEM register list and effective address operand
+proc_15fbe      xbra_header                     # writes an XBRA header: dc.l 'XBRA', dc.l 'id' and a zero old vector
+proc_16080      sysvar_comment                  # puts the system variable name for an absolute address into the comment
+proc_16134      fmovecr_comment                 # comment naming the FMOVECR constant ROM entry
+proc_1628e      os_jsr_comment                  # jsr/bsr to the user's GEMDOS/BIOS/XBIOS routine names gets a call name comment
+proc_16322      os_call_comment                 # finds the function number before a TRAP #1/#2/#13/#14 and names the call
+proc_16804      gem_call_comment                # jsr/bsr to the user's AES/VDI binding names gets the AES/VDI function name
+proc_168e4      aes_name_comment                # AES function name for the number found before the call
+proc_169ae      vdi_name_comment                # VDI function name for the opcode (and sub-opcode) found before the call
+proc_16bde      mnemonic_tables_init            # builds the condition code, shift, bitfield, FPU name and EA class tables
+proc_16e90      help_file_reload                # loads DS_HILFE.TXT into the help window and builds the OS name tables from it
+proc_17620      areas_in_text                   # disassembles the user's data areas inside TEXT as dc.b lines
+proc_17830      section_data_output             # writes the DATA section (RSC header words first in resource mode)
+proc_17972      dc_bytes_output                 # writes dc.b (and relocated dc.l) lines from the offset up to the block end
+proc_17d7a      bss_section_output              # writes the BSS section as ds/blk/dcb/dsbss lines split at labels, then END
+proc_18084      labels_insert                   # writes symbol, user and generated labels into the output lines
+proc_184ce      label_put                       # puts a label at the start of one output line, by the layout mode
+proc_18580      fault_handler                   # ON ERROR handler: alerts for array/memory errors, dump and quit for others
+proc_1886e      gem_shutdown                    # closes dialog and windows, removes menu bar, frees the resource
+proc_1892c      program_quit                    # gem_shutdown and END
+data_1e342      kbdvec_names                    # names of the Kbdvbase vectors (MIDI error, IKBD error, MIDI ... IKBD)
+data_1e36f      rsh_field_names                 # RSC header field names rsh_vrsn ... rsh_rssize
+data_1e3e3      cond_code_names                 # dbt/bra/t, dbra/bsr/f, then the 14 condition codes hi..le
+data_1e422      shift_bitfield_names            # shift/rotate names asr..rol, bitfield names bftst..bfins
+data_1e476      fpu_format_names                # FPU source format suffixes .l .s .x .p .w .d .b .p
+data_1e48e      fpu_op_list                     # FPU arithmetic opmode names 0..40
+data_1e56e      fpu_cond_list                   # 32 FPU condition predicate names
+data_1e5df      ea_class_masks                  # 8 pairs: mode 7 register mask, mode 0-6 mask, per EA class
+data_1e653      help_section_keys               # help file section header and number key per OS name table
+label_000a4     restart_loop                    # top of the DO loop that runs the event loop and restarts the program
+label_05da0     restart_confirm                 # restart warning alert inside the Installation dialog
+label_17c50     dc_line_emit                    # in dc_bytes_output: writes the finished dc line
+v0000           fp_mantissa                     # local in fp_extended_text: mantissa value 1.xxx
+v0004           find_text                       # global: current search pattern (Find dialog / label jump)
+v0008           found_path                      # string VAR param of func_0cd9c (file name in, full path out); also LOCAL in func_0ce1e
+v000c           src_text                        # shared local: a source line or text being built (proc_040d2, func_04b62, proc_053f6, proc_07118/07216)
+v0010           work_str                        # shared local string slot: general work string / result text
+v0014           pattern                         # param of func_04b62: search pattern
+v0018           src_copy                        # local of proc_053f6: copy of the current line
+v001c           mnemonic                        # global $: mnemonic text of the instruction being decoded
+v0020           lbl_text                        # local of proc_07118 / param elsewhere: label text "name:" kept when rebuilding a line
+v0024           token_str                       # shared local: label name / number text being collected
+v0028           path_spec                       # path string param of the path functions; VAR param of func_0ce1e (shared slot)
+v002c           fsel_ext                        # string; param: extension mask for the file selector (".*", ".PAR" ...)
+v0030           fsel_title                      # string; param: file selector title
+v0034           fsel_dir                        # string; LOCAL: directory path plus "*"+extension passed to the file selector
+v0038           symbol_name                     # string; param: name of the symbol to add
+v003c           pattern_a                       # param of lookback_immediate: first text the line must contain
+v0040           pattern_b                       # param of lookback_immediate: second text the line must contain
+v0044           entry_name                      # local in help_file_reload: first word of a table entry line (the name)
+v0048           env_name                        # param of func_058d2$: environment variable name
+v004c           base_reg                        # local in indexed_ea_text: base register text (An or PC)
+v0050           index_text                      # local in indexed_ea_text: index register text with size and scale
+v0054           unused_str                      # local in indexed_ea_text, never used
+v0058           disp_text                       # local in indexed_ea_text: base displacement text
+v005c           wnd_title                       # title param of proc_0b382
+v0060           tree_addr                       # global: address of the current resource tree; also param/LOCAL tree (shared slot)
+v0064           value                           # shared slot: general long value (fetched data, numbers, addresses)
+v0068           result_long                     # general long: calculator result here; LOCAL elsewhere (shared slot)
+v006c           code_long                       # shared local: line address / first three mnemonic chars / cookie id
+v0070           src_idx                         # shared: line index loop variable over editor/help lines
+v0074           src_row                         # global: current output line index in the source lines (also a param name)
+v0078           stop_offset                     # local of proc_053f6: offset of the last word of the line
+v007c           src_file_len                    # long; length of the loaded file / image (global; VAR param of routine_open)
+v0080           old_fixed_lines                 # local of proc_07c4c: saved fixed line count (never used)
+v0084           code_len                        # long; bytes of TEXT+DATA (or part) loaded into code_buf (global; param of code_read)
+v0088           start_pos                       # start value param of proc_0ae80
+v008c           num_value                       # value param of proc_0caf0
+v0090           range_start                     # long; param: first byte offset of a part load
+v0094           range_end                       # long; param: end byte offset of a part load
+v0098           start_word                      # long; param of code_read: first word index in code_buf()
+v009c           ptr_target                      # long; RSC pointer value read / symbol value param of symbol_add
+v00a0           reg_mask                        # local in movem_operands: MOVEM register mask
+v00a4           start_offset                    # local of proc_053f6: offset of the first word of the line
+v00a8           fp_exponent                     # local in fp_extended_text: unbiased exponent
+v00ac           fp_address                      # local in the FPU immediate functions: address of the 12-byte operand
+v00b0           top_row_max                     # local of keystroke_handle: largest top line of the active window
+v00b4           tree_ptr                        # tree address param of func_0b2e6
+v00b8           pad_line                        # param of proc_040d2: TRUE = draw the line padded to the window width
+v00bc           hilite_set                      # local of proc_040d2: a highlight text style was set and must be reset
+v00c0           wrapped                         # local of func_04b62: search has wrapped to the start
+v00c4           opt_flag                        # shared local/param flag: search by address, rename instead of jump, saved fixed mode
+v00c8           has_label                       # local of proc_053f6: current line has a label
+v00cc           redraw_flag                     # boolean param of proc_0a640: redraw the row object
+v00d0           state_on                        # boolean param of proc_0c750/proc_0c7fa: selected/enabled
+v00d4           flag                            # shared boolean local: computed enable state, saved option value
+v00d8           regs_to_mem                     # param of movem_operands: TRUE for registers to memory
+v00dc           need_separator                  # local in movem_operands: a "/" is needed before the next register
+v00e0           in_quotes                       # local in dc_bytes_output: inside a quoted string
+v00e4           choice_flag                     # boolean param of proc_0cc02: which of two objects is selected
+v00e8           a0_pending                      # local in movem_operands: A0 bit held back to split the D/A ranges
+v00ec           ask_file                        # bool; param of program_load: TRUE = show the file selector
+v00f0           version_bcd                     # BCD version word param (major in high byte)
+v00f4           handle_tmp                      # shared word: window handle (local) / visible rows (proc_04602)
+v00f8           rect_h                          # height of a rectangle (dialog, window rectangle); global and LOCAL (shared slot)
+v00fc           cur_obj                         # object being scanned in func_0bf64; object param of func_057d2 (shared slot)
+v0100           object_no                       # object index; param/LOCAL in many units (shared slot)
+v0104           next_obj                        # object/exit code in proc_0c074; next-object param of func_057d2 (shared slot)
+v0108           loop_i                          # general word loop counter / index; global and LOCAL (shared slot)
+v010c           tree_no                         # local of rsc_objects_fix: tree being fixed up
+v0110           rect_y                          # y of a rectangle; global and LOCAL (shared slot)
+v0114           rect_w                          # shared: rectangle width; text column / char code in some units
+v0118           sys_char_h                      # local of rsc_objects_fix: system character height from GRAF_HANDLE
+v011c           rect_x                          # x of a rectangle; global and LOCAL (shared slot)
+v0120           window_id                       # global/parameter: AES handle of the window a message is for
+v0124           shift_state                     # shared word slot: keyboard shift state from EVNT_MULTI, low byte of a key code, object state
+v0128           temp_num                        # shared &: general word value / parameter (trap number, opmode bits 3-5 or 3-7)
+v012c           pos_in_str                      # shared: position found by INSTR / row index
+v0130           code_word                       # local of proc_040d2: first two mnemonic chars / condition loop index
+v0134           loop_j                          # second general word counter/index/size; global and LOCAL (shared slot)
+v0138           bit_field                       # shared slot: EA mode field, scale field, trap number param
+v013c           blank_pos                       # local of func_04abc: position of the first blank
+v0140           pattern_len                     # local: length of the search pattern / old label name
+v0144           opcode                          # global &: opcode word being decoded (also a parameter in proc_149ec/proc_15c3e)
+v0148           kb_char                         # param of func_057d2: key code given to form_keybd
+v014c           kb_new_obj                      # VAR param of func_057d2: object returned by form_keybd
+v0150           kb_char_out                     # VAR param of func_057d2: key code left by form_keybd
+v0154           chosen_obj                      # global exit object or key code of a dialog; handler param (shared slot)
+v0158           value_new                       # param of func_068f2: new option value
+v015c           prev_value                      # old top-row value in the slider loop; param of func_068f2 (shared slot)
+v0160           flags_val                       # local: object flags word
+v0164           old_bpl_text                    # local of proc_07c4c: saved bytes per line for TEXT (never used)
+v0168           old_bpl_data                    # local of proc_07c4c: saved bytes per line for DATA (never used)
+v016c           old_bpl_bss                     # local of proc_07c4c: saved bytes per line for BSS (never used)
+v0170           length_tmp                      # shared: a line length
+v0174           track_obj                       # slider track object param of proc_09aaa
+v0178           slider_obj                      # slider object param of proc_09aaa
+v017c           work_max                        # shared slot: highest table entry number in help_file_reload
+v0180           stop_obj_a                      # first exit object param of proc_0bc7a
+v0184           stop_obj_b                      # second exit object param of proc_0bc7a
+v0188           pos_x                           # global x of mouse or of the grow/shrink box centre; LOCAL mouse x in proc_0c074
+v018c           pos_y                           # global y of mouse or of the grow/shrink box centre; LOCAL mouse y in proc_0c074
+v0190           start_obj                       # start object param of func_0bf64; VAR edit object of proc_0c074
+v0194           which_mode                      # search mode param of func_0bf64; event flags LOCAL in proc_0c074 (shared slot)
+v0198           flags_read                      # LOCAL in func_0bf64: ob_flags of the scanned object
+v019c           scan_step                       # LOCAL/param: object scan step (+1 / -1)
+v01a0           keep_going                      # LOCAL in proc_0c074: form continue flag (0 = exit)
+v01a4           cursor_idx                      # LOCAL in proc_0c074: edit cursor index
+v01a8           button_state                    # LOCAL in proc_0c074: mouse button state
+v01ac           kbd_shift                       # LOCAL in proc_0c074: keyboard shift state
+v01b0           kbd_code                        # LOCAL key code (proc_0b7e4, proc_0c074)
+v01b4           click_count                     # LOCAL in proc_0c074: mouse clicks
+v01b8           obj_a                           # first object param (proc_0caf0, proc_0cc02, func_0c8c4)
+v01bc           obj_b                           # second object param (proc_0caf0, proc_0cc02)
+v01c0           fsel_button                     # word; LOCAL: file selector exit button (0 = Cancel)
+v01c4           row_idx                         # local in help_file_reload: help text line index
+v01c8           table_word                      # word; param: RSC header word index holding the table offset
+v01cc           count_word                      # word; param: RSC header word index holding the entry count
+v01d0           entry_stride                    # word; param: bytes per table entry
+v01d4           areg_no                         # param: address register number, -1 for PC
+v01d8           ea_class                        # parameter &: address class index into v0a80&(); +16 = no An for byte size
+v01dc           unused_word                     # local in os_call_comment, never used
+v01e0           reg_run_count                   # shared slot: register run length in movem_operands, entry count in help tables
+v01e4           entry_no                        # shared slot: table entry number read from a help line
+v01e8           ext_type                        # local of rsc_objects_fix: extended object type (high byte of ob_type)
+v01ec           coord                           # word; param of coord_scale: pixel coordinate
+v01f0           scaled_coord                    # word; param of coord_unscale: 0..32766 coordinate
+v01f4           ext_word                        # local in indexed_ea_text: extension word
+v01f8           align_h                         # param of proc_0596c: horizontal text alignment
+v01fc           align_v                         # param of proc_0596c: vertical text alignment
+v0200           addr_width                      # local of proc_040d2: width of the address column in characters
+v0204           size_new                        # new array size (proc_08868 global use, proc_0a47c param)
+v0208           flag_mask                       # ob_flags mask param of func_0b2e6
+v020c           obj_flags                       # LOCAL in func_0b2e6: ob_flags of the scanned object
+v0210           fallback_obj                    # object returned by func_0b2e6 when none matches
+v0214           win_x                           # LOCAL in proc_0b382: dialog/window x
+v0218           win_y                           # LOCAL in proc_0b382: dialog/window y
+v021c           clicked_obj                     # LOCAL in proc_0b7e4: object under the mouse / next edit object
+v0220           dlg_action                      # param of window dialog handlers: 1 open, 2 button clicked, 3 closing with clicked_obj
+v0224           tree_index                      # resource tree index param of proc_0b382
+v0228           spare_a                         # LOCAL in proc_0b07c, never used
+v022c           spare_b                         # LOCAL in proc_0b07c, never used
+v0230           spare_c                         # LOCAL in proc_0b07c, never used
+v0234           obj_x                           # LOCAL in proc_0aefc: object screen x
+v0238           obj_y                           # LOCAL in proc_0aefc: object screen y
+v023c           wnd_handle                      # window handle param of proc_0aefc
+v0240           win_idx                         # shared byte: window index 0/1, also small loop counter
+v0244           active_window                   # global: active window number, 0 editor, 1 help
+v0248           search_mode                     # global/param: 0 none, 1 line starts with pattern, 2 line contains pattern
+v024c           code_byte                       # shared |: condition code (bits 8-11 or FPU 6-bit), also a byte/char elsewhere
+v0250           ascii_code                      # global byte: character code being tested
+v0254           kind_sel                        # shared slot: selector param; extension format (0 brief, 1 memory indirect, 2 full)
+v0258           size_code                       # global |: operand size field 0=b 1=w 2=l 3=special; also FPU format+16
+v025c           size_arg                        # parameter |: operand size passed to the small decode helpers
+v0260           search_depth                    # param of lookback_immediate: number of lines to search back
+v0264           byte_code                       # param of printable_char
+v0268           ext_iis                         # local in indexed_ea_text: I/IS field (bits 2-0) of the full extension word
+v026c           ext_flags                       # local in indexed_ea_text: BS, IS and BD size bits (7-4)
+v0270           outer_size                      # local in indexed_ea_text: outer displacement size
+v0274           bd_size                         # local in indexed_ea_text: base displacement size
+v02b8           inf_path                        # string; path of DS_DRAIN.INF
+v02be           files_dir                       # string; folder for .PAR files (default <dir>\files\)
+v02c4           aes_reg_pat                     # global: AES opcode register pattern (",D0")
+v02ca           vdi_reg_pat                     # global: VDI register pattern (",D1")
+v02d0           tos_stack_pat                   # global: TOS function push pattern (",-(SP)")
+v02d6           tos_reg_pat                     # global: TOS function register pattern (",D0")
+v02dc           help_path                       # string; path of the help file DS_HILFE.TXT
+v02e2           removal_path                    # global: file chosen for Delete file
+v02e8           comment                         # global: comment text of the line being built
+v02ee           operands                        # global $: operand text of the instruction being decoded
+v02f4           aes_trap_pat                    # global: operand text that marks an AES call
+v02fa           aes_func_pat                    # global: second pattern for the AES function number line
+v0300           vdi_trap_pat                    # global: operand text that marks a VDI call
+v0306           vdi_func_pat                    # global: second pattern for the VDI function number line
+v030c           gemdos_trap_pat                 # global: operand text of a GEMDOS trap
+v0312           bios_trap_pat                   # global: operand text of a BIOS trap
+v0318           xbios_trap_pat                  # global: operand text of an XBIOS trap
+v031e           tos_func_pat1                   # global: first pattern of the TOS function number line
+v0324           tos_func_pat2                   # global: second pattern of the TOS function number line
+v032a           rename_old                      # global: label name to rename
+v0330           rename_new                      # global: new label name
+v0336           source_path                     # string; path of the ASCII source (.S)
+v033c           calc_input                      # global: upper-cased text of the calculator input field
+v0342           field_text_a                    # global: text for the first list edit field
+v0348           field_text_b                    # global: text for the second list edit field
+v034e           par_path                        # string; path of the .PAR source settings file
+v0354           creg_name                       # global $: control/MMU register name text (movec, pmove)
+v0366           sym_name                        # global: label name being inserted by labels_insert
+v0372           rsc_file                        # global: resource file name DS_DRAIN.RSC
+v037e           launch_path                     # global: program chosen for Launch program
+v038a           program_folder                  # global: folder DS_DRAIN was started from
+v039c           ea_text                         # global $: EA text built by ea_text_build
+v03a8           reg_name                        # global: decoded registered user name
+v03ae           program_path                    # string; path (or H<addr>.RAM/ROM name) of what is being disassembled
+v03b4           command_line                    # global: command line from the basepage
+v03ba           pc_offset                       # global: current disassembly offset from the program start
+v03c2           vdi_pb_ptr                      # global: pointer to the VDI parameter block address table
+v03c6           gtext_lines_code                # global INLINE 126 bytes: draws a range of string-array lines with v_gtext
+v03ca           asm_draw_text                   # global: inline routine drawing one string at x,y
+v03ce           userdef_code                    # global INLINE 470 bytes: USERDEF draw code for check boxes and radio buttons, offset table at start
+v03d2           bitfield_code                   # global %: INLINE bit-field extract routine, C:v03d2%(value,L:pos*65536+width)
+v03d6           linea_init_code                 # global INLINE 28 bytes: Line-A init $A000, returns the variable base, font table or routine table
+v03da           fixed_line_count                # long; source line count used when fixed_lines is on (default 25000)
+v03de           memory_max                      # global: free memory after start-up (Memory dialog)
+v03e6           mbar_tree                       # global: address of the menu tree
+v03f6           spec_addr                       # global: ob_spec of the object being written
+v03fa           base_addr                       # long; address shown for offset 0 (memory/routine start)
+v03fe           disasm_speed                    # global: TIMER at disassembly start, then lines per minute
+v0402           code_addr                       # long; address of the bytes being disassembled (code_buf or ST memory)
+v0406           part_start                      # global: start offset for "Load program part"
+v040a           part_end                        # global: end offset for "Load program part"
+v040e           mem_start                       # long; memory disassembly start address
+v0412           mem_end                         # global: end address for memory disassembly
+v0416           rom_size                        # global: TOS ROM size limit for memory disassembly
+v041a           routine_start                   # global: start offset for "Load routine"
+v041e           routine_end                     # global: end offset for "Load routine"
+v0422           tseg_len                        # long; TEXT length
+v0426           dseg_len                        # long; DATA length
+v042a           bseg_len                        # long; BSS length
+v042e           sym_len                         # long; symbol table length in bytes
+v0432           sym_last                        # long; last symbol index (count-1); capacity while reading
+v0436           progress_total                  # global: total of the current progress bar
+v043a           progress_next                   # global: address at which the progress bar is updated next
+v043e           progress_done                   # global: progress amount shown
+v0442           progress_step                   # global: progress increment (total/30, at least 1)
+v0446           part_offset                     # long; offset of the loaded part within the program image
+v044a           section_adjust                  # long; correction for BSS/relocation offsets after a part load
+v044e           prg_flags                       # long; program header flags (fast load, TT-RAM)
+v0452           image_len                       # long; TEXT+DATA+BSS length (size of label_flags)
+v0456           fpos                            # long; file position while reading symbols/relocations
+v045e           sym_value                       # long; symbol value read; also next free symbol index for symbol_add (shared global)
+v0462           reloc_len                       # long; size of reloc_flags()
+v0466           recalled_count                  # long; number of lines RECALL read (search history)
+v046a           help_lines                      # global: help file line count from its header
+v0472           fetch_tmp                       # global: address/long temporary of the fetch functions
+v0476           saved_pc                        # global: offset saved around text_data_areas
+v047a           block_end                       # global: end offset of the block being written as dc
+v047e           bss_block_start                 # global: start of the current ds block
+v0482           bss_end                         # global: end offset of BSS
+v0486           label_search_row                # global: line to start the next label search from
+v048a           label_last_addr                 # global: address of the last placed label
+v048e           label_last_idx                  # global: last index of the label table being placed
+v0492           seg_text_last                   # global: last TEXT offset
+v0496           seg_data_last                   # global: last DATA offset
+v049a           seg_bss_last                    # global: end offset of BSS for label prefixes
+v049e           last_error_time                 # global: TIMER of the last error
+v04b6           wdialog_tree                    # global: tree address of the window dialog
+v04be           reserve_keep_free               # global: TRUE = leave keep_free_kb free, FALSE = reserve reserve_kb
+v04bf           win_align_x                     # global: snap window x to 8 pixels
+v04c0           use_symbols                     # bool; option: read and use the program's symbol table
+v04c1           trap_comments                   # bool; option: comment trap/Line-A calls with names
+v04c2           mem_real_addr                   # bool; memory disassembly shows real addresses
+v04c3           grow_effects                    # global option: grow/shrink/move box effects
+v04c4           calc_hex                        # global: calculator shows hex (TRUE) or decimal
+v04c5           num_hex                         # bool; option: immediates/displacements in hex
+v04c6           dc_values_hex                   # bool; option: dc data values in hex
+v04c7           label_names_hex                 # bool; option: generated label names with hex addresses
+v04c8           hex_display                     # global option: numbers shown in hex
+v04c9           layout_tabs                     # global: line layout with label field (tab layout)
+v04ca           bss_size_comment                # bool; option: comment BSS ds lines with their size
+v04cb           unused_flag                     # global: set TRUE at start-up and never used
+v04cc           hilite_jumps                    # global: highlight bra/jmp/rts lines
+v04cd           hilite_calls                    # global: highlight bsr/jsr lines
+v04ce           hilite_branches                 # global: highlight Bcc/DBcc lines
+v04cf           tos_search_back                 # global: search earlier lines for the TOS function number
+v04d0           tos_stack_parse                 # global: parse move/pea/clr to (SP) for the TOS function number
+v04d1           code_loaded                     # bool; something is loaded to disassemble; INF read ok during start-up
+v04d2           custom_objects                  # global: draw extended resource object types as user-defined objects
+v04d3           redraw_skip                     # global: skips one window redraw; never set TRUE anywhere
+v04d4           help_loaded                     # global: help file (with trap name tables) is loaded
+v04d5           disasm_abort                    # global: disassembly was cancelled with a key
+v04d6           show_addresses                  # global: editor shows the address column
+v04d7           layout_compact                  # global: compact line layout, single blanks between fields
+v04d8           ignore_case                     # global: case-insensitive search
+v04d9           branch_suffix_s                 # global: short branches written with .s instead of .w
+v04da           bra_size_suffix                 # global: word branches get a .w suffix
+v04db           opt_muldiv_w                    # global !: option: word mul/div get an explicit ".w"
+v04dc           moveq_long                      # bool; assembler option: moveq.l
+v04dd           dialog_at_mouse                 # global: modal dialogs centred on the mouse
+v04de           fsel_exinput                    # bool; editor option: always use fsel_exinput
+v04df           redraw_needed                   # global: an option that needs a window redraw has changed
+v04e0           aes_comments                    # global: comment AES calls
+v04e1           aes_by_control                  # global: AES name from the control array opcode
+v04e2           vdi_comments                    # global: comment VDI calls
+v04e3           tos_comments                    # global: comment GEMDOS/BIOS/XBIOS traps
+v04e4           routine_range                   # global: "Load routine" uses the start/end range
+v04e5           fixed_line_count                # global: editor arrays sized by fixed_lines instead of segment sizes
+v04e6           syms_loaded                     # bool; symbol table present
+v04e7           relocs_loaded                   # bool; relocation flags present
+v04e8           rsc_mode                        # bool; a resource file is loaded
+v04e9           areas_done                      # bool; end of the data-area list reached
+v04ea           was_emitted                     # bool; proc_1469e wrote the current line
+v04eb           bad_opcode                      # global !: TRUE when the instruction is invalid (line becomes DC.W)
+v04ec           want_size_suffix                # global !: instr_emit appends .b/.w/.l from v0258|
+v04ee           fast_save                       # bool; file option: save with STORE instead of line by line
+v04f0           restart_wanted                  # global: Installation asked for a restart; ends the event loop
+v04f5           mbar_last_code                  # global: code_loaded when the menu was last updated
+v04f6           mbar_last_help                  # global: help_loaded when the menu was last updated (toggled to force an update)
+v04f7           mbar_last_edit_lines            # global: editor had lines when the menu was last updated
+v04f8           mbar_last_help_lines            # global: help had lines when the menu was last updated
+v04fb           imm_byte_check                  # bool; option: flag byte immediates with high byte set
+v04fc           signed_bytes                    # bool; option: show byte values signed
+v04fd           movem_list_style                # global: alternative movem register list output
+v04fe           linea_as_dcw                    # bool; assembler option: Line-A as dc.w instead of linea #n
+v04ff           fpu_enabled                     # bool; option: decode 68881/68882 instructions
+v0500           fmt_tab_indent                  # bool; source format: indent with tabs on save
+v0502           zla_save                        # bool; file option: save .ZLA line address file
+v0503           zla_load                        # bool; file option: load .ZLA line address file
+v0504           qed_header                      # bool; file option: write QED-ASMPAR/DSDR header line
+v0505           fastload_opt                    # bool; assembler option: OPT F+,X+ for the fast-load bit
+v0507           cursor_shown                    # global: edit cursor of the window dialog is drawn
+v0508           source_dirty                    # bool; source changed since load/save
+v051c           find_history                    # global array: 10 search patterns of the Find dialog
+v0522           unused_strings                  # global array: DIMmed at start-up and never used
+v0528           label_names                     # global array: label list names
+v052e           help_text                       # global array: help window lines
+v0534           os_gemdos_names                 # global array: GEMDOS function names
+v053a           os_bios_names                   # global array: BIOS function names
+v0540           os_xbios_names                  # global array: XBIOS function names
+v0546           linea_names                     # global array: line-A function names
+v054c           sysvar_names                    # global array: system variable names
+v0552           src_lines                       # global array: editor source lines
+v0558           bcc_names                       # global array: Bcc mnemonics by condition
+v055e           dbcc_names                      # global array: DBcc mnemonics by condition
+v0564           calc_terms                      # global array (DIM 10): signed terms of the calculator input
+v0570           sym_names                       # string(); symbol names
+v0576           sorted_keys                     # global array: packed entries for QSORT
+v0582           aes_names                       # global array: AES function names by number
+v0588           vdi_names                       # global array: VDI function names
+v05a0           cc_names                        # global array: condition code suffixes
+v05a6           shift_names                     # global $(): asr, asl, lsr, lsl, roxr, roxl, ror, rol
+v05ac           bitfield_names                  # global array: bitfield mnemonics
+v05b2           fpu_op_names                    # global array: FPU opmode names
+v05b8           fpu_cc_names                    # global $(): FPU condition suffixes 0-31
+v05be           fpu_fmt_names                   # global $(): FPU source format suffixes .l .s .x .p .w .d .b .p
+v05c4           names_tmp                       # global array: new label names while resizing
+v05ca           userblk_check                   # global array: USERBLK for extended type 110 (check box)
+v05d0           userblk_radio                   # global array: USERBLK for extended type 111 (radio button)
+v05d6           userblk_radio_box               # global array: USERBLK for extended type 120 (radio button in a box)
+v05e2           screen_mfdb                     # global array: MFDB with address 0 = screen
+v05e8           vdi_pb                          # global array: CONTRL, INTIN, PTSIN, INTOUT, PTSOUT addresses for the INLINE code
+v05ee           window_lines                    # global array: (w,0) top line, (w,1) line count; w 0 editor, 1 help
+v05f4           area_ranges                     # global array: data area list (n,0) start, (n,1) end
+v05fa           label_addrs                     # global array: label list addresses
+v0600           row_offsets                     # global array: program offset of each output line
+v060c           sym_values                      # long(); symbol values
+v061e           areas_tmp                       # global array: new data areas while resizing
+v0624           addrs_tmp                       # global array: new label addresses while resizing
+v0630           mbar_enabled                    # global array: last enable state set for each menu item
+v0636           lists_enabled                   # bool(0)=data-area list, (1)=label list in use
+v063c           window_open                     # global array: window is open (0 editor, 1 help)
+v0642           area_inactive                   # global array: data area entry is switched off
+v0648           label_flags                     # bool(); offset needs a label
+v064e           reloc_flags                     # bool(); a relocated long starts at this offset
+v0654           slider_pending                  # global array: window slider must be updated on the next timer event
+v065a           inactive_tmp                    # global array: new inactive flags while resizing
+v0660           reg_number                      # global: registration number from DS_DRAIN.REG
+v0662           ram_free_kb                     # global: install option, Kb left free (default 20)
+v0664           ram_reserve_kb                  # global: install option, Kb reserved (default 512)
+v0668           screen_max_x                    # global: WORK_OUT(0)
+v066a           screen_w                        # global: screen width
+v066c           screen_mid_x                    # global: screen centre x
+v066e           screen_max_y                    # global: WORK_OUT(1)
+v0670           screen_h                        # global: screen height
+v0672           screen_mid_y                    # global: screen centre y
+v0674           num_colours                     # global: number of colours (WORK_OUT 13)
+v0676           tos_version                     # global: TOS version word from the OS header
+v0678           aes_version                     # word; AES version from the global array
+v067a           col_mnemonic                    # global &: column of the mnemonic
+v067c           col_operands                    # global &: column of the operands
+v067e           col_comment                     # word; comment column (default 40)
+v0680           dc_line_len                     # word; max operand length of a dc line (default 40)
+v0682           dc_ascii_mode                   # global: 1 printable as ASCII, 2 all non-zero, 3 no ASCII in dc.b
+v0684           bpl_text                        # global: estimated bytes per source line for TEXT
+v0686           bpl_data                        # global: estimated bytes per source line for DATA
+v0688           bpl_bss                         # global: estimated bytes per source line for BSS
+v068a           font_idx                        # global: editor font size index 1 or 2
+v068c           window_kind                     # global: window gadgets 495 = name, closer, fuller, mover, sizer, arrows, vertical slider
+v068e           tree_menu                       # RSC tree 0: menu bar
+v0690           tree_about                      # RSC tree 1: About dialog
+v0692           tree_install                    # RSC tree 3: Installation dialog
+v0694           tree_prog_part                  # RSC tree 4: Load program part dialog
+v0696           tree_routine                    # RSC tree 5: Load routine dialog
+v0698           tree_ramrom                     # RSC tree 6: RAM/ROM area dialog
+v069a           tree_sysinfo                    # RSC tree 7: System info dialog
+v069c           tree_memory                     # RSC tree 8: Memory layout dialog
+v069e           tree_segments                   # RSC tree 9: Segment info dialog
+v06a0           tree_dis_opts                   # RSC tree 10: Disassembler options dialog
+v06a2           tree_asm_opts                   # RSC tree 11: Assembler customize dialog
+v06a4           tree_data_in_text               # RSC tree 12: Data range in text segment list dialog
+v06a6           tree_gem_traps                  # RSC tree 13: GEM traps dialog
+v06a8           tree_tos_traps                  # RSC tree 14: TOS traps dialog
+v06aa           tree_progress                   # global: resource tree index of the progress dialog (15)
+v06ac           tree_edit_opts                  # RSC tree 16: Editor options dialog
+v06ae           tree_find_text                  # RSC tree 17: Find text dialog
+v06b0           tree_symbols                    # RSC tree 18: Replaced symbols list dialog
+v06b2           tree_replace                    # RSC tree 19: Replace symbol dialog
+v06b4           tree_remark                     # RSC tree 20: Edit remark dialog
+v06b6           mi_about                        # menu item 11: About...
+v06b8           mi_ascii_load                   # menu item 20: Load ASCII...
+v06ba           mi_ascii_save                   # menu item 21: Save ASCII...
+v06bc           mi_help_load                    # menu item 24: Load help...
+v06be           mi_help_clear                   # menu item 25: Clear help
+v06c0           mi_settings_load                # menu item 27: Load settings...
+v06c2           mi_settings_save                # menu item 28: Save settings...
+v06c4           mi_installation                 # menu item 30: Installation...
+v06c6           mi_file_delete                  # menu item 32: Delete file...
+v06c8           mi_quit                         # menu item 34: Quit
+v06ca           mi_src_program                  # menu item 36: Source Program...
+v06cc           mi_src_prog_part                # menu item 37: Source Program part...
+v06ce           mi_src_routine                  # menu item 39: Source Routine...
+v06d0           mi_src_ramrom                   # menu item 40: Source RAM/ROM...
+v06d2           mi_src_resource                 # menu item 41: Source Resource...
+v06d4           mi_src_data                     # menu item 42: Source Data...
+v06d6           mi_sysinfo                      # menu item 44: System info...
+v06d8           mi_memory                       # menu item 45: Memory...
+v06da           mi_segment_info                 # menu item 47: Segment info...
+v06dc           mi_dis_options                  # menu item 48: Disassembler Options...
+v06de           mi_customization                # menu item 49: Customization...
+v06e0           mi_data_in_text                 # menu item 51: Data in Text...
+v06e2           mi_block_start                  # menu item 52: Block start
+v06e4           mi_block_end                    # menu item 53: Block end
+v06e6           mi_gem_traps                    # menu item 55: GEM traps...
+v06e8           mi_tos_traps                    # menu item 56: TOS traps...
+v06ea           mi_src_settings_load            # menu item 57: Load src settings...
+v06ec           mi_src_settings_save            # menu item 58: Save (source) settings...
+v06ee           mi_disassemble                  # menu item 60: Disassemble
+v06f0           mi_editor                       # menu item 62: Editor window
+v06f2           mi_help                         # menu item 63: Help window
+v06f4           mi_edit_options                 # menu item 65: Editor Options...
+v06f6           mi_text_size                    # menu item 66: Text size
+v06f8           mi_find_text                    # menu item 68: Find text...
+v06fa           mi_find_remark                  # menu item 69: Find remark
+v0700           mi_find_label                   # menu item 71: Find label
+v0702           mi_find_call                    # menu item 72: Find call
+v0704           mi_opcode_to_data               # menu item 79: Opcode->Data
+v0706           mi_edit_remark                  # menu item 80: Edit remark...
+v0708           mi_aes_number                   # menu item 82: AES number
+v070a           mi_vdi_number                   # menu item 83: VDI number
+v070c           mi_gemdos_number                # menu item 84: GEMDOS number
+v070e           mi_bios_number                  # menu item 85: BIOS number
+v0710           mi_xbios_number                 # menu item 86: XBIOS number (last menu object)
+v0718           obj_inst_keep_free              # global: Installation radio "keep free"
+v071a           obj_inst_keep_kb                # global: Installation field KB to keep free
+v071c           inst_reserve_radio              # Installation object 6: radio Kb reserved
+v071e           obj_inst_reserve_kb             # global: Installation field KB to reserve
+v0720           obj_inst_custom_objs            # global: Installation checkbox custom objects
+v0722           obj_inst_ok                     # global: Installation OK button
+v0724           pp_file                         # Program part object 4: file name
+v0726           pp_size_dec                     # Program part object 6: size decimal
+v0728           pp_size_hex                     # Program part object 7: size hex
+v072a           obj_part_start                  # global: Load part dialog start field
+v072c           obj_part_end                    # global: Load part dialog end field
+v072e           pp_ok                           # Program part object 12: OK
+v0730           pp_cancel                       # Program part object 11: Cancel
+v0732           rt_file                         # Routine object 4: file name
+v0734           rt_size_dec                     # Routine object 6: size decimal
+v0736           rt_size_hex                     # Routine object 7: size hex
+v0738           rt_load_all                     # Routine object 10: Load all
+v073a           obj_rout_range                  # global: Load routine radio range
+v073c           obj_rout_start                  # global: Load routine start field
+v073e           obj_rout_end                    # global: Load routine end field
+v0740           rt_ok                           # Routine object 16: OK
+v0742           rt_cancel                       # Routine object 15: Cancel
+v0744           obj_mem_start                   # global: memory disassembly start field
+v0746           obj_mem_end                     # global: memory disassembly end field
+v0748           obj_mem_origin                  # global: memory disassembly checkbox origin = start
+v074a           obj_mem_ok                      # global: memory disassembly OK
+v074c           rr_cancel                       # RAM/ROM object 8: Cancel
+v074e           si_tos_version                  # System info object 2: TOS version
+v0750           si_input_field                  # global: System info object, calculator input
+v0752           si_aes_version                  # System info object 5: AES version
+v0754           si_gemdos_version               # System info object 7: GEMDOS version
+v0756           si_result_field                 # global: System info object, result number
+v0758           si_ascii_field                  # global: System info object, result as ASCII / vector name
+v075a           si_blank_button                 # System info object 10: button without text
+v075c           si_hex_btn                      # global: System info radio button, hex
+v075e           si_dec_btn                      # global: System info radio button, decimal
+v0760           si_cpu_vector                   # System info object 14: CPU vector
+v0762           si_calculate                    # System info object 15: calculate
+v0764           si_ok                           # System info object 16: OK
+v0766           si_kbd_vector                   # System info object 17: KBD vector
+v0768           si_get_byte                     # System info object 18: get byte
+v076a           si_tos_base                     # System info object 19: TOS base
+v076c           si_get_word                     # System info object 20: get word
+v076e           si_linea_init                   # System info object 21: LINEA init
+v0770           si_get_long                     # System info object 22: get long
+v0772           mem_relative                    # Memory object 1: radio Relative
+v0774           obj_lay_bpl_text                # global: Memory layout bytes per line TEXT
+v0776           obj_lay_bpl_data                # global: Memory layout bytes per line DATA
+v0778           obj_lay_bpl_bss                 # global: Memory layout bytes per line BSS
+v077a           obj_lay_fixed                   # global: Memory layout radio fixed line count
+v077c           obj_lay_fixed_lines             # global: Memory layout fixed line count field
+v077e           mem_lines_used                  # Memory object 13: lines used
+v0780           mem_lines_max                   # Memory object 15: lines available
+v0782           mem_free                        # Memory object 18: free memory
+v0784           mem_line_usage                  # Memory object 21: line usage bytes
+v0786           mem_maximum                     # Memory object 24: maximum memory
+v0788           mem_speed                       # Memory object 27: translation speed li/min
+v078a           mem_ok                          # Memory object 30: OK
+v078c           seg_file                        # Segments object 4: file name
+v078e           seg_size_dec                    # Segments object 6: size decimal
+v0790           seg_size_hex                    # Segments object 7: size hex
+v0792           seg_text_dec                    # Segments object 9: TEXT decimal
+v0794           seg_text_hex                    # Segments object 10: TEXT hex
+v0796           seg_data_dec                    # Segments object 12: DATA decimal
+v0798           seg_data_hex                    # Segments object 13: DATA hex
+v079a           seg_bss_dec                     # Segments object 15: BSS decimal
+v079c           seg_bss_hex                     # Segments object 16: BSS hex
+v079e           seg_symb_dec                    # Segments object 18: SYMB decimal
+v07a0           seg_symb_hex                    # Segments object 19: SYMB hex
+v07a2           dis_tab_standard                # Disassembler options object 3: Standard tabulator
+v07a4           obj_dis_tabs                    # global: Disassembler radio tab layout
+v07a6           obj_dis_compact                 # global: Disassembler radio compact layout
+v07a8           obj_dis_small_dec               # global: Disassembler checkbox small immediates decimal
+v07aa           obj_dis_ascii_1                 # global: Disassembler radio dc.b ASCII printable
+v07ac           obj_dis_ascii_2                 # global: Disassembler radio dc.b ASCII all non-zero
+v07ae           obj_dis_ascii_3                 # global: Disassembler radio dc.b no ASCII
+v07b0           obj_dis_col_mnemonic            # global: Disassembler mnemonic column field
+v07b2           obj_dis_col_operand             # global: Disassembler operand column field
+v07b4           obj_dis_dc_hex                  # global: Disassembler checkbox dc values hex
+v07b6           obj_dis_col_comment             # global: Disassembler comment column field
+v07b8           obj_dis_dc_width                # global: Disassembler dc line width field
+v07ba           obj_dis_symbols                 # global: Disassembler checkbox symbol table
+v07bc           obj_dis_help_comments           # global: Disassembler checkbox help comments
+v07be           obj_dis_bss_size                # global: Disassembler checkbox ds size comment
+v07c0           obj_dis_hex_labels              # global: Disassembler checkbox hex labels
+v07c4           dis_mc68010                     # Disassembler options object 8: MC68010
+v07c6           dis_ok                          # Disassembler options object 55: OK
+v07c8           dis_cancel                      # Disassembler options object 54: Cancel
+v07ca           dis_mc68020                     # Disassembler options object 11: MC68020
+v07cc           ac_text                         # Assembler customize object 2: TEXT
+v07ce           obj_asm_sect_2                  # global: Assembler radio section style 2
+v07d0           obj_asm_sect_1                  # global: Assembler radio section style 1
+v07d2           obj_asm_sect_3                  # global: Assembler radio section style 3
+v07d4           ac_abs_word                     # Assembler customize object 7: $xxxx.w
+v07d6           obj_asm_bcc_s                   # global: Assembler radio short branch .s
+v07d8           ac_bcc_short                    # Assembler customize object 10: b??/.s
+v07da           obj_asm_bra_w                   # global: Assembler radio word branch .w
+v07dc           ac_muldiv                       # Assembler customize object 13: mul?/div?
+v07de           obj_asm_div_w                   # global: Assembler radio divs.w
+v07e0           ac_moveq                        # Assembler customize object 16: moveq
+v07e2           obj_asm_moveq_l                 # global: Assembler radio moveq.l
+v07e4           ac_ds                           # Assembler customize object 25: ds.?
+v07e6           obj_asm_ds_1                    # global: Assembler radio ds style 1
+v07e8           obj_asm_ds_2                    # global: Assembler radio ds style 2
+v07ea           obj_asm_ds_3                    # global: Assembler radio ds style 3
+v07ec           obj_asm_ok                      # global: Assembler OK
+v07ee           ac_cancel                       # Assembler customize object 32: Cancel
+v07f0           dt_from                         # Data in text object 4: from field
+v07f2           dt_to                           # Data in text object 5: to field
+v07f4           dt_list_box                     # Data in text object 6: list box
+v07f6           dt_row_0                        # Data in text object 7: list row 1
+v07f8           dt_row_1                        # Data in text object 8: list row 2
+v07fa           dt_row_2                        # Data in text object 9: list row 3
+v07fc           dt_row_3                        # Data in text object 10: list row 4
+v07fe           dt_row_4                        # Data in text object 11: list row 5
+v0800           dt_row_5                        # Data in text object 12: list row 6
+v0808           dt_arrow_up                     # Data in text object 20: up arrow
+v080a           dt_slider_track                 # Data in text object 21: slider track
+v080c           dt_slider                       # Data in text object 22: slider
+v080e           dt_arrow_down                   # Data in text object 23: down arrow
+v0810           dt_entry_activate               # Data in text object 25: Entry activate
+v0812           dt_entry_clear                  # Data in text object 26: Entry clear
+v0814           dt_entry_goto                   # Data in text object 27: Entry goto
+v0816           dt_field_clear                  # Data in text object 14: Field clear
+v0818           dt_field_activate               # Data in text object 15: Field activate
+v081a           dt_length                       # Data in text object 16: length field
+v081c           dt_ok                           # Data in text object 29: OK
+v081e           obj_gem_aes                     # global: GEM traps checkbox AES comments
+v0820           obj_gem_aes_trap                # global: GEM traps AES trap pattern
+v0822           obj_gem_aes_reg                 # global: GEM traps AES register pattern
+v0824           obj_gem_aes_func                # global: GEM traps AES function pattern
+v0826           obj_gem_aes_ctrl                # global: GEM traps checkbox AES by control array
+v0828           obj_gem_vdi                     # global: GEM traps checkbox VDI comments
+v082a           obj_gem_vdi_trap                # global: GEM traps VDI trap pattern
+v082c           obj_gem_vdi_reg                 # global: GEM traps VDI register pattern
+v082e           obj_gem_vdi_func                # global: GEM traps VDI function pattern
+v0830           obj_gem_vdi_sub                 # global: GEM traps VDI sub-opcode byte field
+v0832           obj_gem_lines                   # global: GEM traps lines to search back
+v0834           gt_ok                           # GEM traps object 17: OK
+v0836           obj_tos_search                  # global: TOS traps checkbox search back
+v0838           obj_tos_stack_pat               # global: TOS traps push pattern
+v083a           obj_tos_reg_pat                 # global: TOS traps register pattern
+v083c           obj_tos_stack                   # global: TOS traps checkbox parse stack pushes
+v083e           obj_tos_on                      # global: TOS traps checkbox comments on
+v0840           obj_tos_gemdos                  # global: TOS traps GEMDOS trap pattern
+v0842           obj_tos_bios                    # global: TOS traps BIOS trap pattern
+v0844           obj_tos_xbios                   # global: TOS traps XBIOS trap pattern
+v0846           obj_tos_func1                   # global: TOS traps function pattern 1
+v0848           obj_tos_func2                   # global: TOS traps function pattern 2
+v084a           obj_tos_lines                   # global: TOS traps lines to search back
+v084c           tt_ok                           # TOS traps object 16: OK
+v084e           pg_text_label                   # Progress object 2: TEXT segment label
+v0850           pg_dit_label                    # Progress object 9: DATA in TEXT label
+v0852           pg_data_label                   # Progress object 10: DATA segment label
+v0854           pg_bss_label                    # Progress object 11: BSS segment label
+v0856           pg_label_label                  # Progress object 12: Label label
+v0858           pg_text_box                     # Progress object 4: TEXT colour box
+v085a           pg_dit_box                      # Progress object 5: DATA in TEXT colour box
+v085c           pg_data_box                     # Progress object 6: DATA colour box
+v085e           pg_bss_box                      # Progress object 7: BSS colour box
+v0860           pg_label_box                    # Progress object 8: Label colour box
+v0862           obj_ed_small_font               # global: Editor options small font
+v0864           obj_ed_align_x                  # global: Editor options window x alignment
+v0866           obj_ed_zoom                     # global: Editor options grow/shrink effects
+v0868           obj_ed_dlg_mouse                # global: Editor options dialogs at mouse
+v086a           obj_ed_selector_ext             # global: Editor options extended file selector
+v086c           obj_ed_addresses                # global: Editor options show addresses
+v086e           obj_ed_hex                      # global: Editor options hex numbers
+v0870           obj_ed_hl_jumps                 # global: Editor options highlight jumps
+v0872           obj_ed_hl_calls                 # global: Editor options highlight calls
+v0874           obj_ed_hl_branches              # global: Editor options highlight branches
+v0876           eo_ok                           # Editor options object 32: OK
+v0878           ft_history_up                   # Find text object 3: history up arrow
+v087a           ft_history_down                 # Find text object 4: history down arrow
+v087c           obj_find_entry                  # global: Find dialog history entry number
+v087e           obj_find_text                   # global: Find dialog pattern field
+v0880           obj_find_nocase                 # global: Find dialog ignore case
+v0882           obj_find_start                  # global: Find dialog button line starts with
+v0884           obj_find_contains               # global: Find dialog button line contains
+v0886           ft_cancel                       # Find text object 11: Cancel
+v0888           rs_adr                          # Replaced symbols object 3: address field
+v088a           rs_list_box                     # Replaced symbols object 5: list box
+v088c           rs_row_0                        # Replaced symbols object 6: list row 1
+v088e           rs_row_1                        # Replaced symbols object 7: list row 2
+v0890           rs_row_2                        # Replaced symbols object 8: list row 3
+v0892           rs_row_3                        # Replaced symbols object 9: list row 4
+v0894           rs_row_4                        # Replaced symbols object 10: list row 5
+v0896           rs_row_5                        # Replaced symbols object 11: list row 6
+v089e           rs_symbol                       # Replaced symbols object 4: symbol field
+v08a0           rs_insert                       # Replaced symbols object 27: Source table insert
+v08a2           rs_append                       # Replaced symbols object 28: Source table append
+v08a4           rs_arrow_up                     # Replaced symbols object 19: up arrow
+v08a6           rs_slider_track                 # Replaced symbols object 20: slider track
+v08a8           rs_slider                       # Replaced symbols object 21: slider
+v08aa           rs_arrow_down                   # Replaced symbols object 22: down arrow
+v08ac           rs_entry_clear                  # Replaced symbols object 24: Entry clear
+v08ae           rs_entry_goto                   # Replaced symbols object 25: Entry goto
+v08b0           rs_field_clear                  # Replaced symbols object 15: Field clear
+v08b2           rs_field_activate               # Replaced symbols object 13: Field activate
+v08b4           rs_length                       # Replaced symbols object 14: length field
+v08b6           rs_ok                           # Replaced symbols object 31: OK
+v08b8           obj_ren_old                     # global: rename dialog old name
+v08ba           obj_ren_new                     # global: rename dialog new name
+v08bc           rp_ok                           # Replace symbol object 6: OK
+v08be           obj_cmt_text                    # global: comment dialog text field
+v08c0           er_ok                           # Edit remark object 5: OK
+v08c2           dummy                           # global: unused AES return values
+v08c4           cell_box_h                      # global: character box height from GRAF_HANDLE (menu bar height)
+v08d0           event_flags                     # global: EVNT_MULTI result
+v08d2           keypress_code                   # global: key from EVNT_MULTI, then scan code*256 + shift state
+v08d4           mbar_title                      # global: menu title of the selected item
+v08d6           chosen_item                     # global: menu item of the last menu event (0 = none)
+v08d8           vis_rows                        # global: visible text rows of the current window
+v08da           scan_code                       # global: scan code of the key being handled
+v08dc           work_x                          # global: work area x
+v08de           work_y                          # global: work area y
+v08e0           work_w                          # global: work area width
+v08e2           work_h                          # global: work area height
+v08e4           row_h                           # global: text row height in pixels
+v08e6           rows_to_draw                    # global: number of rows drawn by win_draw_area
+v08e8           font_count                      # global: number of font sizes found
+v08f2           cpu_mask                        # global &: CPU selection bits: 1=68010 2=68020 4=68030 8=68040
+v08f4           colon_pos                       # global: position of the label colon
+v08f6           lbl_slot                        # global: index into the user label table
+v08f8           os_version_rom                  # global: compared with 260 for the ROM size, never set
+v08fa           parse_char                      # global: character code while parsing the calculator input
+v08fc           term_count                      # global: last calculator term index
+v08fe           term_idx                        # global: loop over calculator terms
+v0900           mk_dummy                        # global: unused GRAF_MKSTATE values
+v0902           track_mouse_y                   # global: mouse y in the slider track loop
+v0904           slider_y                        # global: slider object y
+v090e           click_x                         # global: mouse x of a click in proc_0bd3c
+v0910           click_y                         # global: mouse y of a click in proc_0bd3c
+v0912           first_edit_obj                  # global: edit object the custom form_do starts in
+v0914           cur_edit_obj                    # global: current edit object in proc_0c074
+v0916           item_box_x                      # global: centre x of the menu item for the move box
+v0918           item_box_y                      # global: centre y of the menu item for the move box
+v091a           redraw_x                        # global: object x for proc_0c6e0
+v091c           redraw_y                        # global: object y for proc_0c6e0
+v091e           obj_type                        # global: ob_type of the object being written
+v0920           update_count                    # global: nested BEG_UPDATE count
+v0922           absolute_flag                   # word; header ABSFLAG (non-zero = no relocation table)
+v0924           area_idx                        # word; current data-area list entry
+v0926           op_line                         # word; opcode bits 12-15
+v0928           first_ext_word                  # global &: first extension word of the instruction
+v092c           ea_reg                          # global &: EA register field (0-7) for ea_text_build
+v0934           sysvar_count                    # global: last system variable table index
+v0936           os_gemdos_max                   # global: highest GEMDOS number in the table
+v0938           os_bios_max                     # global: highest BIOS number
+v093a           os_xbios_max                    # global: highest XBIOS number
+v093c           aes_max                         # global: highest AES number
+v093e           pos_in_long                     # global: byte position in a long
+v0940           vdi_count                       # global: last VDI table index
+v0944           linea_max                       # global: highest line-A number
+v0946           area_index                      # global: data area index
+v094c           timer_ms                        # global: About box event timer in ms
+v0950           obj_inst_restart                # global: Installation Restart button
+v0952           inst_cancel                     # Installation object 14: Cancel
+v0954           mi_launch                       # menu item 31: Launch program...
+v0956           about_date                      # About object 5: date string
+v0958           release_date_bcd                # global: release date as BCD word, 2452 = $0994 = 09.94
+v095a           about_version                   # About object 4: version string
+v095c           source_item                     # global: checked source-type menu item
+v0962           mi_replaced_symbols             # menu item 74: Replaced symbols...
+v0964           mi_replace_symbol               # menu item 75: Replace symbol...
+v0966           mi_replace_this_sym             # menu item 76: Replace this symbol...
+v0968           mi_replace_this_label           # menu item 77: Replace this label...
+v096e           dis_mc68030                     # Disassembler options object 15: MC68030 (part)
+v0970           dis_mc68040                     # Disassembler options object 18: MC68040 (part)
+v0972           obj_dis_const_byte              # global: Disassembler checkbox strict byte constants
+v0974           obj_dis_moveq_signed            # global: Disassembler checkbox moveq signed
+v0978           par_version                     # word; version word read from a .PAR file
+v0980           ac_movem_range                  # Assembler customize object 19: movem D0-A7
+v0982           obj_asm_movem_1                 # global: Assembler radio movem list style on
+v0984           obj_dis_coprocessor             # global: Disassembler checkbox coprocessor opcodes
+v0986           ac_linea_num                    # Assembler customize object 22: linea #x
+v0988           obj_asm_linea_dc                # global: Assembler radio Line-A as dc.w
+v098c           fp_sign                         # global: sign +1/-1 of an extended real
+v098e           obj_dis_tab_chars               # global: Disassembler checkbox save with TABs
+v0990           obj_dis_tab_width               # global: Disassembler tab width field
+v0992           tree_file_opts                  # RSC tree 2: File options dialog
+v0994           mi_file_options                 # menu item 22: File options...
+v0996           obj_file_store                  # global: File options fast STORE save
+v0998           obj_file_zla_save               # global: File options save .ZLA
+v099a           obj_file_zla_load               # global: File options load .ZLA
+v099c           fo_cancel                       # File options object 12: Cancel
+v099e           fo_ok                           # File options object 13: OK
+v09a0           obj_file_qed                    # global: File options QED-ASMPAR header
+v09a2           obj_lay_apply                   # global: Memory layout button reallocate arrays
+v09a4           obj_asm_opt_on                  # global: Assembler radio OPT directive
+v09a6           ac_semicolon                    # Assembler customize object 31: ; ...
+v09a8           dt_new_length                   # Data in text object 17: new length
+v09aa           rs_new_length                   # Replaced symbols object 16: new length
+v09b4           track_button                    # global: mouse button in the slider track loop
+v09b6           top_row                         # global: top entry index (copy) in the list editor
+v09b8           lst_size                        # global: array size of the current list
+v09ba           lst_idx                         # global: loop index over list entries
+v09be           top_max                         # global: largest top entry index (size - 6)
+v09c0           about_reg_text                  # About object 7: registration number and name
+v09c4           cell_x                          # global: About box cell x
+v09c6           cell_y                          # global: About box cell y
+v09c8           grid_cols                       # global: About box grid columns
+v09ca           cell_w                          # global: About box cell width
+v09cc           cell_h                          # global: About box cell height
+v09ce           mctrl_count                     # global: nested BEG_MCTRL count
+v09d0           wdialog_cur                     # global: number of the current window dialog (-1 none)
+v09d6           wdialog_w                       # global: window dialog width
+v09d8           wdialog_h                       # global: window dialog height
+v09da           keep_editing                    # global: FORM_KEYBD/FORM_BUTTON continue flag
+v09dc           wdialog_edit                    # global: edit object of the window dialog
+v09e0           wdialog_cursor_idx              # global: edit cursor index of the window dialog
+v09e2           evnt_clicks                     # global: number of mouse clicks from EVNT_MULTI
+v09e4           wdialog_handle                  # global: window handle of the window dialog (<=0 none)
+v09e6           progress_bar                    # global: bar object of the current progress step
+v09e8           pg_bar                          # Progress object 3: progress bar box
+v09ea           vdi_sub_byte                    # global: byte index of the VDI sub-opcode in the found value
+v09eb           gem_search_lines                # global: lines searched back for a GEM function number
+v09ec           tos_search_lines                # global: lines searched back for a TOS function number
+v09ed           lst_sel                         # global: which list the editor works on (0 data areas, 1 labels)
+v09f0           section_style                   # global: section directive style 0-3 (TEXT/CODE ...)
+v09f1           ds_style                        # global: ds directive style 0-3 (ds/blk ...)
+v09f2           find_hist_idx                   # global: current Find history entry 0-9
+v09f3           window_count                    # global: loop counter over the two windows
+v09f4           reg_low                         # global |: register field bits 0-2 (Ry); FPU destination register
+v09f5           reg_high                        # global |: register field bits 9-11 (Rx); FPU source specifier
+v09f6           ea_mode_bits                    # global |: opcode bits 3-5 (EA mode field / sub-opcode)
+v09f7           quick_data                      # global |: addq/subq data 1-8
+v09f8           op_kind                         # global |: bitfield/shift type (bits 8-10) or FPU opclass (ext bits 13-15)
+v09f9           gem_opcode                      # global: first non-zero byte of the AES/VDI number long
+v09fa           vdi_subop                       # global: sub-opcode from the VDI table
+v09fb           dc_byte                         # global: byte read for dc; VDI table opcode
+v09fc           label_pass                      # global: 0 symbol table, 1 user labels
+v09fe           prev_open_windows               # global: bits of the windows open before Launch program
+v09ff           mbar_last_window                # global: active window when the menu was last updated
+v0a02           imm_size                        # global |: immediate size code for ea_text_build (0/1/2, 16-23 FPU formats)
+v0a03           following_char                  # global: second operand character being tested
+v0a04           cp_type                         # global |: coprocessor instruction type, opcode bits 6-8
+v0a05           cp_id                           # global |: coprocessor ID, opcode bits 9-11
+v0a07           fpu_opmode                      # global |: FPU ext word bits 0-6 (opmode, ROM offset, k-factor)
+v0a08           fpu_low3                        # global |: low 3 bits (FTRAPcc mode / FDBcc register)
+v0a09           sym_type_hi                     # byte; DRI symbol type high byte
+v0a0a           sym_type_lo                     # byte; symbol type low byte ($48 = GST long name)
+v0a0c           tabsize                         # byte; tab width for load/save
+v0a0e           title_buffer                    # global array: window title strings (editor at 0, help at 40, dialog at 80)
+v0a14           saved_window_pos                # global array: per window flag, x, y, w, h scaled to 32766, from the INF file
+v0a20           lst_cur                         # global array (0-1): selected entry of each list
+v0a26           lst_top                         # global array (0-1): top visible entry of each list
+v0a2c           lst_dim                         # global array (0-1): array size of each list
+v0a32           lst_dim_set                     # global array (0-1): size the user set for each list
+v0a38           window_handle                   # global array: AES handles of the editor and help windows
+v0a3e           progress_objs                   # global array: progress dialog legend objects, (0,n) labels, (1,n) colour boxes
+v0a44           lst_objs                        # global array: list editor objects per list (rows, tree, fields, buttons)
+v0a4a           sysvar_addrs                    # global array: system variable addresses
+v0a50           code_buf                        # word(); loaded bytes
+v0a5c           vdi_codes                       # global array: VDI opcode + sub-opcode*256
+v0a62           font_table                      # global array (n,0) char height, (n,1) row height of font size n
+v0a7a           cpu_objs                        # global array: Disassembler options CPU check boxes 68010-68040
+v0a80           ea_class_masks                  # global &(): allowed EA modes per class: bits 0-6 modes 0-6, bits 7-11 mode 7 regs 0-4
+v0a92           wdialog_x                       # global array: remembered x of each window dialog
+v0a98           wdialog_y                       # global array: remembered y of each window dialog
+v0a9e           wdialog_edits                   # global array: remembered edit object of each window dialog

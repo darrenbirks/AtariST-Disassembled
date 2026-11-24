@@ -1,0 +1,2662 @@
+@ main
+' Desert Drain 1.57 (09.94), a 680x0 disassembler for the Atari ST/STE by Volker Hemsen, written in
+' GFA BASIC 3 with assembler INLINE routines.  It loads a program, program part, routine, RAM/ROM area,
+' resource or data file, disassembles it into an editor window (with labels, DATA-in-TEXT ranges, replaced
+' symbols and GEM/TOS trap names from the help file DS_HILFE.TXT) and saves the source as ASCII.
+' Files: DS_DRAIN.RSC resource, DS_DRAIN.INF settings, DS_DRAIN.REG registration, *.PAR source settings.
+' The main program sets up, loads a file named on the command line, then runs the event loop until an
+' Installation restart is asked for, saves the settings, clears everything and starts over.
+'
+' The texts of this source are German, as the program was compiled.  The distributed DS_DRAIN.PRG is that
+' compile with its texts translated to English in the program file, each in the room of its German text, and
+' its library's error texts too: DS_DRAIN.PAT holds those bytes (see README.txt).
+'
+' Rebuilt from DS_DRAIN.PRG by Darren Birks, 24 November 2026.  GFA BASIC Compiler 3.03 D (a build with
+' 3.03 E's code generator, gfadec's "3.03 D late synthetic") with the patched GFA3BLIB:
+'   gfadec -compile DS_DRAIN.GFA DS_DRAIN.PRG -compiler "3.03 D late synthetic" -patch DS_DRAIN.PAT
+'
+^ INLINE value%,60
+' 60-byte INLINE buffer used as the disk transfer address
+^ ~GEMDOS(26,L:value%)
+! Fsetdta
+^ command_line$=CHAR{129+BASEPAGE}
+! command line text from the basepage
+^ IF LEN(command_line$)
+' A file name on the command line (the last word) is loaded at once; "%D" also disassembles it and shows
+' the editor window
+^ program_load(0)
+! load the program without a file selector
+^ command_execute(mi_disassemble&)
+! menu Disassemble
+^ command_execute(mi_editor&)
+! menu Editor
+^ REPEAT
+' Event loop; it ends only when Installation asks for a restart
+^ DEFMOUSE 2
+' Restart: save the settings, close windows and dialogs, clear all variables and set up again
+^ inf_save(0)
+! save DS_DRAIN.INF without a file selector
+^ gem_shutdown
+! close the window dialog and both windows
+^ END
+! never reached
+
+@ PROCEDURE program_init
+' Start-up and restart initialisation.  Sets version and date, finds the program folder, reads the
+' registration file (quits without it), installs the error handler, reads the install part of
+' DS_DRAIN.INF and reserves memory accordingly, DIMs the global arrays, reads screen, TOS and AES data,
+' sets up the INLINE routines and the option defaults, loads the resource, creates the two windows,
+' reads the rest of the INF file, loads the help file and reopens the windows saved in the INF file.
+^ version_bcd&=343
+! version $157 = 1.57 as BCD
+^ release_date_bcd&=2452
+! date $0994 = 09.94 as BCD
+^ program_folder$=@env_lookup$("DS_DRAIN")
+! folder the program was started from
+^ IF @path_locate(work_str$)<>0
+' DS_DRAIN.REG: a word with the registration number, then the encoded user name ending in a zero byte
+^ PRINT "program access not possible !"
+' Without the registration file the program waits for a key and ends
+^ ON ERROR GOSUB fault_handler
+^ ON BREAK CONT
+! Control-Shift-Alternate does not stop the program
+^ vdi_text_align(0,3)
+! vst_alignment: text left aligned, bottom line
+^ reserve_keep_free!=TRUE
+' Install defaults: leave 20 Kb free (or reserve 512 Kb), extended dialogs on
+^ ~@path_locate(inf_path$)
+! puts the folder in front of DS_DRAIN.INF
+^ inf_read_head
+! reads the install part of DS_DRAIN.INF
+^ IF reserve_keep_free!
+' RESERVE with a negative size leaves that many Kb free for other programs; a positive one keeps that
+' many Kb for the program itself
+^ files_dir$=@current_dir_path$+"files\"
+! default folder for the .PAR source settings files
+^ DIM userblk_check%(1)
+' Global arrays: USERBLKs, window title buffer, saved window positions, find history, menu enable states,
+' font metrics, list dialog state, dialog positions
+^ screen_max_x&=RINSTR(0)
+' Screen size and centre from the workstation, number of colours
+^ tos_version&=INT{LPEEK(1266)+2}
+! TOS version from the OS header at _sysbase ($4F2)
+^ aes_version&=INT{LONG{GB+4}}
+! AES version from global[0]
+^ DIM vdi_pb%(4)
+' Addresses of the VDI arrays, passed to the INLINE text routines and the USERDEF code
+^ INLINE gtext_lines_code%,126
+! draws a range of help/editor lines with v_gtext
+^ INLINE asm_draw_text%,66
+! draws one string with v_gtext
+^ INLINE userdef_code%,470
+! USERDEF drawing for extended check boxes and radio buttons
+^ LONG{userdef_code%+6}=V:vdi_pb%(0)
+! the USERDEF code finds the VDI arrays here
+^ INLINE bitfield_code%,34
+! bit field extract: (word >> start) AND (2^width-1)
+^ INLINE linea_init_code%,28
+! Line-A init, returns one of the three Line-A table addresses
+^ fast_save!=TRUE
+' Option defaults; DS_DRAIN.INF and the .PAR files overwrite them
+^ col_mnemonic&=16
+! tab columns: instruction 16, operand 24, remark 40
+^ cpu_mask&=0
+! no 68010-68040 instructions
+^ lst_dim_set&(0)=50
+! both list tables 50 entries, Field not active
+^ bpl_text&=3
+! relative memory: TEXT 3, DATA 10, BSS 6 bytes per editor line
+^ fixed_line_count%=25000
+! absolute memory: 25000 editor lines
+^ aes_reg_pat$=",D0"
+' GEM traps: AES identified by ",D0", VDI by ",D1", Supopcode byte 2, examine 3 lines back
+^ tos_stack_pat$=",-(SP)"
+' TOS traps: identified by ",-(SP)" or ",D0", examine 2 lines back
+^ font_sizes_scan
+! reads the character and line heights of the system font sizes
+^ IF screen_max_y&>200
+' Large font on screens higher than 200 lines
+^ window_kind&=495
+! window gadgets: name, closer, fuller, mover, sizer, arrows, vertical slider
+^ rsc_init
+! loads and fixes up DS_DRAIN.RSC
+^ mnemonic_tables_init
+! builds name tables from DATA lines
+^ FOR win_idx|=FALSE TO 1
+' Creates the editor window (0) and the help window (1) with the whole screen below the menu bar as maximum
+^ screen_redraw
+! full-screen redraw
+^ inf_read_rest
+! reads the rest of DS_DRAIN.INF
+^ code_loaded!=FALSE
+! was the INF-valid flag; no code is loaded yet
+^ ~@path_locate(help_path$)
+' Loads the help file without a file selector and reopens the windows saved in the INF file
+^ lst_dim&(0)=lst_dim_set&(0)
+' DIMs the DATA-in-TEXT range table and the replaced-symbol table at their set lengths
+^ memory_max%=FRE(0)
+! free memory, shown as maximum memory in the Memory dialog
+
+@ PROCEDURE reg_name_decode
+' Decodes the registration name read from DS_DRAIN.REG, in place.
+' work_str$: encoded string of words; each word gives one character.  The key starts at 0 and becomes
+' 4660 + (word - key) for each word; its low byte is the character.  The result is half as long.
+^ FOR loop_i&=0 TO LEN(work_str$)-2 STEP 2
+^ rect_w&=4660+(INT{loop_i&+V:work_str$}-rect_w&)
+! 4660 = $1234
+^ work_str$=LEFT$(work_str$,SHR(LEN(work_str$),1))
+! keep the decoded half
+
+@ PROCEDURE rsc_init
+' Loads DS_DRAIN.RSC.  When it is not found the user may locate it with the file selector; cancelling or a
+' defective file ends the program.  The object constants and tables are set only on the first start
+' (progress_objs&() is not DIMmed yet), then the trees are fixed up and the menu bar is shown.
+^ IF @path_locate(rsc_file$)=0
+^ IF RSRC_LOAD(rsc_file$)=0
+^ IF DIM?(progress_objs&())=0
+! first start, not a restart
+^ rsc_objects_fix
+
+@ PROCEDURE rsc_constants_set
+' Sets the tree indices and object indices of DS_DRAIN.RSC, as a resource editor would list them.
+' Trees 0-20 first, then the objects of each tree in tree order.
+^ tree_menu&=0
+' Tree indices: 0 menu, 1 About, 2 File options, 3 Installation, 4 Program part, 5 Routine, 6 RAM/ROM,
+' 7 System info, 8 Memory, 9 Segments, 10 Disassembler options, 11 Assembler customize, 12 DATA in TEXT,
+' 13 GEM traps, 14 TOS traps, 15 progress, 16 Editor options, 17 Find text, 18 Replaced symbols,
+' 19 Replace symbol, 20 Edit remark
+^ mi_about&=11
+' Menu items: File 11-34, Source 36-45, Disassembler 47-60, Editor 62-72, Process 74-86
+^ mi_src_program&=36
+' Source menu: Program, Program part, Routine, RAM/ROM, Resource, Data, System info, Memory
+^ mi_segment_info&=47
+' Disassembler menu: Segment info, Options, Customization, Data in Text, Block start/end, GEM/TOS traps,
+' source settings, Disassemble
+^ mi_editor&=62
+' Editor menu: Editor, Help, Options, Text size, find text/remark/label/call
+^ mi_replaced_symbols&=74
+' Process menu: replaced symbols, replace symbol/label, Opcode->Data, Edit remark, trap numbers
+^ about_version&=4
+' About: version, date, registration text
+^ obj_file_store&=2
+' File options: STORE, line address files on save and load, ASCII options, Cancel, OK
+^ obj_inst_keep_free&=3
+' Installation: Kb free / Kb reserved radio buttons and fields, Extended dialogs, Restart, OK, Cancel
+^ pp_file&=4
+' Load program part: file, size, from, to, Cancel, OK
+^ rt_file&=4
+' Load routine: file, size, Load all / Load part, from, to, Cancel, OK
+^ obj_mem_start&=3
+' RAM/ROM area: start, end, Absolute addresses, OK, Cancel
+^ si_tos_version&=2
+' System info: TOS/AES/GEMDOS versions and the calculator with its buttons
+^ mem_relative&=1
+' Memory: relative bytes per line or absolute lines, usage figures, speed, OK, Install
+^ seg_file&=4
+' Segment info: file, size and TEXT/DATA/BSS/symbol sizes in decimal and hex
+^ dis_tab_standard&=3
+' Disassembler options: tabulator kind, CPUs, tab columns, data, generation, text and BSS options
+^ ac_text&=2
+' Assembler customize: section, absolute short, branch size, mul/div, moveq, movem, linea, ds, OPT, remark
+^ dt_from&=4
+' DATA in TEXT list: from, to, six list rows, Field and Entry buttons, arrows and slider, OK
+^ obj_gem_aes&=1
+' GEM traps: AES and VDI identification, Lattice C, Supopcode byte, lines to examine
+^ obj_tos_search&=1
+' TOS traps: straight trap #X, identification texts, routine labels, lines to examine
+^ pg_text_label&=2
+' Progress dialog: bar and legend labels and colour boxes
+^ obj_ed_small_font&=2
+' Editor options: font, turbo window, boxes, file selector, line addresses, colours
+^ ft_history_up&=3
+' Find text: history arrows and number, text, lower=UPPER, Line start, Line, Cancel
+^ rs_adr&=3
+' Replaced symbols list: address, symbol, six list rows, Field and Entry buttons, insert/append, OK
+^ obj_ren_old&=3
+' Replace symbol: Replace, with, OK
+^ obj_cmt_text&=3
+' Edit remark: text, OK
+
+@ PROCEDURE rsc_tables_set
+' Builds object tables so that common code can drive similar dialogs.
+' progress_objs&(0,n)/(1,n): progress dialog legend labels and colour boxes (TEXT, DATA in TEXT, DATA, BSS, Label).
+' lst_objs&(0,n)/(1,n): list dialog objects for the DATA-in-TEXT (0) and replaced-symbols (1) dialogs:
+' 0-5 list rows, 6 tree, 7-8 fields, 9-12 arrows and slider, 13-15 Entry buttons, 16-19 Field buttons,
+' 22 OK, 23-24 insert/append, 25 list box.  cpu_objs&(): CPU check boxes 68010, 68020, 68030, 68040.
+^ DIM progress_objs&(1,4)
+^ DIM lst_objs&(1,25)
+^ lst_objs&(1,0)=rs_row_0&
+' Replaced symbols has no Entry activate (13) but has insert/append (23, 24)
+^ DIM cpu_objs&(3)
+
+@ PROCEDURE rsc_objects_fix
+' Fixes up the resource trees 0-19 after loading; tree 20 (Edit remark) is left out, so its picture is not
+' halved in low resolution and its extended type bits stay set.
+' Extended object types (high byte of ob_type): in the menu bit 6 marks items whose enable state is managed;
+' 110, 111 and 120 become USERDEF check boxes and radio buttons when Extended dialogs is on; 1-3 make the
+' object one pixel narrower and/or lower.  On screens with a character height below 16 every picture is
+' halved in height.  Finally the menu bar is shown and the menu enable states are updated.
+^ ~GRAF_HANDLE(dummy&,sys_char_h&,dummy&,cell_box_h&)
+! character height and box height
+^ userblk_check%(0)=userdef_code%+INT{userdef_code%}
+' USERBLKs for the three USERDEF kinds; the INLINE code starts with a table of their offsets
+^ ARRAYFILL mbar_enabled!(),0
+^ FOR tree_no&=0 TO 19
+^ ext_type&=SHR&(OB_TYPE(tree_addr%,object_no&),8)
+! extended object type
+^ IF tree_no&=0 AND BTST(ext_type&,6)
+' Managed menu item: marked enabled so that the first update disables it as needed
+^ IF ext_type&>=110
+' Extended check/radio button: USERDEF with extended dialogs, otherwise a normal button one pixel lower
+^ IF custom_objects!=FALSE
+' Without extended dialogs the size tweaks are left out
+^ IF ext_type&
+^ SELECT ext_type&
+^ IF BTST(ext_type&,0)
+! extended type 1 or 3: one pixel narrower
+^ IF BTST(ext_type&,1)
+! extended type 2 or 3: one pixel lower
+^ OB_SPEC(tree_addr%,object_no&)=V:userblk_check%(0)
+! 110 check box
+^ OB_SPEC(tree_addr%,object_no&)=V:userblk_radio%(0)
+! 111 radio button
+^ OB_SPEC(tree_addr%,object_no&)=V:userblk_radio_box%(0)
+! 120 radio button in a box
+^ IF sys_char_h&<16
+' Low resolution: halves each G_IMAGE.  BITBLK: +0 data address, +4 bytes per row, +6 rows.  Row 0 stays,
+' every following row n becomes rows 2n and 2n+1 ORed together
+^ OB_TYPE(tree_addr%,object_no&)=OB_TYPE(tree_addr%,object_no&) AND -16129
+! clears extended bits 8-13, keeps the menu marks in bits 14-15
+^ UNTIL BTST(OB_FLAGS(tree_addr%,PRED(object_no&)),5)
+! LASTOB
+^ ~RSRC_GADDR(0,tree_menu&,mbar_tree%)
+^ mbar_last_help!=NOT mbar_last_help!
+! forces the menu enable update
+
+@ PROCEDURE event_handle
+' One pass of the event loop.  EVNT_MULTI waits for a key, a mouse click (up to two), a message or 200 ms.
+' Timer alone: updates window sliders that were marked as pending.  Key: shift state bits 0-3 are kept
+' and left Shift counts as right Shift; a plain key goes to the window dialog when it is on top, otherwise
+' scan code*256 + shift state goes to the menu shortcut handler.  MN_SELECTED runs the menu item, window
+' messages 20-28 go to the window handler, a click goes to the window dialog when it is on top.
+^ mbar_enable_update
+! updates the menu enable states first
+^ event_flags&=EVNT_MULTI(51,2,1,1,0,0,0,0,0,0,0,0,0,0,0,200,pos_x&,pos_y&,evnt_clicks&,shift_state&,keypress_code&,dummy&)
+! MU_KEYBD, MU_BUTTON, MU_MESAG, MU_TIMER
+^ IF BTST(event_flags&,5)=-1 AND (BTST(event_flags&,0))=FALSE
+^ IF BTST(event_flags&,0)
+^ IF BTST(shift_state&,1)
+! left Shift becomes right Shift (bit 0)
+^ IF @top_window=wdialog_handle& AND shift_state&<=2
+! window dialog on top, no Control or Alternate
+^ BYTE{V:keypress_code&+1}=shift_state&
+! low byte = shift state, high byte = scan code
+^ IF BTST(event_flags&,4)
+^ SELECT MENU(1)
+^ chosen_item&=MENU(5)
+! MN_SELECTED: title in MENU(4), item in MENU(5)
+^ IF BTST(event_flags&,1)
+
+@ PROCEDURE window_message
+' Handles a window message.  Messages for the window dialog go to its own handler; for the editor or help
+' window the active window becomes that window and: WM_REDRAW redraws, WM_TOPPED tops, WM_CLOSED closes,
+' WM_FULLED sets full size, WM_ARROWED scrolls through the key handler, WM_VSLID moves to the slider
+' position, WM_SIZED and WM_MOVED set the new size or position.
+^ window_id&=MENU(4)
+! window handle
+^ IF window_id&=wdialog_handle&
+^ win_from_handle(window_id&,active_window|)
+! active window = this window
+^ SELECT MENU(1)
+^ IF redraw_skip!
+! never TRUE, so the redraw is never skipped
+^ ~WIND_SET(window_id&,10,0,0,0,0)
+! WM_TOPPED: WF_TOP
+^ window_top_check
+! WM_CLOSED
+^ window_top_check
+! WM_FULLED: full screen below the menu bar
+^ window_top_check
+! WM_ARROWED: page up, page down, line up, line down as Shift-Up, Shift-Down, Up, Down keys
+^ window_top_check
+! WM_VSLID: slider position 0-1000 to top line
+^ window_top_check
+! WM_SIZED, WM_MOVED
+
+@ PROCEDURE window_top_check
+' Tops the active window first when another window is on top (WF_TOP), so that the window being worked on
+' is the visible one.
+^ ~WIND_GET(0,10,loop_i&,dummy&,dummy&,dummy&)
+
+@ PROCEDURE mbar_enable_update
+' Updates the enable state of the menu items when the active window, loaded code, loaded help or the line
+' counts of the two windows changed since the last call.  Items marked with bit 15 of ob_type need the
+' editor window; the others listed are enabled by their own condition; all other items are disabled, but
+' only managed items (marked enabled by rsc_objects_fix) ever change.
+^ IF active_window|<>mbar_last_window| OR code_loaded!<>mbar_last_code! OR help_loaded!<>mbar_last_help! OR mbar_last_edit_lines!<>(window_lines%(0,1)<>0) OR mbar_last_help_lines!<>(window_lines%(1,1)<>0)
+^ IF BTST(OB_TYPE(mbar_tree%,loop_i&),15)
+' Editor-only item
+^ SELECT loop_i&
+' Save ASCII and Editor need editor lines, Clear help needs help, Help needs help lines, Disassemble
+' needs loaded code, Find remark needs the editor and help, Opcode->Data the editor and loaded code
+^ IF mbar_enabled!(loop_i&)<>flag!
+! only changed items are set
+^ mbar_last_window|=active_window|
+' Remembers the state the menu now shows
+
+@ PROCEDURE mbar_source_check
+' Moves the menu check mark from the last source-type item to item object_no&.
+^ ~MENU_ICHECK(mbar_tree%,source_item&,0)
+
+@ PROCEDURE command_execute
+' Executes menu item object_no& or its keyboard shortcut.  Each CASE lists the item and its shortcut as
+' scan code*256 + shift state (1 Shift, 4 Control, 8 Alternate).  Keys that are no shortcut go to the
+' window key handler.
+^ SELECT object_no&
+^ about_box
+! About dialog
+^ ascii_load
+! Load ASCII source into the editor
+^ ascii_save
+! Save ASCII source
+^ dlg_file_options(1,0)
+! File options dialog
+^ help_file_reload(-1)
+! Load help with the file selector
+^ ERASE help_text$()
+' Clear help: removes the help text and its name tables and closes the help window
+^ IF @fsel_choose(".INF","Load settings  ",inf_path$)<>0
+' Load settings: reads another INF file and places the windows from it
+^ inf_save(-1)
+! Save settings with the file selector
+^ dlg_install(1,0)
+! Installation dialog
+^ IF @fsel_choose(".*","Launch another program  ",launch_path$)<>0
+' Launch program: removes the menu bar, remembers and closes the open windows, runs the program with
+' Pexec mode 0 (GEMDOS 75) and the own environment, shows an alert on an error, then redraws the screen
+' and reopens the windows, the active one last
+^ prev_open_windows|=BYTE{V:window_open!(0)}
+! bit n set = window n was open
+^ loop_i&=GEMDOS(75,0,L:V:launch_path$,L:0,L:LONG{BASEPAGE+44})
+! Pexec with a null command line
+^ IF @fsel_choose(".*","Clear file   ",removal_path$)<>0
+! Delete file
+^ IF DIM?(src_lines$())<>0 AND source_dirty!=TRUE
+' Quit: asks first when the editor content has not been saved
+^ program_load(-1)
+! Source menu: Program with the file selector
+^ dlg_load_part
+! Program part
+^ dlg_load_routine
+! Routine
+^ dlg_mem_disasm
+! RAM/ROM area
+^ rsc_load
+! Resource file
+^ datafile_load
+! Data file
+^ sysinfo_dialog(1,0)
+! System info dialog
+^ dlg_mem_layout(1,0)
+! Memory dialog
+^ dlg_prog_info
+! Segment info dialog
+^ dlg_dis_options(1,0)
+! Disassembler options dialog
+^ dlg_asm_custom(1,0)
+! Assembler customization dialog
+^ lst_sel|=FALSE
+! Data in Text list dialog
+^ IF active_window|=0
+' Block start: inserts a new DATA-in-TEXT range starting at the address of the first editor line, keeping
+' the table sorted by start address; the end stays 0 until Block end
+^ EXIT IF area_ranges%(lst_dim&(0)-3,0)=0
+! warn only when the last three entries are used
+^ IF active_window|=0
+' Block end: sets the address of the first editor line as end of the first range without an end
+^ dlg_gem_traps(1,0)
+! GEM traps dialog
+^ dlg_tos_traps(1,0)
+! TOS traps dialog
+^ par_load(-1)
+! Load source settings (.PAR)
+^ par_save
+! Save source settings (.PAR)
+^ IF code_loaded!
+' Disassemble: shows the progress dialog and runs the passes (TEXT, DATA in TEXT, DATA, BSS, labels and
+' symbols), each only when the previous one was not cancelled with a key
+^ disasm_speed%=DIV(window_lines%(0,1)*12000,TIMER-disasm_speed%)
+! lines per minute: TIMER counts 200 Hz ticks
+^ IF window_lines%(0,1)<>0
+! Editor window
+^ IF window_lines%(1,1)<>0
+! Help window
+^ dlg_editor_options(1,0)
+! Editor options dialog
+^ font_toggle
+! Text size: switches between small and large font
+^ keystroke_handle(8452)
+! Find text = Control-F
+^ keystroke_handle(25092)
+! Find remark = Control-Help
+^ IF active_window|=0
+! Find label
+^ IF active_window|=0
+! Find call
+^ lst_sel|=1
+! Replaced symbols list dialog
+^ IF active_window|=0
+! Replace symbol dialog
+^ IF active_window|=0
+! Replace this symbol
+^ IF active_window|=0
+! Replace this label
+^ IF active_window|=0 AND code_loaded!=TRUE
+! Opcode->Data
+^ IF active_window|=0
+! Edit remark
+^ IF active_window|=0 AND DIM?(src_lines$())>0
+! AES number
+^ IF active_window|=0 AND DIM?(src_lines$())>0
+! VDI number
+^ IF active_window|=0 AND DIM?(src_lines$())>0
+! GEMDOS number
+^ IF active_window|=0 AND DIM?(src_lines$())>0
+! BIOS number
+^ IF active_window|=0 AND DIM?(src_lines$())>0
+! XBIOS number
+^ keystroke_handle(object_no&)
+! not a shortcut: window keys
+
+@ PROCEDURE source_loaded
+' Called after code was loaded through the Source menu item object_no&: when loading worked, puts the editor
+' window at its first line, redraws both windows and checks the source-type item.
+^ IF code_loaded!
+
+@ PROCEDURE tos_trap_remark
+' Process menu GEMDOS/BIOS/XBIOS number.  bit_field&: trap kind 1 GEMDOS, 13 BIOS, 14 XBIOS.  With the help
+' file loaded, looks back from the first editor line for the function number and writes the function
+' name as the remark of that line.
+^ src_row%=window_lines%(0,0)+2
+! the line after the first editor line; the search looks back from here
+^ os_call_comment(bit_field&,0)
+! builds the name in comment$
+
+@ PROCEDURE gem_trap_remark
+' Process menu AES/VDI number.  bit_field&: 0 AES, 1 VDI.  With the help file loaded, takes the number after
+' the '#' on the first editor line (the opcode constant) and writes the AES or VDI function name as the
+' remark of that line.
+^ loop_j&=INSTR(src_lines$(src_row%),"#")
+^ IF bit_field&=0
+! AES name or VDI name into comment$
+
+@ PROCEDURE keystroke_handle
+' Handles a key for the active editor or help window, when that window is open.
+' object_no&: scan code*256 + shift state.  Esc closes the window; Up/Down scroll one line, with Shift one page;
+' Left/Right switch the line addresses in the editor on/off; Home goes to the start, Shift-Home to the end;
+' Control-F opens the find dialog and F finds the next match; Return/Enter switch to the other window;
+' Help in the editor looks up the first remark of the shown lines in the help window.
+^ IF active_window|=0
+' Largest top line: editor line count - 1, help line count - visible lines
+^ scan_code&=BYTE{V:object_no&}
+! scan code
+^ shift_state&=BYTE(object_no&)
+! shift state
+^ SELECT scan_code&
+^ window_hide(active_window|)
+! Esc
+^ IF shift_state&
+' Up/Down: with Shift one page and the slider is updated later; without, one line with a scroll
+^ IF active_window|=0 AND show_addresses!<>(scan_code&=75)
+! Left on, Right off
+^ IF shift_state&
+! Home: Shift to the end, else to the start
+^ IF shift_state&=4
+! Control-F: find dialog
+^ IF search_mode|<>0 AND window_open!(active_window|)=-1
+' Searches from the current top line; on a match the window scrolls to it
+^ active_window|=SUCC(active_window|) MOD 2
+! Return/Enter: other window
+^ IF active_window|=0
+' Help key: the first ';' remark of the shown editor lines is searched at the line start of the help
+' text; a match is shown in the help window.  In the help window Help shows the editor window.
+^ command_execute(mi_editor&)
+
+@ PROCEDURE window_show
+' Shows window win_idx| (0 editor, 1 help).  An open window is topped and redrawn.  A closed one opens at the
+' position saved in the INF file (once, scaled from 0-32766 to the screen), else at its previous position,
+' else at nearly full screen; with a grow box when the option is on.  Then the title, font metrics,
+' sliders and the size rounding are set.
+^ IF window_open!(win_idx|)
+^ loop_i&=MUL(win_idx|,5)
+! saved position: flag, x, y, w, h per window
+^ ~WIND_GET(window_handle&(win_idx|),6,work_x&,work_y&,work_w&,work_h&)
+! WF_PREVXYWH
+^ IF work_h&+(work_x&+work_y&+work_w&)=0
+! no position yet: screen below the menu bar
+^ win_title_set(win_idx|)
+! window title
+^ win_resize(window_handle&(win_idx|),work_x&,work_y&,work_w&,work_h&)
+! rounds the size to the character grid
+
+@ PROCEDURE window_hide
+' Closes window win_idx| when it is open, with a shrink box when the option is on.  The shrink box uses the
+' last window rectangle in work_x&..work_h&, which need not be this window's.
+^ IF window_open!(win_idx|)
+
+@ PROCEDURE win_vslider_pos
+' Sets the vertical slider position of window win_idx| (0 editor, 1 help).
+' The position is top line * 1000 / (line count - visible rows), the divisor at least 1.
+' Clears the window's slider_dirty flag slider_pending!().
+^ ~WIND_SET(window_handle&(win_idx|),9,DIV(window_lines%(win_idx|,0)*1000,MAX(1,window_lines%(win_idx|,1)-vis_rows&)),0,0,0)
+! WF_VSLIDE (9)
+
+@ PROCEDURE win_vslider_size
+' Sets the vertical slider size of window win_idx|: visible rows * 1000 / line count.
+^ ~WIND_SET(window_handle&(win_idx|),16,DIV(MUL(vis_rows&,1000),MAX(1,window_lines%(win_idx|,1))),0,0,0)
+! WF_VSLSIZE (16)
+
+@ PROCEDURE win_title_set
+' Builds the title of window win_idx| in the word array title_buffer&() and passes it to WF_NAME.
+' The editor title lives at byte 0, the help title 40 bytes further on, so both stay valid
+' while the AES keeps pointing at them.
+^ value%=value%+40
+' Help window: " Help:  " and the help file name without its path.
+^ CHAR{value%}=" Editor: "+@path_filename$(program_path$)+"/"+@path_filename$(source_path$)+" "
+! editor window: program file name / source file name
+^ ~WIND_SET(window_handle&(win_idx|),2,INT{V:value%},INT(value%),0,0)
+! WF_NAME (2), address split into high and low word
+
+@ PROCEDURE win_top_check
+' Handles the top window after a window message.  VAR active_window| receives the window index and
+' VAR window_id& the handle of the top window (WF_TOP); if that window is open its work area and
+' visible row count are re-read.  With no top window active_window| becomes 0 and window_id& -1.
+^ IF WIND_GET(0,10,window_id&,dummy&,dummy&,dummy&)
+! WF_TOP
+
+@ PROCEDURE win_from_handle
+' Maps the AES window handle window_id& to the window index in VAR active_window|:
+' 0 for the editor window, 1 for anything else (the help window).
+
+@ PROCEDURE win_work_area
+' Makes window window_id& current, reads its work area (WF_WORKXYWH) into work_x&..work_h& and computes
+' the number of visible text rows vis_rows& from the row height row_h&.
+^ win_from_handle(window_id&,active_window|)
+! also sets the global current window active_window|
+^ ~WIND_GET(window_id&,4,work_x&,work_y&,work_w&,work_h&)
+! WF_WORKXYWH (4)
+
+@ PROCEDURE win_resize
+' Moves and sizes window window_id& to the border rectangle rect_x&,rect_y&,rect_w&,rect_h&.
+' The work area is snapped to whole 8x16 cells (width AND $7FF8, height AND $7FF0) and, with
+' win_align_x! set, its x to a multiple of 8 so text can be drawn on byte boundaries.
+' Then refreshes the work area and the slider size of the current window.
+^ ~WIND_CALC(1,window_kind&,rect_x&,rect_y&,rect_w&,rect_h&,rect_x&,rect_y&,rect_w&,rect_h&)
+! border to work area
+^ ~WIND_CALC(0,window_kind&,rect_x&,rect_y&,rect_w&,rect_h&,rect_x&,rect_y&,rect_w&,rect_h&)
+! work area back to border
+^ ~WIND_SET(window_id&,5,rect_x&,rect_y&,rect_w&,rect_h&)
+! WF_CURRXYWH (5)
+
+@ PROCEDURE win_redraw_rects
+' Handles WM_REDRAW for window active_window|: walks the window's rectangle list
+' (WF_FIRSTXYWH 11 / WF_NEXTXYWH 12) and redraws every rectangle that lies on the screen and
+' inside the redraw area given in MENU(5)..MENU(8).  Screen updates are locked and the mouse
+' pointer hidden for the whole walk.
+^ screen_lock
+! wind_update BEG_UPDATE
+^ ~WIND_GET(handle_tmp&,11,rect_x&,rect_y&,rect_w&,rect_h&)
+! first rectangle
+^ WHILE rect_w&<>0 AND rect_w&<>0
+! bug: tests the width twice, the height is never checked
+^ ~WIND_GET(handle_tmp&,12,rect_x&,rect_y&,rect_w&,rect_h&)
+! next rectangle
+
+@ PROCEDURE win_redraw_all
+' Redraws the whole work area of window active_window| (clipped to the screen), with screen updates locked.
+^ ~WIND_GET(window_handle&(active_window|),4,work_x&,work_y&,work_w&,work_h&)
+! WF_WORKXYWH
+
+@ PROCEDURE win_draw_area
+' Draws the rectangle rect_x&,rect_y&,rect_w&,rect_h& of window active_window|: clears it to white and draws
+' the visible lines from the top line window_lines%(active_window|,0).
+' The help window is drawn in one call of the inline routine gtext_lines_code% over the string array
+' help_text$(); the editor window draws each line with src_line_show.
+^ PBOX rect_x&,rect_y&,PRED(rect_x&+rect_w&),PRED(rect_y&+rect_h&)
+! clear to white
+^ rows_to_draw&=MIN(vis_rows&,window_lines%(active_window|,1)-src_idx%)
+! rows to draw: the visible rows, fewer at the end of the text
+^ ~C:gtext_lines_code%(L:LONG{ARRPTR(help_text$())},work_x&,work_y&+PRED(row_h&),row_h&,L:vdi_pb_ptr%,L:src_idx%,L:src_idx%+rows_to_draw&)
+! inline: draw lines src_idx% to src_idx%+rows_to_draw& of the help text
+^ INC src_idx%
+! editor: from the line after the top line, one per row
+
+@ PROCEDURE src_line_show
+' Draws editor line src_idx% in row loop_i& of the editor work area.
+' pad_line! TRUE pads the line with blanks to the window width (used when a single line is redrawn).
+' With show_addresses! the line starts with its address (origin + offset), hex (6 digits) or decimal.
+' In tab or compact layout the label field is skipped for lines without a label.
+' Highlighting (colour, or text effects on a mono screen): hilite_jumps! bra/jmp/rts, hilite_calls! bsr/jsr,
+' hilite_branches! Bcc/DBcc compared with the condition name tables bcc_names$() and dbcc_names$().
+' Lines past the end of the text are drawn as blanks.
+^ rect_y&=PRED(work_y&+MUL(row_h&,loop_i&))
+! text baseline of row loop_i&
+^ IF show_addresses!=TRUE
+' Address column, drawn by the inline text routine asm_draw_text%.
+^ loop_j&=col_mnemonic&-1
+' loop_j& = characters skipped before the mnemonic, rect_w& = column the stored line is placed at.
+^ IF layout_tabs! OR layout_compact!
+' Label lines are drawn from column 1; other lines are moved right to the mnemonic column.
+^ BMOVE loop_j&+V:src_text$,V:result_long%,4
+' Takes the first four mnemonic characters: code_long% the first three, code_word& the first two,
+' code_byte| the first one.
+^ IF code_long%=6451809 OR code_word&=29300 OR code_word&=27245
+! "bra", "rt" (rts/rte/rtr), "jm" (jmp)
+^ IF num_colours&=2
+! mono: light text, colour screens: red
+^ IF code_long%=6452082 OR code_long%=6976370
+! "bsr", "jsr"
+^ IF num_colours&=2
+! mono: bold, colour screens: green
+^ IF hilite_branches! AND (code_byte|=98 OR code_word&=25698)
+! "b" or "db": compare with the 16 Bcc and DBcc names
+^ IF num_colours&=2
+! mono: a blank first, then italic text
+^ IF num_colours&=4
+! 4 colours: red light text, otherwise blue
+^ IF pad_line!
+' Padded drawing: the line placed at its column in a blank row as wide as the window.
+^ ELSE
+! line past the end of the text: a blank row
+^ IF hilite_set!
+! back to normal black text
+
+@ PROCEDURE win_scroll_line
+' Scrolls window active_window| by one line: temp_num& = 1 moves the text up (new line at the bottom),
+' -1 moves it down (new line at the top).
+' The work area minus one row is copied by vro_cpyfm (VDI 109, mode 3 = S_ONLY) with both MFDBs
+' pointing at screen_mfdb%() (address 0 = screen), then the uncovered row is drawn.
+' Sets the window's slider_dirty flag so the slider follows later.
+^ handle_tmp&=MIN(vis_rows&,work_h& DIV row_h&)
+! rows that fit; the work height is cut to whole rows
+^ PTSIN(0)=work_x&
+' Source rectangle, one row lower (scroll up) or at the top (scroll down).
+^ PTSIN(4)=work_x&
+' Destination rectangle, one row higher or lower.
+^ LONG{CONTRL+14}=V:screen_mfdb%(0)
+! source MFDB, copied to the destination MFDB pointer
+^ VDISYS 109,1,4
+! vro_cpyfm
+^ IF temp_num&=1
+' Row to draw: the last one when scrolling up, the first one when scrolling down.
+^ work_str$=SPACE$(SHR&(work_w&,3)+1)
+! help window: the line padded to the window width
+
+@ PROCEDURE win_update_sliders
+' Clamps the top line of window win_idx| to 0..line count - visible rows, then sets its title,
+' slider position and slider size.
+
+@ PROCEDURE screen_redraw
+' Makes the AES redraw the whole screen: FORM_DIAL FMD_START and FMD_FINISH over the screen.
+
+@ PROCEDURE windows_redraw
+' Sends a redraw for both windows (only open ones are redrawn).
+
+@ PROCEDURE win_redraw_msg
+' Makes the AES send a redraw for the work area of window win_idx| if it is open
+' (FORM_DIAL FMD_START / FMD_FINISH over the work area).
+
+@ FUNCTION top_window
+' Returns the handle of the top window (WF_TOP), 0 when the call fails.
+
+@ FUNCTION is_label_line
+' Returns TRUE if editor line src_row% is a label line: it has a colon before its first blank,
+' or it starts with ";" (comment line).  FALSE otherwise.
+
+@ FUNCTION src_search
+' Searches window win_idx| for pattern$ starting two lines after the top line and returns the new top
+' line (found line - 1), or the old top line if nothing is found.  The search wraps once.
+' search_mode| 1 = line starts with the pattern (in the editor a ":" is added, so it finds a label),
+' 2 = line contains the pattern.  ignore_case! ignores case.
+' A pattern "^address" in the editor finds the line whose address is within 4 bytes of it.
+^ DEFMOUSE 2
+! busy bee
+^ opt_flag!=(LEFT$(pattern$)="^")
+! search by address
+^ result_long%=base_addr%+MAX(0,row_offsets%(src_idx%))
+! address of the line: origin + line offset
+^ IF search_mode|=1 AND (LEFT$(src_text$,pattern_len&)=pattern$) OR (search_mode|=2 AND INSTR(src_text$,pattern$)<>0)
+! mode 1: line starts with, mode 2: line contains
+^ IF src_idx%=window_lines%(win_idx|,1) AND wrapped!=FALSE
+' End of text: wrap to the first line once.
+
+@ PROCEDURE operand_label_use
+' Takes the label referred to in the operand of editor line src_row%.
+' opt_flag! FALSE: searches for the label's definition and moves the editor there.
+' opt_flag! TRUE: opens the rename dialog with the label as old name.
+' Generated labels (B_, D_, T_ prefixes) are taken directly; otherwise the first operand that is
+' not an immediate number, register or address register indirection is used.
+^ IF @is_label_line(src_row%)=-1 OR (layout_tabs!=FALSE AND layout_compact!=FALSE)
+' Finds the start of the operand field, depending on the layout and on a leading label.
+^ pos_in_str&=MAX(MAX(INSTR(work_str$,"B_"),INSTR(work_str$,"D_")),INSTR(work_str$,"T_"))
+! position of a generated B_/D_/T_ label
+^ IF pos_in_str&=0
+' Checks the first and second operand: "#" followed by a non-number is a symbol immediate;
+' anything not starting with #, $, -, ( or a digit and not a D/A/SP/PC register is a label.
+^ token_str$=MID$(work_str$,pos_in_str&,2)
+! generated label: its two-character prefix first
+^ IF pos_in_str&>0
+' Collects the label up to ",", blank, NUL, "(" or "-".
+^ IF opt_flag!=FALSE
+' Jump to the definition: search for a line starting with "label:".
+^ rename_old$=token_str$
+! rename: the label is the old name
+
+@ PROCEDURE defined_label_use
+' Takes the label defined on editor line src_row% (text before the colon).
+' opt_flag! FALSE: searches for the next line containing the label (its references).
+' opt_flag! TRUE: opens the rename dialog with the label as old name.
+^ search_mode|=2
+! search mode: line contains
+
+@ PROCEDURE src_line_to_dc
+' Turns the editor line after the top line into a dc.w line holding the words of its code bytes,
+' for example after a wrong disassembly.  Lines without code, and dc./ds. lines, are left alone.
+' The words are written as "$xxxx,..." and their bytes as ASCII (control codes as blanks) in the
+' comment; a label of the line is kept.
+^ stop_offset%=row_offsets%(src_row%+1)
+! end at the next line's offset, or at the end of TEXT
+^ opcode&=INT{code_addr%+src_idx%}
+! code word from the loaded buffer
+^ mnemonic$=MKL$(1684221559)
+! "dc.w"
+^ instr_emit
+! rebuilds the line in the current layout
+^ label_put(src_row%,LEFT$(src_copy$,INSTR(src_copy$,":")))
+! puts the label back
+^ src_line_show(1,src_row%,-1)
+! redraw the line
+
+@ PROCEDURE font_sizes_scan
+' Finds the font sizes of the system font: sets vst_point (VDI 107) for 0 to 30 points and
+' keeps the first three different results in font_table&(): (n,0) character height, (n,1) cell height.
+' font_count& ends with the number of sizes found.
+^ VDISYS 107,1,0,0
+! vst_point
+
+@ PROCEDURE font_toggle
+' Switches the editor font between the two sizes (index 1 and 2) and applies it to the open windows.
+
+@ PROCEDURE font_apply
+' Applies font size font_idx& to window active_window|: sets the text height, the row height row_h& and the
+' visible row count, then updates the slider size and position.
+
+@ FUNCTION aes_form_keybd
+' AES form_keybd (55) for tree tree_addr%: object cur_obj&, key kb_char&, next object next_obj&.
+' Returns the keep-going flag; VAR kb_new_obj& gets the next object and VAR kb_char_out& the key left over.
+^ GEMSYS 55
+! form_keybd
+
+@ PROCEDURE pointer_hide
+' Hides the mouse pointer: graf_mouse M_OFF (256).
+
+@ PROCEDURE pointer_show
+' Shows the mouse pointer: graf_mouse M_ON (257).
+
+@ PROCEDURE aes_graf_mouse
+' Calls AES graf_mouse (78) with the mode set in GINTIN(0) by the caller.
+
+@ FUNCTION env_lookup$
+' Returns the value of environment variable env_name$ from the environment string the basepage
+' points to (offset 44), "" if not present.  Entries are "NAME=value", NUL-terminated.
+^ IF LEFT$(work_str$,LEN(env_name$))=env_name$
+! value after the name and the "="
+
+@ PROCEDURE vdi_text_align
+' Sets the text alignment: vst_alignment (VDI 39) with horizontal align_h& and vertical align_v&.
+
+@ FUNCTION cookie_find
+' Looks up cookie code_long% in the cookie jar: reads the jar pointer _p_cookies ($5A0).
+' The compiled code branches into cookie_scan for the search loop, which returns -1 with the
+' cookie value in VAR value% if found; 0 is returned when there is no jar.
+^ result_long%=LPEEK(1440)
+! _p_cookies
+
+@ PROCEDURE about_box
+' Shows the About dialog: version version_bcd& ("1.57") and release_date_bcd& ("9.94") as "h.ll" hex, and the
+' registration line "#number for name".
+' After 8 seconds without an event it starts filling a random grid of 5-14 x 5-14 cells with XOR
+' pattern boxes every 50 ms, until a key or mouse click ends it.
+^ ~WIND_UPDATE(3)
+! BEG_MCTRL
+^ grid_cols&=RAND(10)+5
+! grid columns and rows
+^ GRAPHMODE 3
+! XOR
+^ chosen_obj&=EVNT_MULTI(35,1,1,1,0,0,0,0,0,0,0,0,0,0,0,timer_ms&)
+! keyboard, button, timer timer_ms& ms
+^ IF BTST(chosen_obj&,5)
+' Timer: one random cell inverted.
+^ ~WIND_UPDATE(2)
+! END_MCTRL
+
+@ PROCEDURE dlg_install
+' Installation window dialog (dialog 1); dlg_action& 1 open, 2 button, 3 closing with chosen_obj&.
+' Options: leave ram_free_kb& KB free or reserve ram_reserve_kb& KB (used by RESERVE at the next start), and
+' custom_objects! = draw extended object types as user-defined objects.
+' Restart: a warning alert (with an extra warning if the MiNT cookie exists), then the main loop
+' saves the settings and restarts the program.  OK or the closer reload the resource file.
+^ wdialog_close(chosen_obj&)
+! closes the dialog, which calls back with action 3
+^ IF chosen_obj&=obj_inst_ok& OR chosen_obj&=obj_inst_restart& OR chosen_obj&=256
+! OK, Restart or the window closer
+^ IF @cookie_find(1298746964,value%)=-1
+! cookie "MiNT"
+^ restart_wanted!=FORM_ALERT(1,"[1][RESTART WARNING|Settings will be saved,|memory will be cleared|and program will restart!][OK|Cancel]                               ")=1
+! restart flag for the main loop
+^ IF chosen_obj&=obj_inst_ok& OR chosen_obj&=256 AND flag!<>custom_objects!
+! AND binds first: OK always reloads the resource, the closer only after a change
+^ rsc_init
+! reload and fix up the resource, menu bar on
+
+@ PROCEDURE dlg_dis_options
+' Disassembler - Options window dialog (dialog 4); dlg_action& 1 open, 2 button, 3 closing.
+' Layout (fixed columns / tab layout layout_tabs! / compact layout_compact!), TAB characters and width, column
+' positions, symbol table, help comments, hex labels, CPU option bits cpu_mask&, coprocessor, number
+' formats, dc.b ASCII mode and line width, ds size comments.
+' OK or the closer store the settings and redraw both windows.
+^ object_select(dis_tab_standard&,layout_tabs!+layout_compact!=0)
+! fixed columns: neither tab nor compact layout
+^ FOR loop_i&=0 TO 3
+! CPU option checkboxes from the bits of cpu_mask&
+^ dc_ascii_mode&=-@object_selected(obj_dis_ascii_1&)-2*@object_selected(obj_dis_ascii_2&)-3*@object_selected(obj_dis_ascii_3&)
+! radio buttons 1..3 to the dc.b ASCII mode
+
+@ PROCEDURE dlg_asm_custom
+' Assembler - Customize window dialog (dialog 5): output syntax for the assembler used.
+' Section directive style section_style|, .s/.w branch suffixes, divs.w, moveq.l, movem list style,
+' Line-A as dc.w, ds directive style ds_style|, OPT directive for the fast load bit.
+' Pairs of radio buttons hold FALSE/TRUE of one flag (radio_pair_set).
+^ IF chosen_obj&=obj_asm_ok& OR chosen_obj&=ac_cancel&
+! only OK and Cancel close the dialog
+^ section_style|=-@object_selected(obj_asm_sect_1&)-MUL(2,@object_selected(obj_asm_sect_2&))-MUL(3,@object_selected(obj_asm_sect_3&))
+! radio buttons to style 0..3
+
+@ PROCEDURE dlg_editor_options
+' Editor - Options window dialog (dialog 6): small font, window x alignment, address column, hex
+' numbers, grow/shrink effects, jump/call/branch highlighting, dialogs at the mouse, extended file
+' selector.  Display options that change set redraw_needed! and redraw both windows; a font change
+' switches the font size first.
+^ loop_j&=@object_selected(obj_ed_small_font&)+2
+! 1 = small font selected, 2 = large
+^ font_idx&=MOD(SUCC(loop_j&),2)
+! the other index, so font_toggle lands on the chosen one
+
+@ FUNCTION option_changed
+' Returns the new option value value_new&; sets the redraw flag redraw_needed! if it differs from prev_value&.
+
+@ PROCEDURE dlg_file_options
+' File - Options window dialog (dialog 0): fast STORE saving, save and load of the .ZLA line
+' offset file, QED-ASMPAR header line.
+
+@ PROCEDURE dlg_gem_traps
+' GEM - Traps window dialog (dialog 7): how AES and VDI calls get a comment with the function name.
+' AES on/off, name from the control array, trap pattern, register and function patterns;
+' VDI on/off and its patterns, sub-opcode byte index vdi_sub_byte|, lines searched back gem_search_lines|.
+' Only OK stores the settings, the window closer discards them.
+
+@ PROCEDURE dlg_tos_traps
+' TOS - Traps window dialog (dialog 8): how GEMDOS, BIOS and XBIOS traps get a comment.
+' Search back for the function number, parse stack pushes, push and register patterns, comments
+' on/off, the three trap patterns, two function patterns and lines searched back tos_search_lines|.
+' Only OK stores the settings, the window closer discards them.
+
+@ PROCEDURE dlg_find
+' Modal Find dialog.  Shows history entry find_hist_idx| of the 10 patterns in find_history$() and the ignore-case
+' option; the previous search mode's button is made the default.
+' The arrow buttons (touchexit) step through the history; an exit button ends the dialog.
+' Returns VAR find_text$ = pattern and VAR kind_sel| = 1 line starts with, 2 line contains, 0 cancel.
+^ flags_val&=OB_FLAGS(tree_addr%,chosen_obj&)
+' Sets the DEFAULT flag (bit 1) on the button of the previous search mode.
+^ dialog_wait(1)
+! form_do
+^ IF BTST(OB_FLAGS(tree_addr%,chosen_obj&),6)
+' Touchexit arrow: keep the edited text, step to the previous or next entry and redraw.
+^ UNTIL BTST(OB_FLAGS(tree_addr%,chosen_obj&),2)
+! exit flag
+
+@ PROCEDURE dlg_comment
+' Modal comment dialog for the editor line after the top line: shows the text after ";" (cut to the
+' field's template length) and on OK stores the edited comment with src_comment_set.
+^ IF pos_in_str&>=1
+! existing comment
+
+@ PROCEDURE src_comment_set
+' Sets the comment of editor line src_row% to work_str$ and redraws the line.
+' An existing comment is replaced; otherwise tab and compact layouts rebuild the line with the
+' comment through instr_emit (keeping a label), and the column layout appends ";comment".
+' An empty work_str$ removes the comment.
+' src_text$, pos_in_str& and lbl_text$ are not LOCAL here: they belong to the caller (or are global).
+^ IF @is_label_line(src_row%)<>0
+' Splits off the label; lbl_text$ is never cleared, so a line without a label can get the label left
+' from an earlier call.
+^ src_lines$(src_row%)=SPACE$(col_comment&)
+' Column layout: the padding to the comment column is overwritten two lines later, so the
+' comment follows the text directly.
+^ IF pos_in_str&>=1
+' Empty comment: cut the line before ";".
+
+@ PROCEDURE dlg_rename_label
+' Modal rename-label dialog: old name rename_old$, new name rename_new$ (the new-name field is the first
+' edit field when the old name is given).  On OK the label table label_names$()/label_addrs%() is updated and
+' every editor line is changed: definitions "old:" and references followed by NUL, "," or "(".
+^ dialog_wait(2)
+! form_do with the start edit field first_edit_obj&
+^ FOR lbl_slot&=0 TO lst_dim&(1)
+' Renames the label in the user label table, lbl_slot& = -1 when found.
+^ IF lbl_slot&<>-1
+' Not in the table: find a free slot.  With a full table lbl_slot& ends past the table and the
+' assignments below are out of range.
+^ IF pos_in_str&=1 AND @is_label_line(src_idx%)=-1
+' Definition line: replace the label and record it in the table slot.
+^ pos_in_str&=INSTR(src_lines$(src_idx%),rename_old$)
+' Reference: only the first occurrence in the line, and a longer name ending in the old one
+' is changed too.
+
+@ PROCEDURE dlg_load_part
+' "Load program part": asks for a program file (program_part_open, src_file_len% = TEXT+DATA length) and shows
+' its name and length.  Start (rounded up to even) and end offsets are edited; on OK with
+' start < end the part is loaded and disassembled by program_part_load.  Closes file #1.
+^ part_start%=BCLR(MIN(@object_number(obj_part_start&),src_file_len%)+1,0)
+! even start, at most the file length
+^ ~FORM_ALERT(1,"[3][Adress error!|  |- |-File too short|-Start>=End][OK]       ")
+! start not below end
+
+@ PROCEDURE dlg_mem_disasm
+' Memory disassembly dialog: start and end address, optional "addresses from start" (origin).
+' An end at or past the OS start (_sysbase) is limited to start + the ROM size.
+' Addresses below 2048 (exception vectors and system variables) are refused.
+^ dialog_run_until(obj_mem_ok&,rr_cancel&)
+! wait for OK or Cancel
+^ IF mem_end%>=LPEEK(1266)
+! _sysbase
+^ IF os_version_rom&<=260
+! os_version_rom& is never set, so always the 192 KB limit
+^ memory_setup
+! disassemble memory
+
+@ PROCEDURE dlg_load_routine
+' "Load routine": asks for a raw file (routine_open, src_file_len% = file length) and shows name and length.
+' Whole file or a start/end range (routine_range!); on OK the data is loaded by routine_load, a range with
+' its start as origin.  Closes file #1.
+^ routine_load(routine_start%,routine_end%)
+! load the range, addresses from its start
+^ routine_load(0,src_file_len%)
+! whole file
+
+@ PROCEDURE dlg_prog_info
+' Program info dialog: file name and length, TEXT, DATA, BSS and symbol table sizes, each in
+' decimal and hex; closes on any click.
+^ dialog_wait(0)
+! wait for a click anywhere
+
+@ PROCEDURE dlg_mem_layout
+' Memory layout window dialog (dialog 3).  Shows the editor text size (line lengths up to the first
+' empty line plus CR LF each), free memory now and at start, the disassembly speed, line counts.
+' Line arrays are sized from TEXT/DATA/BSS bytes per line, or to a fixed line count.
+' OK or the closer store the values; "apply" also reallocates the (cleared) line arrays.
+' The saved old values opt_flag!, old_bpl_text&, old_bpl_data&, old_bpl_bss&, old_fixed_lines% are never used.
+^ value%=value%+SHL(window_lines%(0,1),1)
+! two bytes CR LF per line
+^ bpl_data&=MAX(@object_number(obj_lay_bpl_data&),0)
+! may be 0, which gives a division by zero in editor_arrays_alloc
+^ editor_arrays_alloc
+! reallocate the editor arrays
+
+@ PROCEDURE editor_arrays_alloc
+' Re-dimensions the editor line array src_lines$() and the line offset array row_offsets%() (contents lost):
+' fixed line count (at least 10), or 10 + TEXT/bpl_text& + DATA/bpl_data& + BSS/bpl_bss& lines.
+' Marks the editor as modified and fills the offsets with -1 (no code).
+^ window_lines%(0,1)=10+CINT(tseg_len%/bpl_text&+dseg_len%/bpl_data&+bseg_len%/bpl_bss&)
+! estimate from the segment sizes
+
+@ PROCEDURE sysinfo_dialog
+' Handler of window dialog 2, "System info", called through wdialog_dispatch.
+' dlg_action& = event: 1 open the window and fill it, 2 object chosen_obj& clicked, 3 window closed (nothing to do).
+' Shows the TOS, AES and GEMDOS versions and works as a small calculator: the input field (si_input_field&) is
+' parsed by calc_parse_input into value%, a button turns it into a result result_long% shown in hex or decimal and as
+' ASCII: the value itself, PEEK/DPEEK/LPEEK at it, BIOS/XBIOS vectors, _sysbase or a Line-A address.
+^ wdialog_open(2,tree_sysinfo&," System info ")
+' Open the window dialog and fill in the input text and the versions (GEMDOS Sversion comes byte-swapped).
+^ object_select(si_hex_btn&,calc_hex!)
+' Hex/decimal radio buttons follow the calculator display mode calc_hex!.
+^ IF chosen_obj&=si_hex_btn& OR chosen_obj&=si_dec_btn&
+' A click on the hex or decimal radio button only switches the display of the current result.
+^ calc_parse_input(value%)
+' Any other button: evaluate the input field into value% first.
+^ calc_set_input(result_long%)
+! copy the result into the input field
+^ result_long%=value%
+! "=": the input value itself
+^ IF EVEN(value%)
+' LPEEK and DPEEK only at even addresses (an odd one would raise an address error).
+^ IF value%>=0 AND value%<=263
+' BIOS 5 Setexc(n,-1) reads exception vector n without changing it (0-255 plus the system vectors $100-$107).
+^ IF value%>=0 AND value%<=8
+' XBIOS 34 Kbdvbase: entry n of the keyboard vector table, with its name from kbdvec_names in the ASCII field.
+^ value%=1266
+' 1266 = $4F2 _sysbase, the pointer to the OS header.
+^ result_long%=C:linea_init_code%(BYTE(value%))
+' Line-A init through the INLINE routine: 0 = Line-A variables, 1 = font header table, 2 = routine table.
+^ object_select(chosen_obj&,0)
+' Deselect and redraw the clicked button.
+^ IF chosen_obj&=si_ok&
+! close button
+@ PROCEDURE calc_parse_input
+' Evaluates the calculator input field (object si_input_field& of the current tree) into the VAR long value%.
+' The text is upper-cased; digits 0-9 and A-F and "$" (hex prefix) are kept, "+" and "-" start a new
+' term, every other character is dropped.  The terms are then added or subtracted with VAL.
+' The term array has 11 entries, so more than ten signs end in an array index error.
+^ calc_input$=UPPER$(CHAR{LONG{OB_SPEC(tree_addr%,si_input_field&)}})
+' Read te_ptext of the input field.
+^ FOR loop_i&=1 TO LEN(calc_input$)
+' Split the text into terms: 36 "$", 48-57 digits, 65-70 A-F, 43 "+", 45 "-".
+^ value%=0
+' Sum the terms; a term without a sign (the first) is added.
+@ PROCEDURE calc_show_result
+' Shows the long value% in the result field (si_result_field&), as "$hex" or decimal after calc_hex!, and as
+' ASCII in si_ascii_field&: one character for a byte value, two for a word, four for a long, NUL bytes shown
+' as spaces.  Both fields are redrawn.
+^ IF value%=BYTE(value%)
+' Pick the shortest form that holds the value.
+^ value%=V:work_str$
+' Replace NUL bytes in the four characters by spaces.
+@ PROCEDURE calc_set_input
+' Writes the long value% into the calculator input field (si_input_field&), in hex or decimal after calc_hex!,
+' and redraws it.
+@ PROCEDURE lst_editor_dialog
+' Modal editor of one of the two lists, selected by lst_sel|: 0 = data areas (start, end, inactive flag
+' in area_ranges%() and area_inactive!()), 1 = labels (address and name in label_addrs%() and label_names$()).
+' Object numbers come from lst_objs&(lst_sel|,n): 0-5 rows, 6 tree, 7/8 edit fields, 9/10 arrows, 11 track,
+' 12 slider, 13 active flag, 14 delete, 15 go to, 16 list used, 17 clear, 18 size, 19 set size,
+' 22 OK, 23/24 replace by / append the symbol table (labels only), 25 list box.
+' On "go to" the disassembly window scrolls to the address of the selected entry.
+^ dialog_open(lst_objs&(lst_sel|,6))
+' Open the dialog and fill in the array size and the "list used" checkbox.
+^ IF lst_sel|=1
+' The two symbol table buttons are only enabled when a symbol table was loaded.
+^ REPEAT
+' Main loop: wait for a click or one of the key codes of dialog_do_keys (state + scan code * 256).
+^ FOR loop_i&=0 TO 5
+' Click on a row: store the edit fields into the old entry and select the clicked one.
+^ loop_i&=lst_cur&(lst_sel|)
+' loop_i& = selected entry, top_row& = top row, lst_size& = array size, top_max& = largest top row.
+^ IF chosen_obj&=lst_objs&(lst_sel|,9)
+! up arrow: scroll one row
+^ IF chosen_obj&=lst_objs&(lst_sel|,10)
+! down arrow: scroll one row
+^ IF chosen_obj&=19201
+' 19201 = $4B01, Shift+Left: select the previous entry, scrolling when it is off the visible rows.
+^ IF chosen_obj&=19713
+' 19713 = $4D01, Shift+Right: select the next entry.
+^ IF chosen_obj&=18176
+' 18176 = $4700, Clr/Home: first entry at the top.
+^ IF chosen_obj&=8712
+' 8712 = $2208, Alt+G: same as the "go to" button.
+^ IF chosen_obj&=lst_objs&(lst_sel|,12)
+' Slider dragged: GRAF_SLIDEBOX gives 0-1000.
+^ IF chosen_obj&=lst_objs&(lst_sel|,11)
+' Click in the slider track: page up or down by six rows while the button is held.  The slider y is
+' read only once, so the direction never changes during one press.
+^ value%=V:lst_top&(lst_sel|)
+! the top row is changed in place through its address
+^ IF chosen_obj&=18433 OR chosen_obj&=20481
+' 18433 = $4801 Shift+Up and 20481 = $5001 Shift+Down: page by six rows, keeping the selection on screen.
+^ IF lst_sel|=0 AND (chosen_obj&=lst_objs&(lst_sel|,13) OR chosen_obj&=25088 OR chosen_obj&=7688)
+' Data areas: toggle the inactive flag of the entry (button, 25088 = $6200 Help, 7688 = $1E08 Alt+A).
+^ IF chosen_obj&=lst_objs&(lst_sel|,14) OR chosen_obj&=11784
+' Delete the selected entry (button or 11784 = $2E08 Alt+C), moving the following entries up.
+^ IF FORM_ALERT(1,"[2][Do you really|want to clear|this array?][Yes|No]      ")=1
+' Clear the list and dimension it again with the size field (at least 10).
+^ IF chosen_obj&=lst_objs&(lst_sel|,19)
+' Set size: dimension the list to the size field, keeping the entries that still fit.
+^ IF chosen_obj&=lst_objs&(1,23) OR chosen_obj&=lst_objs&(1,24)
+' Labels only: 24 appends the symbol table after the existing labels (size grows by the symbol count),
+' 23 replaces the labels by the symbol table (size = symbols + 50).
+^ FOR loop_i&=0 TO sym_last%
+' Copy names and values of all symbols.
+^ IF chosen_obj&=lst_objs&(lst_sel|,17) OR chosen_obj&=lst_objs&(lst_sel|,14) OR chosen_obj&=lst_objs&(lst_sel|,23) OR chosen_obj&=lst_objs&(lst_sel|,24) OR chosen_obj&=lst_objs&(lst_sel|,19)
+' Deselect the buttons that act at once.
+^ UNTIL chosen_obj&=lst_objs&(lst_sel|,22) OR chosen_obj&=lst_objs&(lst_sel|,15)
+' OK or "go to" ends the dialog: store the fields, size and "used" flag, close and sort the list.
+^ IF chosen_obj&=lst_objs&(lst_sel|,15)
+' Go to: search the listing line of the selected address ("^" = address search) and redraw window 0.
+@ PROCEDURE slider_set_pos
+' Places the slider slider_obj& in its track track_obj&: y = position pos_in_str& * (track height - slider height)
+' / maximum work_max&, then redraws the track.  A maximum of 0 (list size 6) divides by zero.
+@ PROCEDURE lst_sort
+' Sorts the current list (lst_sel|) by address when any entry is lower than the one before it.
+' Each used entry is packed into a string (address long first, so the string order is the address
+' order), sorted with QSORT and unpacked again.  The list ends at the first all-zero/empty entry.
+^ IF lst_sel|=0
+' Data areas: start and end longs plus the inactive flag byte.
+^ FOR loop_i&=0 TO lst_dim&(1)-1
+' Labels: address long plus the name.
+@ FUNCTION lst_file_read
+' Reads a data area or label list file (after lst_sel|) named work_str$.
+' The file starts with the 12-byte magic "DesertDrain" + "n" checked as three longs.
+' Returns -1 when the magic matched and the list was read, 0 otherwise.
+^ IF INP%(#1)=1147499365 AND INP%(#1)=1920213060 AND INP%(#1)=1918986606
+! "Dese" "rtDr" "rain"
+@ PROCEDURE areas_file_read
+' Reads the data area list from channel #1: word array size, word count, then count+1 entries of
+' start long, end long and inactive flag byte.  Top and selected rows are kept inside the new size.
+@ PROCEDURE areas_file_write
+' Writes the data area list to channel #1 in the format read by areas_file_read: the size set by the user,
+' the index of the first empty entry, then the entries up to and including that empty one.
+@ PROCEDURE labels_file_read
+' Reads the label list from channel #1: word array size, word count, then count+1 entries of address
+' long and 0-terminated name.
+@ PROCEDURE labels_file_write
+' Writes the label list to channel #1 in the format read by labels_file_read, up to and including the first
+' empty entry.
+@ PROCEDURE labels_resize
+' Resizes the label arrays label_names$()/label_addrs%() from size work_max& to size_new&, copying the entries that fit
+' through temporary arrays that are then swapped in.
+@ PROCEDURE lst_redraw_rows
+' Updates the slider of the current list and rewrites the six visible rows from the top entry, then
+' redraws the list box (object 25).
+@ PROCEDURE lst_row_show
+' Shows list entry loop_i& in its row object when it is visible.  Data areas: "n.", start at column 6,
+' end at column 15, DISABLED state for inactive areas.  Labels: "n.", address, name.
+' opt_flag! = draw the selected entry SELECTED, redraw_flag! = redraw the row object.
+^ OB_STATE(tree_addr%,object_no&)=loop_j&+MUL(loop_i&=lst_cur&(lst_sel|),opt_flag!)
+! 8 = DISABLED, +1 SELECTED
+@ PROCEDURE lst_entry_store
+' Stores the two edit fields (objects 7 and 8) into the selected entry: start/end of a data area or
+' address/name of a label, and redraws its row unselected when visible.
+@ PROCEDURE lst_entry_fields
+' Copies the selected entry into the edit fields 7 and 8 (and for data areas the "active" checkbox 13)
+' and redraws them; with opt_flag! the entry's row is redrawn selected too.
+@ FUNCTION number_format$
+' Returns the long value% as "$hex" when the hex display option hex_display! is on, else in decimal.
+@ PROCEDURE progress_window
+' opt_flag! TRUE: opens window dialog 9, the "Disassembling..." progress window, with its five steps:
+' 0 text, 1 data areas, 2 data, 3 bss, 4 labels.  A step with nothing to do is shown DISABLED and every
+' bar starts hidden with width 0.  opt_flag! FALSE: closes the window dialog.
+^ OB_STATE(tree_addr%,progress_objs&(0,win_idx|))=-SHL(code_len%=0,3)
+! DISABLED when the step has no work
+^ OB_FLAGS(tree_addr%,progress_objs&(1,win_idx|))=128
+! HIDETREE
+@ PROCEDURE progress_step_mark
+' Marks step loop_i& of the progress window SELECTED and redraws it through the window's rectangle list.
+@ PROCEDURE progress_bar_start
+' Starts the bar of progress step kind_sel|: shows it (flags 0), total code_len%, next update at start_pos%,
+' done 0 and an update step of 1/30 of the total.
+@ PROCEDURE object_redraw_window
+' Redraws object object_no& of tree tree_addr% inside window wnd_handle&, walking its rectangle list
+' (WF_FIRSTXYWH 11, WF_NEXTXYWH 12) and drawing only where the rectangles meet the object.
+@ PROCEDURE progress_update
+' Called during disassembly: grows the bar of the current step and moves the next update point on,
+' then polls events once (keyboard, button, message, 1 ms timer).
+' A key asks "Stop disassembly?"; Yes ends the listing at the current line and sets disasm_abort!.
+' A menu selection is ignored (title deselected, progress window topped); window messages are handled.
+^ event_flags&=EVNT_MULTI(51,1,1,1,0,0,0,0,0,0,0,0,0,0,0,1,dummy&,dummy&,dummy&,shift_state&,keypress_code&,dummy&)
+! 51 = MU_KEYBD|MU_BUTTON|MU_MESAG|MU_TIMER
+^ IF MENU(1)=10
+! MN_SELECTED
+@ PROCEDURE wdialog_dispatch
+' Passes event dlg_action& (1 open, 2 object clicked, 3 close) and object chosen_obj& to the handler of the
+' current window dialog wdialog_cur& (0-8).
+@ FUNCTION object_find_flag
+' Returns the first object of tree tree_ptr%, scanning from object 0 in steps of scan_step&, whose ob_flags
+' share a bit with flag_mask&; the scan stops at LASTOB (bit 5).  Returns fallback_obj& when none matches.
+@ PROCEDURE wdialog_open
+' Opens dialog tree tree_index& as window dialog number entry_no& with the window title wnd_title$.
+' If that dialog is already open its window is topped (WF_TOP 10); another open window dialog is closed.
+' The tree is placed at its remembered position (or centred the first time), the window gets
+' NAME|CLOSER|MOVER (11) and is sized around the tree with WIND_CALC; the edit object is restored.
+^ ~WIND_GET(0,4,rect_x&,rect_y&,rect_w&,rect_h&)
+' Create the window with the desktop work area (WF_WORKXYWH of window 0) as its largest size.
+^ value%=V:title_buffer&(40)
+' The title must stay in memory while the window is open: copy it into the word buffer and pass its
+' address to WIND_SET WF_NAME (2) as high and low word.
+^ wdialog_edit&=wdialog_edits&(wdialog_cur&)
+' Edit object: the one saved at the last close, else the first EDITABLE (8) object.
+@ PROCEDURE wdialog_close
+' Closes the open window dialog: deselects object chosen_obj& (not 0, 256 or 257), sends event 3 to its
+' handler, saves the edit object, closes and deletes the window and draws the shrink box.
+' 256 is passed when the window is closed by its closer or by another window dialog opening.
+@ PROCEDURE wdialog_event
+' Keyboard and mouse input for the window dialog when its window is on top.
+' A key goes to FORM_KEYBD and the edit field; a click to OBJC_FIND and FORM_BUTTON.
+' When an exit object is reached its number is passed to the handler (event 2); a click on another
+' EDITABLE object moves the edit cursor there.
+^ IF BTST(event_flags&,0)
+! MU_KEYBD
+^ IF BTST(event_flags&,1)
+! MU_BUTTON
+^ IF keep_editing&=0 OR (clicked_obj&<>0 AND wdialog_edit&<>clicked_obj&)
+' Exit object or a click elsewhere: hide the cursor, report the exit, move the cursor, show it again.
+@ PROCEDURE wdialog_cursor
+' Shows (opt_flag! TRUE, ED_INIT 1) or hides (ED_END 3) the edit cursor of the window dialog when its state
+' changes.
+@ PROCEDURE wdialog_message
+' Handles AES messages for the window dialog's window.
+' 20 WM_REDRAW: draws the tree clipped to each rectangle of the window, mouse and cursor hidden.
+' 21 WM_TOPPED: tops the window.  22 WM_CLOSED: closes the window dialog.
+' 28 WM_MOVED: moves the window, places the tree in the new work area and remembers the position.
+^ pointer_hide
+' Mouse off and edit cursor hidden while drawing.
+^ ~WIND_GET(wdialog_handle&,11,rect_x&,rect_y&,rect_w&,rect_h&)
+' Walk the rectangle list and redraw where it meets the redraw area MENU(5)-MENU(8).
+^ ~WIND_SET(wdialog_handle&,5,MENU(5),MENU(6),MENU(7),MENU(8))
+! WF_CURRXYWH
+@ PROCEDURE dialog_run_until
+' Draws the current modal dialog and runs FORM_DO until object stop_obj_a& or stop_obj_b& or an object with
+' SELECTABLE and EXIT (flags 5) ends it.
+@ PROCEDURE dialog_run_once
+' Draws the current modal dialog and runs FORM_DO once; the exit object is in chosen_obj&.
+@ PROCEDURE dialog_wait
+' Gets the exit object of the current modal dialog into chosen_obj&.  temp_num&: 0 = wait for a click and find
+' the object under the mouse, 1 = FORM_DO, 2 = own form_do dialog_do_keys (keys as exit codes).
+' An exit on a G_IMAGE (type 23) is the drag handle: the dialog is dragged to a new place, the old area
+' is redrawn, and the wait starts again.
+^ EXIT IF OB_TYPE(tree_addr%,chosen_obj&)<>23
+! any object but the drag image ends the wait
+^ ~GRAF_DRAGBOX(rect_w&,rect_h&,rect_x&,rect_y&,0,cell_box_h&,screen_w&,screen_h&-cell_box_h&,pos_x&,pos_y&)
+' Drag inside the desktop below the menu bar, then free the old area (FMD_FINISH) and let the
+' redraws happen until an idle timer event arrives.
+^ rect_x&=pos_x&
+' Move the tree, keep the box centre for the shrink box, reserve the new area and draw.
+@ FUNCTION edit_obj_find
+' Finds an object of the current tree from start_obj&: which_mode& -1 = previous EDITABLE object, -2 = next
+' EDITABLE object, -3 = the DEFAULT object from 0, other = first EDITABLE object from 0.
+' The scan stops at LASTOB (bit 5).  Returns start_obj& when nothing is found.
+@ PROCEDURE dialog_do_keys
+' Own form_do for the current modal dialog.  VAR start_obj& = edit object (0 = first editable), returns the
+' exit object or a key code in chosen_obj&.
+' Keys with right Shift, Left Shift + cursor key, Clr/Home, Help and Alt + key end the dialog and are
+' returned as shift state + scan code * 256 (left Shift counts as right Shift); other keys edit.
+' A click outside every object rings the bell.
+^ WHILE keep_going&>0
+' Start the edit cursor in a new edit object.
+^ which_mode&=EVNT_MULTI(3,2,1,1,0,0,0,0,0,0,0,0,0,0,0,5,pos_x&,pos_y&,button_state&,kbd_shift&,kbd_code&,click_count&)
+! MU_KEYBD|MU_BUTTON
+^ loop_i&=SHR&(kbd_code&,8)
+' Scan codes: 72 up, 80 down, 75 left, 77 right, 71 Clr/Home, 98 Help; states 1/2 Shift, 8 Alt.
+^ keep_going&=@aes_form_keybd(tree_addr%,cur_edit_obj&,0,kbd_code&,next_obj&,kbd_code&)
+' Ordinary key: FORM_KEYBD, then OBJC_EDIT ED_CHAR with what is left of the key.
+^ next_obj&=OBJC_FIND(tree_addr%,0,4,pos_x&,pos_y&)
+! click: object under the mouse
+^ OUT 2,7
+! BEL to the console
+^ IF keep_going&=0 OR (next_obj&<>0 AND next_obj&<>cur_edit_obj&)
+' Leaving the edit field: ED_END.
+@ PROCEDURE dialog_open
+' Opens modal dialog tree object_no& as the current tree: centred, or centred on the mouse and kept on the
+' screen below the menu bar when dialog_at_mouse! is set.  Locks screen and mouse, reserves the area (FMD_START)
+' and with grow_effects! draws a move box from the chosen menu item and a grow box from the centre point.
+' Sets the rectangle rect_x&..rect_h&, the centre pos_x&/pos_y& and resets the edit start object.
+^ IF dialog_at_mouse!
+' Centre the dialog on the mouse (GRAF_MKSTATE), clamped to the screen below the menu bar.
+^ IF grow_effects!
+' Grow/shrink effects: move box from the menu item that opened the dialog, then the grow box.
+@ PROCEDURE dialog_close
+' Closes the current modal dialog opened by dialog_open: deselects the exit object, frees the area
+' (FMD_FINISH), draws the shrink and move boxes back to the menu item and unlocks screen and mouse.
+@ PROCEDURE object_redraw
+' Redraws object object_no& of the current tree at its screen position.
+@ PROCEDURE object_select
+' Sets (state_on! TRUE) or clears the SELECTED bit (0) of object object_no& without redrawing it.
+@ FUNCTION object_selected
+' Returns TRUE when object object_no& of the current tree is SELECTED.
+@ PROCEDURE object_enable
+' state_on! FALSE disables object object_no& (clears SELECTABLE and TOUCHEXIT, sets DISABLED);
+' TRUE enables it (sets SELECTABLE|TOUCHEXIT = 65, clears DISABLED).
+@ FUNCTION radio_pair_value
+' Returns 0-3 from two objects' SELECTED bits: object_no& gives bit 0, obj_a& bit 1.
+@ FUNCTION object_text$
+' Returns the text (te_ptext of the TEDINFO) of object object_no&.
+@ PROCEDURE object_set_number
+' Writes the number value% in decimal into object object_no&: directly into the string of a G_BUTTON (26)
+' or G_STRING (28), else into te_ptext, cut to te_txtlen-1 (TEDINFO offset 24).
+@ FUNCTION object_number
+' Returns the value of the text of object object_no&.
+@ PROCEDURE object_set_text
+' Writes work_str$ into object object_no&: directly into the string of a G_BUTTON (26) or G_STRING (28),
+' else into te_ptext, cut to te_txtlen-1 (TEDINFO offset 24).  Strings are written over the resource
+' text, so a longer text in a button or string overwrites the memory after it.
+@ PROCEDURE object_set_version
+' Writes the BCD version word version_bcd& as "x.yy" into object object_no&.
+@ FUNCTION version_string$
+' Returns a BCD version word as "major.minor": high byte in hex, low byte as two hex digits.
+@ PROCEDURE object_set_size
+' Writes num_value% in decimal (width 6) into object obj_a& and in hex (width 7) into object obj_b&,
+' forcing the hex option for the second one.
+@ FUNCTION number_padded$
+' Returns result_long% as "$hex" (option hex_display!) or decimal, right-aligned in length_tmp& characters when length_tmp&
+' is not 0.
+@ PROCEDURE radio_pair_set
+' Selects obj_b& and deselects obj_a& when choice_flag! is TRUE, the other way round when FALSE.
+@ PROCEDURE screen_lock
+' WIND_UPDATE BEG_UPDATE (1); counts the lock in update_count& so all locks can be undone at the end.
+@ PROCEDURE screen_unlock
+' WIND_UPDATE END_UPDATE (0).
+@ PROCEDURE mctrl_lock
+' WIND_UPDATE BEG_MCTRL (3); counts the lock in mctrl_count&.
+@ PROCEDURE mctrl_unlock
+' WIND_UPDATE END_MCTRL (2).
+@ FUNCTION path_filename$
+' Returns the file name part of path path_spec$ (everything after the last backslash).
+@ FUNCTION path_extension$
+' Returns the extension of the file name in path_spec$, or "*" when it has none (used for file selector
+' masks).  The first dot of the name is used.
+@ FUNCTION path_strip_ext$
+' Returns path_spec$ without its extension (up to the last dot).
+@ FUNCTION current_dir_path$
+' Returns the current drive (GEMDOS 25 Dgetdrv) and directory as "X:\path\".
+@ FUNCTION path_locate
+' Looks for file found_path$: SHEL_FIND searches the current directory and the PATH; the AES writes the full
+' path into the string, cut at its NUL.  Else the program folder program_folder$ is tried.  Returns -1 when the
+' file exists; otherwise returns 0.
+^ IF SHEL_FIND(found_path$)<=0
+' Not found: try the program folder.  The fallback puts the current directory in front of the name that
+' already has the program folder added, so the returned path is wrong when program_folder$ is a full path.
+^ IF INSTR(found_path$,CHR$(0))<>0
+' Found: keep the full path the AES wrote, up to its NUL.
+
+@ FUNCTION fsel_choose
+' Shows the GEM file selector and returns its exit button (0 = Cancel, 1 = OK).
+' fsel_ext$ is the extension mask (".*", ".PAR" ...), fsel_title$ the title shown by fsel_exinput.
+' path_spec$ (VAR) gives the starting path and file name and gets the chosen path back.
+' fsel_exinput (AES 91) is used when fsel_exinput! is set or the AES version is 3.20-5.11 or 7.68+,
+' otherwise plain fsel_input (AES 90), which has no title.
+^ screen_lock
+! wind_update BEG_UPDATE while the selector is up
+^ IF LEN(path_spec$)
+' Split the given path into directory and file name; without one start in the current directory
+^ fsel_dir$=fsel_dir$+"*"+fsel_ext$+STRING$(30,0)
+' Directory buffer gets "*"+mask and room to grow; the name buffer is cut to 8.3 and padded
+^ LONG{ADDRIN}=V:fsel_dir$
+! addrin[0] = path buffer, addrin[1] = file name buffer
+^ IF fsel_exinput!=TRUE OR (aes_version&>=320 AND aes_version&<512 OR aes_version&>=768)
+^ GEMSYS 91
+! fsel_exinput with the title in addrin[2]
+^ GEMSYS 90
+! fsel_input
+^ fsel_button&=GINTOUT(1)
+! intout[1] = exit button
+^ IF fsel_button&
+' On OK rebuild the full path: directory part of the path buffer plus the chosen name
+^ screen_unlock
+! wind_update END_UPDATE
+
+@ PROCEDURE program_load
+' Loads a GEMDOS program file (header $601A) for disassembly.
+' ask_file! TRUE asks for the file first with the file selector; FALSE loads program_path$ as it is.
+' Reads the 28-byte header, loads TEXT+DATA into code_buf&(), then the symbol table (if use_symbols!)
+' and the relocation table (if ABSFLAG is 0).  Sets code_loaded! when done.
+' Loads the matching .PAR settings first (par_autoload).
+^ IF ask_file!
+' ask_file! becomes TRUE (do not load) when the selector is cancelled
+^ IF INT{value%}=24602
+' $601A branch: a GEMDOS program header.  Free all arrays of the previous load
+^ prg_flags%=LONG{value%+22}
+' Header: +2 TEXT, +6 DATA, +10 BSS, +14 symbol table length, +22 program flags, +26 ABSFLAG
+^ DIM code_buf&(num_value%)
+' Label flags cover TEXT+DATA+BSS; the code buffer holds TEXT+DATA only
+^ code_addr%=V:code_buf&(0)
+^ IF use_symbols!=TRUE AND sym_len%>=14
+' Symbol table follows TEXT+DATA; 14 bytes per DRI symbol
+^ IF SUB(src_file_len%-code_len%-sym_len%,32)>0 AND absolute_flag&=0
+' Relocation table follows the symbols, when the file has more than the header after them
+
+@ PROCEDURE program_part_open
+' Asks for a program to load in part ("Load program part") and leaves it open as #1.
+' src_file_len% is set to TEXT+DATA length of a $601A program, 0 when nothing is chosen or it is no program.
+' The part-load dialog then calls program_part_load with the chosen range; the .PAR settings are loaded too.
+^ IF INP&(#1)=24602
+! TEXT length + DATA length, then back to the start for program_part_load
+
+@ PROCEDURE program_part_load
+' Loads the byte range range_start%..range_end% of the TEXT+DATA of the program open in #1.
+' Reads the header again, works out how much of the range is TEXT and how much DATA, loads the
+' bytes and then the symbols and relocations with offsets shifted by the range start
+' (base_addr%, part_offset%, section_adjust%).  Closes #1.
+^ base_addr%=range_start%
+! addresses and labels count from the range start
+^ section_adjust%=tseg_len%+dseg_len%-code_len%
+! bytes of TEXT+DATA left out, shifts BSS and relocation offsets
+^ IF range_start%<tseg_len%
+' Range starts in TEXT: TEXT is the part up to the TEXT end, DATA the rest of the range;
+' otherwise the whole range is DATA
+^ SEEK #1,28+range_start%
+^ IF use_symbols!=TRUE AND sym_len%>=14
+' Symbol table follows TEXT+DATA in the file (image_len% minus BSS)
+^ IF src_file_len%>LOC(1) AND absolute_flag&=0
+' Relocation table follows the symbol table
+
+@ PROCEDURE par_autoload
+' Switches off both lists (data areas and labels) and loads the source settings file
+' <files_dir$><program name without extension>.PAR when it exists.
+^ work_str$=files_dir$+@path_strip_ext$(@path_filename$(program_path$))+".PAR"
+^ IF EXIST(work_str$)
+
+@ PROCEDURE symbols_read
+' Reads the DRI symbol table from the current position of #1 into sym_names$() (names) and
+' sym_values%() (values).  Each entry is 14 bytes: 8-byte name, type word, value long.
+' A type low byte of $48 marks a GST long name: the next 14 bytes continue the name.
+' Values are turned into offsets in the loaded image by the type high byte; entries outside
+' the image are dropped.  Sets sym_last% to the last index used and syms_loaded!.
+^ sym_type_hi|=BYTE{value%+8}
+! type high byte (bits: 0 BSS, 1 TEXT, 2 DATA, 5 global)
+^ BYTE{value%+8}=0
+! end the 8-byte name
+^ IF BYTE{value%}=64
+! a leading "@" becomes "L"
+^ IF sym_value%>=0 AND sym_value%<image_len%
+^ IF BTST(sym_type_hi|,5)
+' Global and TEXT symbols keep their value, DATA adds the TEXT length and load offset,
+' BSS adds the BSS correction and TEXT+DATA
+^ IF sym_type_lo|=72
+' GST extended name: append the next record as the rest of the name
+^ UNTIL src_idx%>=sym_last% OR fpos%+14>=src_file_len%
+
+@ PROCEDURE relocs_read
+' Reads the GEMDOS relocation table from #1 and marks every relocated long in reloc_flags!().
+' First a long offset of the first fixup (0 = none), then one byte per fixup: 0 ends the
+' table, 1 adds 254 without a fixup, any other value is added to the offset.
+^ reloc_len%=tseg_len%+section_adjust%+dseg_len%
+^ value%=INP%(#1)
+^ IF value%>0
+^ FOR src_idx%=fpos% TO src_file_len%-1
+! src_idx% only limits the loop to the file length
+
+@ PROCEDURE reloc_mark
+' Marks offset value% as the start of a relocated long when it is even and inside reloc_flags!().
+^ IF value%<=reloc_len% AND EVEN(value%)=-1
+
+@ PROCEDURE code_read
+' Reads code_len% bytes from #1 into code_buf&() starting at word index start_word%, in blocks of
+' 4096 bytes (2048 words).  An odd last byte is not read.
+^ code_len%=SHR(code_len%,1)
+! byte count to words
+^ FOR src_idx%=start_word% TO value% STEP 2048
+
+@ PROCEDURE routine_open
+' Asks for any file to load as a raw routine ("Load routine") and leaves it open as #1.
+' src_file_len% (VAR) returns its length, 0 when nothing was chosen.
+^ src_file_len%=0
+^ IF @fsel_choose(".*","Load routine ",program_path$)<>0
+
+@ PROCEDURE routine_load
+' Loads bytes range_start%..range_end% of the raw file open in #1 as TEXT (no header, symbols or relocation).
+^ src_file_len%=range_end%-range_start%
+' The whole range is TEXT; all other section lengths are 0
+^ SEEK #1,range_start%
+
+@ PROCEDURE memory_setup
+' Sets up disassembly of ST memory from mem_start% to mem_end% without copying it: code_addr% points
+' at the memory itself.  The length is limited by free memory / 8 for the label flags.
+' The name is H<start address>.RAM, or .ROM when the start is at or above phystop ($42E).
+^ part_offset%=base_addr%
+^ code_len%=MIN(mem_end%-mem_start%,FRE(0) DIV 8)
+^ program_path$="H"+HEX$(mem_start%)
+^ IF mem_start%<LPEEK(1070)
+! phystop
+^ code_addr%=mem_start%
+
+@ PROCEDURE rsc_load
+' Loads a GEM resource file (.RSC) as DATA and generates symbols for its structures.
+' The RSC header is 18 words: vrsn, object, tedinfo, iconblk, bitblk, frstr, string, imdata,
+' frimg, trindex, nobs, ntree, nted, nib, nbb, nstring, nimages, rssize.
+' Symbols: rs_trees, rs_ende, rsh_<field> for the header, rs_t<n> trees, rs_o<n> object specs,
+' rs_st/rs_sm/rs_ss TEDINFO texts, rs_im/rs_id/rs_it icon data, rs_bb, rs_fs, rs_fi.
+' Every pointer that gets a symbol is marked relocated so it shows as dc.l label.
+^ dseg_len%=src_file_len%
+! the whole file is DATA
+^ BGET #1,V:code_buf&(0),LOF(1)
+^ sym_last%=27
+' Symbol table size: 27 fixed names plus one per object, tree, string, image and BITBLK
+' and three per TEDINFO and ICONBLK
+^ symbol_add("rs_trees",CARD(code_buf&(9)))
+! rsh_trindex
+^ symbol_add("rs_ende",CARD(code_buf&(17)))
+! rsh_rssize
+^ RESTORE rsh_field_names
+' rsh_<name> for each header word offset 0..34
+^ rsc_table_symbols(9,11,4,"rs_t")
+! tree pointer table, ntree longs
+^ value%=CARD(code_buf&(1))
+' Objects, 24 bytes each: ob_spec at +12 is a pointer except for G_BOX (20), G_IBOX (25)
+' and G_BOXCHAR (27), whose ob_spec holds values
+^ loop_j&=CARD(code_buf&(12))-1
+' TEDINFO, 28 bytes each: te_ptext, te_ptmplt, te_pvalid
+^ loop_j&=CARD(code_buf&(13))-1
+' ICONBLK, 36 bytes each: ib_pmask, ib_pdata, ib_ptext
+^ rsc_table_symbols(4,14,14,"rs_bb")
+! BITBLK bi_pdata, 14 bytes each
+^ rsc_table_symbols(5,15,4,"rs_fs")
+! free string pointers
+^ rsc_table_symbols(8,16,4,"rs_fi")
+! free image pointers
+^ rsc_mode!=TRUE
+' Resource mode with symbols and relocation flags; sym_last% = last symbol made
+
+@ PROCEDURE rsc_table_symbols
+' Generates a symbol for each pointer of an RSC pointer table.
+' table_word& = header word index holding the table offset, count_word& = header word index holding
+' the entry count, entry_stride& = bytes per entry, lbl_text$ = name prefix (number appended).
+^ loop_j&=CARD(code_buf&(count_word&))-1
+
+@ PROCEDURE rsc_pointer_symbol
+' Reads the long pointer at file offset value% of a resource; when it points inside the file
+' (36 .. file length) adds symbol symbol_name$ for its target and marks the offset relocated.
+' Does nothing when the symbol table is full.
+^ IF sym_value%<=sym_last%
+^ IF ptr_target%>=36 AND ptr_target%<=src_file_len%
+! 36 = size of the RSC header
+
+@ PROCEDURE symbol_add
+' Appends symbol symbol_name$ with value ptr_target% at index sym_value% and advances sym_value%.
+^ sym_names$(sym_value%)=symbol_name$
+
+@ PROCEDURE datafile_load
+' Loads any file ("Load data") whole as a DATA section, without symbols or relocation.
+^ dseg_len%=src_file_len%
+! whole file is DATA
+^ BGET #1,V:code_buf&(0),src_file_len%
+
+@ PROCEDURE ascii_load
+' Loads an ASCII source ("Load ASCII") into the source window.
+' The line array is sized by fixed_line_count% (fixed count) or file length / 20.  A first line with
+' "$DSDR:" is a header written by ascii_save: "QED-ASMPAR <tab width>", "Z:<lines>",
+' "M:<format bits>"; it sets the tab width, line count and the three format options.
+' Tabs can be removed on request, a missing "Desert Drain V" title line gets an empty line 0,
+' and with zla_load! the .ZLA file gives the code offset of each line.
+^ IF fixed_line_count!
+^ LINE INPUT #1,work_str$
+' Optional Desert Drain header line
+^ tabsize|=VAL(MID$(work_str$,10+INSTR(work_str$,"QED-ASMPAR")))
+! tab width after "QED-ASMPAR "
+^ loop_j&=VAL(MID$(work_str$,INSTR(work_str$,"M:")+2))
+! M: bit 0 no indent, bit 1 compact, bit 2 tab indent
+^ SEEK #1,0
+! no header: the first line is source
+^ RECALL #1,src_lines$(),-1,window_lines%(0,1)
+! reads all lines; window_lines%(0,1) gets the count
+^ FOR src_idx%=0 TO window_lines%(0,1)
+' On the first line with a tab ask once whether to remove all tabs; a tab at the start of a
+' line is deleted, any other is replaced by tabsize| spaces.  The inner loop reuses src_idx%
+' and EXIT IF TRUE leaves the outer loop after it.
+^ IF INSTR(src_lines$(0),"Desert Drain V")=0
+' A source not made by Desert Drain gets an empty line 0 (INSERT drops the last line)
+^ IF zla_load!
+' .ZLA = one long code offset per line, same name as the source
+^ win_update_sliders(0)
+! redraw the source window
+
+@ PROCEDURE ascii_save
+' Saves the source window as ASCII ("Save ASCII").
+' With qed_header! the first line is a header "; QED-ASMPAR <tab width> 0006  $DSDR:Z:<lines>,M:<bits>"
+' that ascii_load reads back.  Lines are written one by one when fast_save! is off or the
+' tab-indent format is on (then each non-label line starts with col_mnemonic / tab width
+' tabs); otherwise STORE writes them all at once.  With zla_save! the .ZLA line offsets follow.
+^ IF qed_header!
+^ IF fast_save!=FALSE OR (layout_tabs!=TRUE AND layout_compact!=FALSE AND fmt_tab_indent!=TRUE AND tabsize|<>0)
+^ IF @is_label_line(src_idx%)=0
+! not a label or comment line: indent with tabs
+^ STORE #1,src_lines$(),0 TO window_lines%(0,1)
+^ source_dirty!=FALSE
+! source saved
+^ IF zla_save!
+^ BSAVE @path_strip_ext$(source_path$)+".ZLA",V:row_offsets%(0),SHL(window_lines%(0,1),2)
+
+@ PROCEDURE par_load
+' Loads the source settings file .PAR.  opt_flag! TRUE asks for the file first and sets the
+' files folder files_dir$ from the chosen path.
+' Format: "Desert Drain" (3 longs), version word (needs 321+; some fields only from 322,
+' 323, 326; up to 327 an extra flag is skipped), format and disassembly options, columns,
+' CPU flags, line estimates, address ranges, search strings, GEM and TOS trap texts,
+' then the data-area list (areas_file_read) and the label list (labels_file_read).
+' Bug: par_save writes tos_search_back! before tos_stack_parse!, but this reads them the other way round.
+^ opt_flag!=@fsel_choose(".PAR","Load source settings",par_path$)=0
+! opt_flag! TRUE = cancelled
+^ IF INP%(#1)=1147499365 AND INP%(#1)=1920213060 AND INP%(#1)=1918986606
+! "Desert Drain"
+^ IF par_version&>=321
+^ IF par_version&<=327
+! flag no longer used
+^ col_mnemonic&=INP&(#1)
+' Columns, dc line length and size, CPU flags, bytes per estimated line
+^ part_start%=INP%(#1)
+' Part, routine and memory ranges, fixed line count
+^ RECALL #1,find_history$(),-1,recalled_count%
+! 10 search strings
+^ aes_comments!=@bool_from_file
+' GEM trap options and texts
+^ tos_stack_parse!=@bool_from_file
+' TOS trap options and texts (tos_stack_parse!/tos_search_back! order swapped against par_save)
+^ lists_enabled!(0)=@bool_from_file
+' Data-area list on/off and entries, label list on/off and entries
+
+@ PROCEDURE par_save
+' Saves the source settings file .PAR ("Save source settings") in the format par_load reads,
+' with the program version version_bcd& as version word, and sets the files folder files_dir$.
+^ OUT% #1,1147499365,1920213060,1918986606
+! "Desert Drain"
+^ OUT& #1,version_bcd&
+^ STORE #1,find_history$(),0 TO 9
+^ OUT #1,tos_search_back!,tos_stack_parse!
+! read back in the order tos_stack_parse!, tos_search_back!
+^ OUT #1,lists_enabled!(0)
+' Data-area list on/off and entries, label list on/off and entries
+
+@ PROCEDURE inf_read_head
+' Opens DS_DRAIN.INF (inf_path$) at start-up and reads the settings needed before RESERVE:
+' memory mode, the two KB sizes and the dialog object option.  Needs version 327+.
+' code_loaded! is TRUE when the file is valid; it then stays open for inf_read_rest.
+^ code_loaded!=INP&(#1)>=327
+
+@ PROCEDURE inf_read_rest
+' Reads the rest of DS_DRAIN.INF opened by inf_read_head (only when code_loaded! says it is valid)
+' and closes it: file, assembler, disassembler and editor options, columns, CPU flags,
+' list sizes, ranges, the saved window positions, help file name, files folder and
+' search strings.  Same order as inf_save writes.
+^ fast_save!=@bool_from_file
+' File options and assembler options
+^ mem_real_addr!=@bool_from_file
+' Disassembler options
+^ dialog_at_mouse!=@bool_from_file
+' Editor options
+^ col_mnemonic&=INP&(#1)
+^ lst_dim_set&(0)=INP&(#1)
+! capacity of the data-area list
+^ BGET #1,V:saved_window_pos&(0),20
+! two windows: open flag, x, y, w, h each
+^ help_path$=@cstring_from_file$
+! help file name, then searched for
+^ files_dir$=@cstring_from_file$
+! files folder, also the default .PAR path
+
+@ FUNCTION bool_from_file
+' Reads one byte from #1 and returns bit 0 as TRUE/FALSE.
+
+@ FUNCTION cstring_from_file$
+' Reads bytes from #1 up to a NUL byte and returns them as a string.
+
+@ PROCEDURE windows_restore
+' Restores the windows after the settings are loaded: closes each open window and opens
+' it again (at its saved position) when the saved flag is set and it has lines.
+^ FOR win_idx|=FALSE TO 1
+
+@ PROCEDURE inf_save
+' Saves the program settings DS_DRAIN.INF.  opt_flag! TRUE asks for the file first.
+' Writes the version word, memory settings, all options, columns, list sizes and ranges,
+' then for each window either its current position (open: WF_CURRXYWH 5, closed: WF_PREVXYWH 6)
+' scaled to 0..32766, or the saved 10 bytes again, then help file name, files folder and
+' search strings.
+^ opt_flag!=@fsel_choose(".INF","Save settings      ",inf_path$)=0
+^ OUT& #1,version_bcd&
+^ FOR win_idx|=FALSE TO 1
+^ ~WIND_GET(window_handle&(win_idx|),loop_i&,rect_x&,rect_y&,rect_w&,rect_h&)
+^ IF rect_x&+rect_y&+(rect_w&+rect_h&)
+^ PRINT "";MKI$(@coord_scale(rect_y&,screen_h&));
+! as listed this PRINT has no #1, so the y word would go to the screen, not the file
+^ BPUT #1,V:saved_window_pos&(MUL(win_idx|,5)),10
+! no position: write the saved block again
+^ cstring_to_file(@path_filename$(help_path$))
+! help file name only
+
+@ PROCEDURE cstring_to_file
+' Writes string work_str$ to #1 followed by a NUL byte.  LOCAL win_idx| is not used.
+
+@ FUNCTION coord_scale
+' Returns coordinate coord& scaled from screen size work_max& to 0..32766.
+
+@ FUNCTION coord_unscale
+' Returns value scaled_coord& scaled from 0..32766 back to screen size work_max&, plus 1.
+
+@ PROCEDURE disassemble
+' Disassembles the loaded TEXT section into the source lines src_lines$().
+' Sets the source name to <program>.S, allocates the lines, sorts the enabled lists and
+' writes the header comments (title, file, TEXT/DATA/BSS sizes, symbol count, program flags).
+' Then decodes instruction by instruction from pc_offset% (offset), skipping data areas,
+' with row_offsets%() holding the offset of each line.  Each opcode is dispatched on bits 12-15;
+' anything not decoded becomes dc.w $xxxx.  Updates the progress bar and can be stopped.
+^ ARRAYFILL label_flags!(),0
+! no labels needed yet
+^ FOR lst_sel|=FALSE TO 1
+! sort the data-area and label lists
+^ src_lines$(0)=";Desert Drain V"+@version_string$(version_bcd&)+"   680x0er Disassembler  "+DATE$+" "+TIME$
+^ IF tseg_len%
+' One comment line per non-empty section length, decimal and hex
+^ FOR loop_i&=0 TO 2
+' Program header flags: bit 0 fast load, bit 1 load into TT-RAM (bits 28-31 = TT-RAM size
+' in 128 KB steps), bit 2 malloc from TT-RAM.  Fast load can be written as OPT F+,X+
+^ IF relocs_loaded!
+' Every relocated long points at something that needs a label
+^ IF lists_enabled!(0)
+! find the first data area at or after the load offset
+^ disasm_speed%=TIMER
+! start time for the lines-per-minute figure
+^ EXIT IF tseg_len%=0
+^ section_directive(0)
+! TEXT section line
+^ progress_bar_start(0,0,tseg_len%)
+! progress bar over the TEXT length
+^ IF lists_enabled!(0)=-1 AND areas_done!=FALSE
+' Data areas: skip switched-off entries; when the offset reaches an area start, continue
+' at its end ("DITerr" when the offset is already inside it); an all-zero entry ends the list
+^ was_emitted!=FALSE
+^ row_offsets%(src_row%)=pc_offset%
+! code offset of this line
+^ IF @reloc_at(pc_offset%)<>0
+' A relocated long is written as dc.l <label>
+^ opcode&=@fetch_word
+^ IF opcode&=22594
+' "XBRA" in the code: write the XBRA header as dc.l lines
+^ IF was_emitted!=FALSE
+^ op_line&=C:bitfield_code%(opcode&,L:786436)
+! opcode bits 12-15
+^ opline0_decode
+! line 0: bit operations, movep, immediate
+^ bit_field&=C:bitfield_code%(opcode&,L:393219)
+' Lines 1-3 move.b/.l/.w (size codes 1, 2, 3); destination mode 1 is movea
+^ operands$=@ea_operand$(opcode&,size_code|,0,0)+","+@ea_operand$(opcode&,size_code|,1,1)
+! source EA, destination EA
+^ dis_group4
+! line 4: miscellaneous
+^ dis_group5
+! line 5: addq/subq/Scc/DBcc
+^ dis_branch
+! line 6: Bcc/bra/bsr
+^ IF (BTST(opcode&,8))=FALSE
+' Line 7 moveq: bit 8 must be clear; data is the low byte, register bits 9-11
+^ dis_group8
+! line 8: or/div/sbcd
+^ mnemonic$="sub"
+^ IF CARD(opcode&)>=40960 AND CARD(opcode&)<=40975
+' Line A: $A000-$A00F are Line-A calls 0-15, named when trap comments are on
+^ dis_group_b
+! line B: cmp/eor
+^ dis_group_c
+! line C: and/mul/abcd/exg
+^ mnemonic$="add"
+^ dis_group_e
+! line E: shifts and rotates
+^ dis_group_f
+! line F: coprocessor / Line-F
+^ IF was_emitted!=FALSE
+' Nothing written: go back to the line start and write the opcode as dc.w $xxxx with
+' its two characters as comment
+^ IF src_row%>window_lines%(0,1)
+! more lines than allocated: error 16
+^ IF pc_offset%>=progress_next%
+! progress bar step, user events, stop request
+
+@ PROCEDURE opline0_decode
+' Decodes opcode line 0 (opcode&).
+' Bit 8 set: btst/bchg/bclr/bset Dn,<ea> or movep (EA mode 1).
+' Otherwise bits 9-11 select ori/andi/eori (0,1,5, also to ccr/sr), subi/addi/cmpi (2,3,6),
+' static bit operations with an immediate bit number (4), moves (7, 68010+), and on 68020+
+' with size 3: cmp2/chk2 (dis_chk2_cmp2), cas/cas2 (dis_cas), rtm (bit 1 of cpu_mask&).
+' Writes the line with instr_emit or leaves it undecoded.
+^ size_code|=C:bitfield_code%(opcode&,L:393218)
+! size bits 6-7
+^ IF BTST(opcode&,8)
+^ reg_high|=C:bitfield_code%(opcode&,L:589827)
+! data register bits 9-11
+^ IF C:bitfield_code%(opcode&,L:196611)=1
+' EA mode 1: movep d16(An),Dn or Dn,d16(An); bit 7 = direction, bit 6 = long
+^ IF size_code|=0
+' Dynamic bit operation: size bits select btst, bchg, bclr, bset
+^ temp_num&=SHR(opcode&,9) AND 7
+^ IF cpu_mask&>=2 AND size_code|=3
+' 68020+: size 3 here is chk2/cmp2 (0, 1) or cas.b (5)
+^ IF temp_num&=0
+^ ea_reg&=4
+! immediate data source (mode 7, register 4)
+^ IF BYTE(opcode&)=60
+! $3C: to ccr
+^ IF BYTE(opcode&)=124
+! $7C: to sr
+^ IF cpu_mask&>=2 AND temp_num&=2 AND size_code|=3
+' 68020+: chk2/cmp2.l, cas.w/.l, cmpi with PC-relative destination; 68020 rtm
+^ IF BTST(cpu_mask&,1)=-1 AND temp_num&=3 AND size_code|=3
+! rtm Dn/An
+^ IF temp_num&=2
+' subi, addi, cmpi with immediate source
+^ IF size_code|=0
+' Static bit operation: bit number from the extension word, 0-31 for Dn, 0-7 for memory
+^ IF bit_field&=0 AND (loop_j&>=0 AND loop_j&<32) OR (bit_field&<>0 AND (loop_j&>=0 AND loop_j&<=7))
+^ SUB pc_offset%,2
+! bad bit number: give back the extension word, the line stays undecoded
+^ IF cpu_mask&>=2 AND size_code|=3
+' 68020+ size 3: cas.l; 68010+: moves with the register and direction in the extension word
+
+@ PROCEDURE dis_chk2_cmp2
+' Decodes CHK2/CMP2 <ea>,Rn (68020+, opcode 00000ss011xxxxxx).
+' size_arg| is the size (0 = byte, 1 = word, 2 = long) taken from opcode bits 9-10 by the caller.
+' The extension word gives Rn in bits 12-15; bit 11 set means chk2, clear means cmp2.
+' Sets mnemonic$/operands$ and leaves the emit to the caller (which calls instr_emit).
+^ first_ext_word&=@fetch_word
+' Source EA uses address class 0; the register comes from the extension word
+^ IF BTST(first_ext_word&,11)
+! "chk2"
+^ ELSE
+! "cmp2"
+^ bad_opcode!=(first_ext_word& AND 2047)<>0
+! bits 0-10 of the extension word must be zero
+@ PROCEDURE dis_cas
+' Decodes CAS Dc,Du,<ea> (68020+).  size_arg| is the size 0/1/2 (cas.b, cas.w, cas.l).
+' Extension word: Dc in bits 0-2, Du in bits 6-8, all other bits except 12-15 must be zero.
+' The destination EA uses address class 7 (anything but immediate).
+^ operands$="D"+STR$(first_ext_word& AND 7)+",D"+STR$(SHR(first_ext_word&,6) AND 7)+","+@ea_operand$(opcode&,size_code|,0,7)
+! "Dc,Du,<ea>"
+^ bad_opcode!=(first_ext_word& AND 65080)<>0
+! mask $FE38: reserved extension word bits
+@ PROCEDURE dis_group4
+' Decodes opcode line 4 (miscellaneous instructions).
+' size_code| = bits 6-7, reg_high| = bits 9-11, reg_low| = bits 0-2.  With bit 8 set the opcode is chk.l, chk.w
+' or lea; otherwise bits 9-11 select negx/move sr, clr/move ccr, neg, not, the nbcd/pea/swap/ext/movem
+' group, tst/tas/illegal, mul/div long and movem to registers, and the $4Exx group (trap, link, unlk,
+' move usp, reset, nop, stop, rte, rtd, rts, trapv, rtr, movec, jsr, jmp).
+' Each path calls instr_emit itself; paths that emit nothing leave the word to be shown as DC.W.
+^ size_code|=C:bitfield_code%(opcode&,L:393218)
+! bits 6-7
+^ reg_high|=C:bitfield_code%(opcode&,L:589827)
+! bits 9-11
+^ IF BTST(opcode&,8)
+' Bit 8 set: chk.l (68020+, bits 6-8 = 100), chk.w (110) or lea (111).  extb.l ($49C0) also lands here
+' and is not decoded: it is taken as lea with a data register EA and rejected.
+^ mnemonic$="lea"
+! lea <control ea>,An
+^ instr_emit
+! emit chk/lea
+^ ELSE
+' Bit 8 clear: reg_high| (bits 9-11) selects the instruction
+^ IF size_code|=3
+' $40C0: move sr,<ea>.  On 68020+ the EA is checked with the data class (class 4), which also accepts
+' PC-relative and immediate destinations; on 68000/68010 the data alterable class is used.
+^ mnemonic$=MKL$(1836021349)
+! "move"
+^ operands$=MKI$(29554)
+! "sr"
+^ mnemonic$=MKL$(1852139384)
+! "negx" with size suffix, data alterable EA
+^ IF size_code|=3
+' $42C0: move ccr,<ea> (68010+); clr otherwise
+^ IF size_code|=3
+' $44C0: move <ea>,ccr; neg otherwise
+^ IF size_code|=3
+' $46C0: move <ea>,sr; not otherwise
+^ ea_mode_bits|=C:bitfield_code%(opcode&,L:196611)
+' Bits 9-11 = 4: ea_mode_bits| (bits 3-5) separates the register forms from the EA forms
+^ IF ea_mode_bits|=1 AND cpu_mask&>=2
+' $4808: link.l An,#disp32 (68020+); nbcd <ea> otherwise
+^ mnemonic$=MKL$(1851941732)
+! "nbcd"
+^ IF ea_mode_bits|=0
+' $4840: swap Dn, $4848: bkpt #n (68010+), otherwise pea <control ea>
+^ mnemonic$=MKL$(1937203568)
+! "swap"
+^ mnemonic$=MKL$(1651208308)
+! "bkpt"
+^ IF ea_mode_bits|=0
+' $4880: ext.w Dn, otherwise movem.w registers to memory (direction -1)
+^ IF ea_mode_bits|=0
+' $48C0: ext.l Dn, otherwise movem.l registers to memory
+^ IF size_code|=3
+' $4AFC is illegal; other $4AC0 words are tas.b <data alterable ea>; tst otherwise
+^ operands$=@ea_operand$(opcode&,size_code|,0,23)
+! 68020+: any EA but immediate, no An for byte size
+^ SELECT size_code|
+' Bits 9-11 = 6: mul.l/div.l (68020+) and movem memory to registers (direction 0)
+^ IF size_code|=1
+' Bits 9-11 = 7, size 1: the $4E40-$4E7F group, split by bits 4-5
+^ temp_num&=C:bitfield_code%(opcode&,L:4)
+! trap #0-15
+^ os_call_comment(temp_num&,0)
+! comment with the OS function of this trap call
+^ mnemonic$=MKL$(1953653104)
+! "trap"
+^ operands$=@areg_name$(reg_low|)
+' $4E50: link An,#disp16; $4E58: unlk An
+^ mnemonic$=MKL$(1970170987)
+! "unlk"
+^ mnemonic$=MKL$(1818848875)
+! "link"
+^ mnemonic$=MKL$(1836021349)
+' $4E60: move An,usp; $4E68: move usp,An
+^ operands$=""
+' $4E70-$4E7B: no-operand and special instructions, by the low nibble
+^ mnemonic$=MKL$(1937010544)
+! "stop" #imm16
+^ mnemonic$="am "
+! $4E73 rte (the distributed program reads "am " here: the translation overwrote the bytes it shares)
+^ IF cpu_mask&>=1
+' $4E74 rtd #disp (68010+).  The displacement is passed through the label lookup as if it were an
+' address (base + displacement), so it is shown as a label instead of a number.
+^ dis_movec(0)
+! $4E7A movec control register to Rn
+^ dis_movec(1)
+! $4E7B movec Rn to control register
+^ ELSE
+' $4E80/$4EC0: jsr/jmp <control ea>.  jsr is checked for calls to AES/VDI bindings and OS wrappers.
+@ PROCEDURE dis_muldiv_long
+' Decodes the 68020 long multiply/divide.  The caller has put "mul" or "div" in mnemonic$.
+' Extension word: bit 11 signed (s.l) or unsigned (u.l), bit 10 64-bit form, Dh/Dr in bits 0-2, Dl/Dq in 12-14.
+' Output is <data ea>,[Dh:]Dl.  The divsl/divul form (bit 10 clear, Dr<>Dq) loses its remainder register.
+' Nothing is emitted for CPUs below 68020, so the word becomes DC.W.
+^ IF BTST(first_ext_word&,10)
+! 64-bit operand/result: Dh:Dl or Dr:Dq
+@ PROCEDURE dis_movec
+' Decodes MOVEC (68010+).  kind_sel| = 0: "creg,Rn" ($4E7A), 1: "Rn,creg" ($4E7B).
+' The control register number (extension bits 0-11) is named by CPU: SFC, DFC, USP, VBR on 68010;
+' CACR, MSP, ISP on 68020+; CAAR on 68020/68030 only; TC, MMUSR, SRP on 68040.  Unknown numbers print
+' as $hex.  Rn comes from extension bits 12-15.
+^ loop_j&=first_ext_word& AND 4095
+! control register number
+@ PROCEDURE dis_group5
+' Decodes opcode line 5: addq/subq, and for size field 3: DBcc, TRAPcc (68020+) and Scc.
+' code_byte| = condition (bits 8-11), ea_mode_bits| = bits 3-5, reg_high| = bits 0-2.
+^ code_byte|=C:bitfield_code%(opcode&,L:524292)
+! condition code bits 8-11
+^ IF ea_mode_bits|=1
+' DBcc Dn,label: 16-bit displacement relative to the extension word; odd targets are invalid
+^ IF cpu_mask&>=2 AND ea_mode_bits|=7 AND (reg_high|>=2 AND reg_high|<=4)
+' TRAPcc (68020+): bits 0-2 = 2 word operand, 3 long operand, 4 no operand
+^ ea_reg&=4
+! immediate operand: mode 7 register 4
+^ ELSE
+' Scc <data alterable ea>
+^ ELSE
+' addq/subq #1-8,<ea>: bits 9-11 hold the data, 0 meaning 8; class 17 = alterable, no An for byte size
+^ mnemonic$=MKL$(1937072753)
+! "subq"
+^ mnemonic$=MKL$(1633969265)
+! "addq"
+@ PROCEDURE dis_branch
+' Decodes opcode line 6: Bcc, BRA and BSR.  code_byte| = condition (bits 8-11) indexes bcc_names$().
+' Low byte 0 = 16-bit displacement, $FF = 32-bit displacement (68020+), otherwise an 8-bit displacement.
+' The ".w"/".b"/".s" suffix is added only when bra_size_suffix! is set; ".l" always.
+' The target is shown as a label; odd targets mark the instruction invalid.
+^ value%=@sign_extend_byte(BYTE(opcode&))
+! 8-bit displacement, sign-extended, relative to the word after the opcode
+^ IF code_byte|<=1
+' bra/bsr: look for AES/VDI binding and OS wrapper calls to comment
+@ PROCEDURE dis_group8
+' Decodes opcode line 8: or, divu.w/divs.w, sbcd, and the 68020 pack/unpk.
+' size_code| = bits 6-7, reg_high| = bits 9-11, reg_low| = bits 0-2, temp_num& = bits 3-7.
+' pack/unpk print their adjustment as hex without a "$" prefix, and their -(An),-(An) forms are not
+' decoded (they fall through to "or" and are rejected).
+^ IF size_code|=3
+' $81C0: divs.w <data ea>,Dn; ".w" only with opt_muldiv_w!
+^ temp_num&=C:bitfield_code%(opcode&,L:196613)
+! bits 3-7: 0 sbcd Dy,Dx, 1 sbcd -(Ay),-(Ax), 8 pack, 16 unpk
+^ mnemonic$=MKL$(1935827812)
+! "sbcd"
+^ mnemonic$=MKL$(1885430635)
+! "pack" Dy,Dx,#adj
+^ mnemonic$=MKL$(1970172011)
+! "unpk" Dy,Dx,#adj
+^ mnemonic$=MKI$(28530)
+! "or" Dn,<memory alterable ea>
+^ ELSE
+' Bit 8 clear: divu.w <data ea>,Dn, or or <data ea>,Dn
+@ PROCEDURE dis_add_sub
+' Decodes opcode lines 9 and D: the caller has put "sub" or "add" in mnemonic$.
+' Size 3 gives adda/suba (.w with bit 8 clear, .l with bit 8 set) <ea>,An; with bit 8 set and bits 3-5
+' 0 or 1 the instruction is addx/subx Dy,Dx or -(Ay),-(Ax); otherwise add/sub Dn,<ea> or <ea>,Dn.
+^ mnemonic$=mnemonic$+"x"
+! addx/subx Dy,Dx
+^ mnemonic$=mnemonic$+"x"
+! addx/subx -(Ay),-(Ax)
+^ ops_dhigh
+! add/sub Dn,<memory alterable ea>
+^ operands$=@ea_operand$(opcode&,size_code|,0,16)
+! add/sub <ea>,Dn: any EA, no An for byte size
+@ PROCEDURE dis_group_b
+' Decodes opcode line B: cmpa.w/cmpa.l <ea>,An, cmpm (Ay)+,(Ax)+, eor Dn,<data alterable ea>,
+' and cmp <ea>,Dn.
+^ mnemonic$=MKL$(1668116589)
+! "cmpm"
+@ PROCEDURE dis_group_c
+' Decodes opcode line C: mulu.w/muls.w <data ea>,Dn, abcd, exg and and.
+' With bit 8 set and size below 3, bits 3-5 = 0 or 1 select abcd (size 0) or exg (size 1/2):
+' exg Dx,Dy, exg Ax,Ay and exg Dx,Ay (printed as Ay,Dx); other words are and Dn,<memory alterable ea>.
+^ mnemonic$=MKL$(1836412019)
+! "muls"
+^ mnemonic$=MKL$(1633837924)
+! "abcd" Dy,Dx
+^ mnemonic$="exg"
+! exg Dx,Dy
+^ mnemonic$=MKL$(1633837924)
+! "abcd" -(Ay),-(Ax)
+^ mnemonic$="exg"
+! exg Ax,Ay
+^ mnemonic$="exg"
+! exg Dx,Ay
+^ mnemonic$="and"
+! and Dn,<memory alterable ea>
+^ ELSE
+' Bit 8 clear: mulu.w <data ea>,Dn or and <data ea>,Dn
+@ PROCEDURE dis_group_e
+' Decodes opcode line E.
+' Size 3 with bit 11 set: 68020 bitfield instructions (bitfield_names$ by bits 8-10) <ea>{offset:width}, with
+' a data register operand for bfextu/bfexts/bfffo (after) and bfins (before).
+' Size 3 with bit 11 clear: memory shift/rotate .w by one (shift_names$ by bits 9-10 and direction bit 8).
+' Otherwise register shift/rotate: count in a data register (bit 5) or immediate 1-8.
+^ op_kind|=SHR(opcode&,8) AND 7
+! bitfield op / memory shift type with direction
+^ loop_j&=@fetch_word
+' Extension word: register bits 12-14, Do bit 11, offset bits 6-10, Dw bit 5, width bits 0-4.
+' The offset-in-register flag is tested at bit 12 instead of bit 11, so register offsets are shown as
+' numbers (and odd registers in bits 12-14 add a wrong "D"); width 0 (= 32) is shown as 0.
+^ operands$=operands$+",D"+STR$(reg_high|)
+! bfextu, bfexts, bfffo <ea>{o:w},Dn
+^ operands$="D"+STR$(reg_high|)+","+operands$
+! bfins Dn,<ea>{o:w}
+^ bad_opcode!=reg_high|<>0
+! bftst/bfchg/bfclr/bfset need register field 0
+^ mnemonic$=shift_names$(op_kind|)+".w"
+! memory shift: one bit, word size, memory alterable EA
+^ ELSE
+' Register shift: name index = type (bits 3-4) * 2 + direction (bit 8)
+^ ops_dhigh_dlow
+! count in Dx: Dx,Dy
+^ IF reg_high|=0
+! immediate count 0 means 8
+@ PROCEDURE dis_group_f
+' Decodes opcode line F by coprocessor ID cp_id| (bits 9-11) and type cp_type| (bits 6-8).
+' 68030 selected, ID 0, type 0: PMMU pflusha and pmove to/from TT0, TT1, TC, SRP, CRP, MMUSR.
+' 68040 selected, ID 3, type 0: move16 with an absolute long address.
+' 68040 or the FPU option: 68881/68882 general ops, fmovecr, fmove to memory, fmovem, FScc, FDBcc,
+' FTRAPcc, FBcc, fsave and frestore.  The coprocessor ID is not checked for the FPU, so any ID decodes
+' as FPU code.  Words that match nothing emit nothing and become DC.W.
+^ IF BTST(cpu_mask&,2)=-1 AND cp_id|=0 AND cp_type|=0
+' PMMU: $F000 $2400 = pflusha; otherwise pmove with the MMU register in extension bits 10-15
+^ IF BTST(first_ext_word&,9)
+! bit 9: MMU register to <ea>
+^ IF (first_ext_word& AND 511)=0
+! low 9 bits must be zero (the flush-disable form is not decoded)
+^ IF BTST(cpu_mask&,3)=-1 AND cp_id|=3 AND cp_type|=0
+' move16 (Ay)+/(Ay) to or from (xxx).l: bit 4 clear = postincrement, bit 3 set = absolute first.
+' ea_mode_bits| is computed but never used; the (Ax)+,(Ay)+ form ($F620) is decoded as if it were one of these.
+^ ea_reg&=1
+! absolute long
+^ first_ext_word&=@fetch_word
+' Type 0, FPU general: op_kind| = opclass (bits 13-15), reg_high| = source specifier (10-12), reg_low| =
+' destination FPn (7-9), fpu_opmode| = opmode (0-6).  Bit 14 (R/M) set means the source is an EA.
+^ IF op_kind|=2 AND reg_high|=7
+' fmovecr.x #rom,FPn with a comment naming the ROM constant
+^ IF op_kind|=0 OR op_kind|=2
+' Opclass 0 (FPn to FPn) or 2 (<ea> to FPn); the EA size is 16 + format so ea_operand reads FPU formats
+^ IF fpu_opmode|>=48 AND fpu_opmode|<=55
+' fsincos <src>,FPc:FPs: FPc in opmode bits 0-2
+^ IF fpu_opmode|<=58
+' Other ops from the fpu_op_names$ table; register to register prints one register when source = destination.
+' ftst with an EA source still gets a ",FPn" destination.
+^ IF op_kind|=3
+' Opclass 3: fmove FPn,<ea> with the k-factor for packed format: {#k} static (format 3), {Dn} dynamic (7)
+^ IF BTST(loop_j&,6)
+! sign-extend the 7-bit k-factor
+^ IF op_kind|=4 OR op_kind|=5 OR op_kind|=6 OR op_kind|=7
+' Opclasses 4-7: fmovem.  A nonzero low byte is taken as fmovem.x (data registers), a zero low byte as
+' fmovem.l of the control registers; the opclass itself is not used to tell them apart.
+^ IF (BTST(first_ext_word&,11))=FALSE
+' Static register list: bit 12 set (control/postincrement mode) puts FP0 in bit 7, clear (predecrement)
+' puts FP0 in bit 0.  Runs of three or more registers print as FPa-FPb; pass 8 flushes the last run.
+^ operands$="D"+STR$(SHR(first_ext_word&,4) AND 7)
+! dynamic register list in Dn
+^ IF BTST(first_ext_word&,13)
+! bit 13: registers to memory (memory alterable), else memory to registers
+^ ELSE
+' fmovem.l of fpcr/fpsr/fpiar selected by extension bits 12, 11, 10
+^ first_ext_word&=@fetch_word
+' Type 1: FScc, FDBcc, FTRAPcc.  The condition is extension bits 0-5; all other extension bits must be 0.
+' Opcode bits 3-5 = 7 with bits 0-2 = 2/3/4: ftrapcc.w #, ftrapcc.l #, ftrapcc; 1: fdbcc Dn,label;
+' otherwise fscc <data alterable ea>.
+^ value%=@fetch_word
+' Type 2: fbcc.w; a zero displacement is shown as fnop.  The condition comes from code_byte|, which is not
+' set here and still holds the condition of an earlier instruction (it should be opcode bits 0-5).
+^ mnemonic$=MKL$(1718513520)
+! "fnop"
+^ mnemonic$="fb"+fpu_cc_names$(code_byte|)+".l"
+' Type 3: fbcc.l, with the same stale condition as fbcc.w
+^ mnemonic$="fsave"
+! type 4: fsave <ea>
+^ mnemonic$="frestore"
+! type 5: frestore <ea>
+@ PROCEDURE ops_predec_pair
+' Operands "-(Ay),-(Ax)" for abcd/sbcd/addx/subx memory forms (reg_low| = Ay, reg_high| = Ax).
+@ PROCEDURE ops_dhigh_dlow
+' Operands "Dx,Dy" from reg_high| (bits 9-11) and reg_low| (bits 0-2).
+@ PROCEDURE ops_dlow_dhigh
+' Operands "Dy,Dx" from reg_low| (bits 0-2) and reg_high| (bits 9-11).
+@ PROCEDURE ops_add_dlow
+' Appends ",Dn" with n = reg_low| (bits 0-2) to operands$.
+@ PROCEDURE ops_add_dhigh
+' Appends ",Dn" with n = reg_high| (bits 9-11) to operands$.
+@ PROCEDURE ops_add_fp_dest
+' Appends ",FPn" with n = reg_low| (the FPU destination register) to operands$.
+@ PROCEDURE ops_fp_src
+' Sets the operands to "FPn" with n = reg_high| (the FPU source register).
+@ PROCEDURE ops_dhigh
+' Sets the operands to "Dn" with n = reg_high| (bits 9-11).
+@ PROCEDURE ops_dlow
+' Sets the operands to "Dn" with n = reg_low| (bits 0-2).
+@ PROCEDURE ops_add_ahigh
+' Appends ",An" with n = reg_high| (bits 9-11, SP for 7) to operands$.
+@ PROCEDURE ops_ea_data_alt
+' Sets the operands to the source EA (bits 0-5) checked against the data alterable class (class 2).
+' size_arg| is the operand size used for immediates and size checks.
+@ PROCEDURE ops_add_ea_data_alt
+' Appends "," and the source EA (bits 0-5, data alterable class 2) of size size_arg| to operands$.
+@ PROCEDURE ea_text_build
+' Builds the text of one effective address in ea_text$ from mode bit_field& and register ea_reg&, fetching
+' any extension words from the code.  Mode 7 register 4 (immediate) uses the size code imm_size|:
+' 0/22 byte, 1/20 word, 2/16 long, 17 single, 18 extended, 19 packed, 21 double.
+' Sets bad_opcode! for modes that do not exist.  Absolute addresses may add a system variable comment.
+^ ea_text$=@indexed_ea_text$(ea_reg&)
+! mode 6: d8(An,Xn) or 68020 full format
+^ value%=@fetch_word
+' Mode 7.0: absolute short (sign-extended word), with ".s" or ".w" by the branch_suffix_s! option
+^ IF @reloc_at(pc_offset%)<>0
+' Mode 7.1: absolute long; a relocated long becomes a label, otherwise $hex
+^ value%=ADD(row_offsets%(src_row%)+2,@fetch_word)
+' Mode 7.2: d16(PC) shown as label(PC).  The base is the instruction start + 2, which is only right when
+' this displacement is the first extension word of the instruction.
+^ ea_text$=@indexed_ea_text$(-1)
+! mode 7.3: d8(PC,Xn)
+^ SELECT imm_size|
+' Mode 7.4: immediate data by size
+^ value%=@fetch_word
+' Byte immediate: with a nonzero high byte the word is invalid when imm_byte_check! is set; otherwise the high byte
+' is dropped and a "Konstante=" (constant) comment shows the full word.  signed_bytes! prints it signed.
+^ ea_text$="#"+STR$(SINGLE{code_addr%+pc_offset%})
+! single-precision float, 4 bytes
+^ ea_text$=@fp_extended_text$
+! extended precision, 12 bytes
+^ ea_text$=@fp_packed_text$
+! packed decimal, 12 bytes
+^ ea_text$="#"+STR$(DOUBLE{code_addr%+pc_offset%})
+! double precision, 8 bytes
+^ bad_opcode!=TRUE
+! mode 7 registers 5-7 do not exist
+^ ea_text$="("+@areg_name$(ea_reg&)+")"
+' Modes 2-5: (An), (An)+, -(An), d16(An)
+@ FUNCTION reloc_label_text$
+' Returns the operand text for a relocated long value value%: a label for the program offset
+' (value - part_offset%), or, for values below the program start, the start label plus the value.
+@ FUNCTION ea_operand$
+' Returns the text of one EA field of opcode loop_j&, or "" with bad_opcode! set when the mode is not allowed.
+' size_code| = operand size (stored in imm_size| for immediates), kind_sel| = 0 for the source field (bits 0-5),
+' 1 for the destination field of move (register bits 9-11, mode bits 6-8).
+' ea_class& = address class 0-7 indexing ea_class_masks&() (0 all, 1 alterable, 2 data alterable, 3 memory
+' alterable, 4 data, 5 control, 6 memory without immediate, 7 all but immediate); +16 forbids An for byte.
+^ IF bit_field&<7 AND BTST(ea_class_masks&(ea_class&),bit_field&)=-1 OR (bit_field&=7 AND BTST(ea_class_masks&(ea_class&),bit_field&+ea_reg&)=-1)
+' Mask bits 0-6 allow modes 0-6, bits 7-11 allow mode 7 registers 0-4
+@ PROCEDURE instr_emit
+' Finishes the decoded instruction.  When want_size_suffix! is set the size suffix .b/.w/.l from size_code| is added
+' (size 3 is invalid).  A valid instruction is laid out into src_lines$(src_row%) and was_emitted! is set; an
+' invalid one only clears the flags so the caller shows the word as DC.W.  comment$ is always cleared.
+^ IF layout_tabs!=FALSE AND layout_compact!=FALSE
+' Fixed layout: mnemonic at column col_mnemonic&, operands at col_operands&, comment after them (";")
+^ IF layout_compact!
+' Compact layout: "mnemonic operands ;comment" with single spaces
+^ ELSE
+' Tab layout: mnemonic in column 1, operands and comment at columns relative to col_mnemonic&
+
+@ PROCEDURE section_directive
+' Writes a section directive as the next output line.
+' opcode& selects the section: 0 TEXT, 1 DATA, 2 BSS, 3 END.
+' section_style| is the assembler syntax: 0 plain "TEXT", 1 ".TEXT", 2 "CSECT TEXT_SECT,CODE", 3 "SECTION TEXT".
+' Advances src_row% to the next line.
+^ IF section_style|=2
+' CSECT syntax names the text section CODE, otherwise TEXT; "DATA" is MKL$ of $44415441
+^ IF section_style|=1
+! dot syntax: .TEXT/.DATA/.BSS/.END
+^ IF opcode&<>3
+' Lattice-style CSECT or SECTION prefix; END gets no prefix
+^ IF layout_tabs!=FALSE AND layout_compact!=FALSE
+' fixed column layout: indent the directive to the mnemonic column
+
+@ FUNCTION fetch_byte
+' Reads the byte at the current disassembly offset pc_offset% and advances the offset by 1.
+
+@ FUNCTION fetch_word
+' Reads the signed word at the current offset.
+' The offset advances by 2 unless a label is needed at this offset and it is not the first word of the
+' line; then bad_opcode! is set so the instruction is written as dc.w instead of hiding the label.
+^ IF (label_flags!(pc_offset%))=FALSE OR pc_offset%=row_offsets%(src_row%)
+! label inside the instruction: mark it invalid
+
+@ FUNCTION fetch_uword
+' fetch_word as an unsigned word 0..65535.
+
+@ FUNCTION fetch_long
+' Reads the long at the current offset; advances by 4 unless a label falls inside (sets bad_opcode!).
+
+@ FUNCTION sign_extend_byte
+' Sign-extends a byte value: 128..255 becomes -128..-1.
+
+@ FUNCTION fp_extended_text$
+' FPU extended real (.x) immediate as "#<decimal>".
+' The 12-byte operand: sign bit 31 and 15-bit exponent (bias 16383) in the first long, 64-bit mantissa
+' with explicit integer bit in the next two longs.  Advances the offset by 12.
+^ fp_exponent%=(SHR(value%,16) AND 32767)-16383
+! unbiased exponent
+^ fp_sign&=(-1)^(BTST(value%,31))
+! sign +1 or -1
+^ FOR loop_i&=63 DOWNTO 0
+' Sum the mantissa bits as 1 + 1/2 + 1/4 ...; mantissa bit 32 is read from the low long (bit 0 of
+' the third long) because the switch to the low long happens before bit 32 is tested
+^ RETURN "#"+STR$(fp_sign&*fp_mantissa*2^fp_exponent%)
+
+@ FUNCTION fp_packed_text$
+' FPU packed decimal real (.p) immediate as "#[-]d.<16 hex digits>E[-][e3]eee".
+' First long: bit 31 mantissa sign, bit 30 exponent sign, bits 27-16 three exponent digits,
+' bits 15-12 fourth exponent digit, bits 3-0 integer digit; the next two longs hold the 16 fraction
+' digits as BCD, printed with HEX$.  Advances the offset by 12.
+^ IF BTST(value%,31)
+! mantissa sign
+^ IF BTST(value%,30)
+! exponent sign
+^ ascii_code|=SHR(value%,12) AND 15
+! fourth exponent digit, shown only when non-zero
+^ RETURN "#"+work_str$+HEX$(INT{V:value%} AND 4095,3)
+! high word bits 11-0: the three exponent digits
+
+@ FUNCTION num8_text$
+' Text of a byte-sized number value%.
+' With hex operands on (num_hex!): 0..9 decimal, negative as "-$" + magnitude, others "$hex".
+' Hex off: plain decimal.
+^ IF ABS(value%)>=0 AND ABS(value%)<10
+! the first test is always true, so negative values -9..-1 also come out as decimal
+^ IF value%<0
+! two's complement magnitude of the byte
+
+@ FUNCTION num16_text$
+' Text of a word-sized number: 0..15 decimal, negative "-$" + magnitude, others "$hex" when hex
+' operands are on (num_hex!), otherwise decimal.
+
+@ FUNCTION num32_text$
+' Text of a long number: -15..15 decimal, negative "-$" + magnitude, others "$hex" when hex operands
+' are on (num_hex!), otherwise decimal.
+^ IF ABS(value%)<=2147483647
+! false only for $80000000
+^ RETURN "$8000000"
+! one zero short: should be $80000000
+^ bad_opcode!=TRUE
+! never reached, it follows the RETURNs
+
+@ FUNCTION reloc_at
+' Returns the relocation flag for offset value%, or 0 when the program has no relocation table
+' (relocs_loaded!) or the offset lies beyond it.
+
+@ FUNCTION areg_name$
+' Address register name for register number areg_no&: "A0".."A6", "SP" for 7.
+
+@ FUNCTION address_label$
+' Label text for program offset value%, marking the offset in label_flags!() as needing a label.
+' Search order: program symbols (when present and used), the user label table, then a generated
+' label "T_", "D_" or "B_" + address by segment, or "A_" + address outside the program when it is
+' disassembled for a non-zero address.  Otherwise sets bad_opcode! and returns "".
+' The user label loop uses the global loop_i&, which clobbers the caller's loop counter.
+^ result_long%=value%+base_addr%
+! absolute address
+^ IF syms_loaded!=TRUE AND use_symbols!=TRUE
+' program symbol table
+^ IF lists_enabled!(1)
+' user label table, ends at the first empty name
+^ result_long%=tseg_len%+dseg_len%
+' generated labels by segment: TEXT, DATA, then BSS (after the gap section_adjust%)
+^ IF base_addr%<>0 OR section_adjust%<>0
+! address outside the program: A_ label, not marked
+^ bad_opcode!=TRUE
+! no label possible: the operand is invalid
+
+@ FUNCTION label_address_text$
+' Absolute address of offset value% as text for generated labels: hex when label_names_hex! is on, else decimal.
+
+@ FUNCTION indexed_ea_text$
+' Operand text of an indexed addressing mode (mode 6, or PC with index for areg_no&=-1).
+' Reads the extension word: bit 8 clear = brief format d8(An,Xn.s*scale); bit 8 set = 68020 full format,
+' with BS/IS/BD size in bits 7-4 and I/IS in bits 2-0: (bd,An,Xn) or memory indirect ([bd,An],Xn,od).
+' kind_sel| is 0 brief, 1 memory indirect, 2 full format without memory indirection.
+' Scale and full format on a CPU below 68020 (cpu_mask&<2) set bad_opcode!.
+^ ext_iis|=ext_word& AND 15
+! I/IS field
+^ ext_flags|=C:bitfield_code%(ext_word&,L:262148)
+! bits 7-4: BS, IS, BD size
+^ bit_field&=C:bitfield_code%(ext_word&,L:589826)
+! bits 10-9: scale
+^ IF BTST(ext_word&,8)
+' Full format only when a 68020+ CPU is selected and I/IS is a legal value (bit 3 clear)
+^ IF areg_no&>=0
+' Address register base: base displacement as a number
+^ IF kind_sel|=0
+' brief format: 8-bit displacement in the low byte of the extension word
+^ base_reg$=MKI$(20547)
+' PC base ("PC"): the displacement becomes a label relative to the extension word
+^ disp_text$=@address_label$(value%+(row_offsets%(src_row%)+2))
+^ index_text$=@index_reg_name$(ext_word&)
+' Index register with size (bit 11) and scale factor
+^ IF kind_sel|=0 OR kind_sel|=2
+' Brief or full format without memory indirection; BS suppresses the base register
+^ IF BTST(ext_iis|,2)
+' Postindexed: the index goes outside the brackets, so mark it suppressed inside.  When IS is already
+' set the cleared value is stored in ext_iis| instead of ext_flags|.
+^ work_str$=MKI$(10331)
+! "(["
+^ SELECT ext_flags|
+^ work_str$=work_str$+"]"
+^ IF BTST(ext_iis|,2)=-1
+! postindexed: index after the bracket
+^ IF outer_size|=2
+' outer displacement, word or long
+
+@ FUNCTION index_reg_name$
+' Index register named by an extension word: bit 15 selects An, bits 14-12 the register number.
+
+@ PROCEDURE movem_operands
+' Writes a MOVEM instruction: mnemonic$ is the mnemonic, opcode& the opcode, regs_to_mem! TRUE for registers to
+' memory.  Reads the register mask word, reverses it for the -(An) mode, and builds the list with "/"
+' between registers and "-" for runs of three or more (pairs as "D0/D1").  With movem_list_style! the A0 bit is
+' held back so ranges do not run from D7 into A0.  A mode not allowed in the direction sets bad_opcode!.
+^ reg_mask%=@fetch_uword
+! register mask
+^ bit_field&=C:bitfield_code%(opcode&,L:196611)
+! EA mode, bits 5-3
+^ IF regs_to_mem!=TRUE AND bit_field&=4
+' Predecrement mode: the mask is bit reversed (bit 0 = A7)
+^ IF regs_to_mem!=TRUE AND bit_field&<>3 OR (regs_to_mem!=FALSE AND bit_field&<>4)
+' (An)+ is not allowed for registers to memory, -(An) not for memory to registers
+^ FOR loop_i&=0 TO 16
+' Bit 16 is always clear and closes a run that ends at A7
+^ IF movem_list_style!
+' Split option: clear the A0 bit when reaching it and reprocess bit 8 on the next pass
+^ IF BTST(reg_mask%,loop_i&)
+' Start of a run writes its first register; the end of a run of 2 writes "/last", longer "-last"
+^ IF regs_to_mem!
+' register list then EA, or EA then list; the EA is read with the offset 2 further on
+^ instr_emit
+
+@ FUNCTION movem_reg_name$
+' MOVEM register list bit number as a register name: 0-7 "D0".."D7", 8-15 "A0".."A7".
+
+@ PROCEDURE xbra_header
+' Writes an XBRA header found in TEXT ($5842 followed by the long "XBRA"):
+' dc.l 'XBRA', dc.l with the 4-character id, and dc.l 0 when the old vector long is zero.
+' A non-zero old vector is left to the main loop.  Sets was_emitted! so the main loop skips the word.
+^ mnemonic$=MKL$(1684221548)
+! "dc.l"
+^ operands$="'"+MKL$(@fetch_long)+"'"
+! the XBRA id
+^ IF LONG{code_addr%+pc_offset%}=0
+' zero old vector
+
+@ PROCEDURE sysvar_comment
+' Comment with the system variable name for absolute address value%, when the OS tables are loaded
+' and OS comments are on.  Values that are not sign-extended words get $FF in the top byte before the
+' compare with the system variable table sysvar_addrs&().
+
+@ PROCEDURE fmovecr_comment
+' Comment for an FMOVECR constant ROM offset loop_j&: pi, log10(2), e, log2(e), log10(e), 0.0, ln(2),
+' ln(10), 10^0 and 10^1..10^4096 for $33-$3F.  The log10(e) text shows 4.43429 for 0.43429.
+^ SELECT loop_j&
+
+@ PROCEDURE os_jsr_comment
+' For jsr/bsr operands: when OS comments are on, the help tables are loaded and tos_comments! is set,
+' an operand containing the user's GEMDOS, BIOS or XBIOS routine name gets the call name comment,
+' with the function number searched for by the user's patterns.
+^ IF INSTR(operands$,gemdos_trap_pat$)>0
+! GEMDOS routine
+^ IF INSTR(operands$,bios_trap_pat$)>0
+! BIOS routine
+^ IF INSTR(operands$,xbios_trap_pat$)>0
+! XBIOS routine
+
+@ PROCEDURE os_call_comment
+' Puts the OS call name for a TRAP into comment$.  bit_field& is the trap number: 1 GEMDOS, 2 VDI/AES,
+' 13 BIOS, 14 XBIOS.  opt_flag! TRUE: called from a jsr, the number is found with the user patterns
+' tos_func_pat1$/tos_func_pat2$.  Otherwise the previous tos_search_lines| output lines are searched for the function number.
+' Unknown numbers are named "gemdos n", "bios n", "xbios n".
+^ IF opt_flag!
+^ IF tos_search_back!
+' Search back from the line before the trap; -3 means nothing found yet
+^ IF tos_stack_parse!
+' Stack arguments: the function number is the last word pushed before the trap
+^ IF INSTR(work_str$,"(SP)")<>0
+^ IF loop_j&>0 AND INSTR(work_str$,"move.")
+! move #n,-(SP)
+^ IF INSTR(work_str$,"clr.")<>0
+! clr -(SP): number 0
+^ IF value%>0 AND INSTR(work_str$,".l")
+! move.l pushes two words: the number is the high word
+^ IF INSTR(work_str$,"pea")<>0
+! pea n: high word of the pushed long
+^ IF INSTR(work_str$,"move")>0 AND INSTR(work_str$,",D0")>0
+! number in D0 (trap #2)
+^ IF value%=-3
+' Fallback: immediate moved with the user patterns tos_stack_pat$ (",-(SP)") or tos_reg_pat$ (",D0")
+^ IF value%>=0 OR (bit_field&=2 AND value%>=-2)
+' Name lookup; trap #2 also accepts D0 = -1/-2 (vq_driver/vq_gdos), 200/201 AES, 115 ($73) VDI
+^ SELECT bit_field&
+
+@ FUNCTION signed_number_at
+' VAL of work_str$ from position loop_j&, with a leading "-" giving a negative value.
+
+@ PROCEDURE gem_call_comment
+' For jsr/bsr operands: when the operand contains the user's AES binding name (aes_trap_pat$, AES names on)
+' the AES number is searched back gem_search_lines| lines with aes_reg_pat$/aes_func_pat$ and named; the same for the VDI
+' binding name vdi_trap_pat$ with vdi_reg_pat$/vdi_func_pat$.
+^ IF aes_comments!=TRUE AND INSTR(operands$,aes_trap_pat$)>0
+^ IF vdi_comments!=TRUE AND INSTR(operands$,vdi_trap_pat$)>0
+
+@ PROCEDURE aes_name_comment
+' AES function name for the number value% found before the call.
+' With aes_by_control! the value is a byte offset into a control table: number = 10 + offset/4.
+' Otherwise the opcode is the first non-zero byte of the long (from the high byte).
+' Unknown numbers give "aes".
+^ IF aes_by_control!
+^ FOR pos_in_long&=0 TO 3
+
+@ PROCEDURE vdi_name_comment
+' VDI function name for the long value% found before the call: the opcode is its first non-zero byte,
+' and the entry also matches on the sub-opcode at byte position vdi_sub_byte| when the table entry has one.
+^ FOR loop_i&=0 TO vdi_count&
+' vdi_codes&() holds opcode in the low byte and sub-opcode in the high byte
+
+@ FUNCTION lookback_immediate
+' Searches the search_depth| output lines before the current one for a line containing pattern_a$ and returns
+' the value after its "#", or -1.  By operator precedence the pattern_b$ and "#" tests apply only when
+' pattern_a$ is empty; a line matching pattern_a$ without "#" returns VAL of the whole line.
+
+@ PROCEDURE mnemonic_tables_init
+' Builds the mnemonic tables at start-up:
+' DBcc/Bcc/cc names for the 16 conditions (0 and 1 are dbt/bra/t and dbra/bsr/f, the rest "db"/"b"+cc),
+' shift/rotate and bitfield names, FPU format suffixes, FPU opmode names (plus fcmp $38, ftst $3A),
+' FPU conditions, and the EA class masks ea_class_masks&() used to check the addressing mode of an operand.
+^ RESTORE cond_code_names
+^ RESTORE shift_bitfield_names
+^ RESTORE fpu_format_names
+^ RESTORE fpu_op_list
+^ RESTORE fpu_cond_list
+^ DIM ea_class_masks&(15)
+' EA classes: bits 0-6 allow modes 0-6, bits 7-11 allow mode 7 registers 0-4
+
+@ PROCEDURE help_file_reload
+' Loads the help file help_path$ (DS_HILFE.TXT) into the help window lines help_text$().
+' opt_flag! TRUE first asks for the file with the file selector (cancel ends).
+' The file starts with its line count as 10 characters; a file without it is plain text (lines =
+' size/20) and the OS name tables stay unloaded (help_loaded! FALSE).
+' From a table file it builds the AES, VDI, GEMDOS, BIOS, XBIOS, line-A and system variable name tables
+' from the sections listed in help_section_keys.
+^ IF opt_flag!
+^ IF EXIST(help_path$)
+^ ERASE help_text$()
+' Free all old tables
+^ OPEN "i",#1,help_path$
+^ help_lines%=VAL(work_str$)
+^ RECALL #1,help_text$(),-1,window_lines%(1,1)
+! reads the text lines, window_lines%(1,1) = lines read
+^ IF help_loaded!
+^ token_str$=MKL$(1095062330)
+! "AES:", overwritten by the READ below
+^ FOR rect_w&=0 TO 6
+' Seven sections: header text and the key before each entry's number
+^ FOR loop_i&=0 TO window_lines%(1,1)
+! find the section header
+^ IF loop_i&<window_lines%(1,1)
+' First pass to END: count entries (lines not starting with space or ",") and find the highest number
+^ SELECT rect_w&
+^ term_count&=0
+' Second pass: name = first word of the line, number after the key
+^ pos_in_str&=INSTR(help_text$(row_idx&),work_str$)
+^ entry_no&=VAL(MID$(help_text$(row_idx&),pos_in_str&+(LEN(work_str$)+(rect_w&=6))))
+! for SYSVAR the "$" of the key stays for VAL
+^ SELECT rect_w&
+^ INC term_count&
+^ INSERT help_text$(0)=""
+! plain text file: blank first line
+^ win_update_sliders(1)
+! redraw the help window
+
+@ PROCEDURE areas_in_text
+' Writes the user's data areas inside TEXT (table area_ranges%(), absolute start/end addresses) as dc lines,
+' inserted at the matching place in the disassembly.  Areas switched off in area_inactive!() are skipped.
+^ saved_pc%=pc_offset%
+^ FOR area_index&=0 TO lst_dim&(0)
+^ pc_offset%=area_ranges%(area_index&,0)-base_addr%
+! area start as an offset
+^ FOR src_row%=0 TO window_lines%(0,1)
+' find the first line at or after the area start
+^ dc_bytes_output(-1)
+^ progress_done%=progress_total%
+! progress bar full
+^ FOR src_row%=1 TO window_lines%(0,1)
+' continue output after the last used line
+
+@ PROCEDURE section_data_output
+' Writes the DATA section: DATA directive, then dc lines up to the end of DATA.
+' For a resource file (rsc_mode!) the 18 header words come first as dc.w: offsets as label-rsh_vrsn
+' expressions (non-zero words 1-9 and rsh_rssize), the others as numbers.
+^ section_directive(1)
+^ IF rsc_mode!
+^ mnemonic$=MKL$(1684221559)
+! "dc.w"
+^ progress_bar_start(2,pc_offset%,dseg_len%)
+^ dc_bytes_output(0)
+^ IF rsc_mode!
+' empty line at the end of DATA for a label there
+
+@ PROCEDURE dc_bytes_output
+' Writes dc lines from offset pc_offset% up to block_end%.  opt_flag! TRUE inserts new lines (for data areas in
+' TEXT) instead of filling the next ones.
+' A relocated long becomes dc.l <label>; other bytes are dc.b, with text by dc_ascii_mode&: 1 printable
+' characters, 2 any non-zero byte, 3 numbers only, quote characters always as numbers.
+' A line ends at a needed label, a relocated long, the block end, or the line width dc_line_len&.
+^ IF @reloc_at(pc_offset%)<>0
+' relocated long: dc.l label; when no label is possible the relocation flag is dropped and the bytes
+' are written as dc.b
+^ win_idx|=FALSE
+! byte count of the line
+^ dc_byte|=@fetch_byte
+^ IF dc_ascii_mode&<=2
+^ IF dc_ascii_mode&=1 AND dc_byte|>=32 AND dc_byte|<>39 OR (dc_ascii_mode&=2 AND dc_byte|<>0 AND dc_byte|<>39)
+' text byte: open a quote when needed
+^ operands$=operands$+@dc_number_text$(dc_byte|)
+! number byte, after closing an open quote
+^ UNTIL label_flags!(pc_offset%)=-1 OR @reloc_at(pc_offset%) OR pc_offset%>=block_end% OR dc_line_len&<=LEN(operands$)+LEN(token_str$)
+! token_str$ is always empty here
+^ mnemonic$=MKL$(1684221538)
+! "dc.b"
+^ ERROR 16
+! line array full
+^ IF pc_offset%>=progress_next%
+' progress bar and stop check
+
+@ FUNCTION printable_char$
+' Character for a byte with codes below 32 shown as a space.  Never called.
+
+@ FUNCTION dc_number_text$
+' dc value text: "$hex" when hex dc values are on (dc_values_hex!), else decimal.
+
+@ FUNCTION printable_text$
+' Returns work_str$ with every control code below 32 replaced by a space, for comments.
+
+@ PROCEDURE bss_section_output
+' Writes the BSS section: BSS directive, then one ds line per block between needed labels, with the
+' directive chosen by ds_style| (ds, blk, dcb, dsbss) and the size .l/.w/.b by the block length and an
+' even start.  bss_size_comment! adds the byte count as a comment.  Ends with the END directive and sets the
+' line count of the source window.
+^ pc_offset%=tseg_len%+dseg_len%+section_adjust%
+! BSS start offset
+^ IF label_flags!(src_idx%-part_offset%)=-1 OR src_idx%=bss_end%
+' block ends at a label or the BSS end
+^ SELECT ds_style|
+^ IF MOD(code_len%,4)=0 AND EVEN(row_offsets%(src_row%))=-1
+' longest size that divides the length on an even start
+^ IF label_flags!(bss_end%)
+' label at the BSS end: empty line carrying it
+^ section_directive(3)
+! END
+^ window_lines%(0,1)=src_row%-1
+
+@ PROCEDURE labels_insert
+' Puts the labels into the output lines.
+' Pass 0 places the program symbols (when used), pass 1 the user labels: the line with the label's
+' address gets the name, or a new "name: " line is inserted before it when it already has a label
+' or comment.  The search goes on from the previous match while the addresses ascend.
+' Then every line whose offset is marked in label_flags!() gets a generated T_/D_/B_ + address label.
+^ FOR label_pass|=FALSE TO 1
+^ label_last_idx%=-(MUL(sym_last%,label_pass|=0)+MUL(lst_dim&(1),label_pass|=1))
+! last index of the table of this pass
+^ IF value%<label_last_addr%
+! address below the previous label: search from the start
+^ IF @is_label_line(src_row%)=0
+' free label field: write into the line and clear the label flag; else insert a line
+^ seg_text_last%=tseg_len%-1
+' segment ends for the label prefix
+^ progress_bar_start(4,0,window_lines%(0,1))
+^ IF label_flags!(row_offsets%(src_idx%))
+' label prefix by segment: "T_", "D_" or "B_" (MKI$ of $545F, $445F, $425F)
+^ label_put(src_idx%,work_str$+@label_address_text$(row_offsets%(src_idx%))+":")
+
+@ PROCEDURE label_put
+' Puts label lbl_text$ at the start of output line src_row%.
+' Fixed columns: the label overwrites the indent.  Tabbed layout (layout_tabs!): the indent is added first.
+' Spaced layout (layout_compact!): label and a space go before the line.
+
+@ PROCEDURE fault_handler
+' ON ERROR handler.  Releases the mouse and WIND_UPDATE locks and closes files; a second error within
+' 2 seconds (400 ticks) quits.  Clamps the source line count, redraws the desktop and re-arms itself.
+' Errors 16/17/71 (array index/dimension): alert, resume at the main loop.
+' Errors 8/90 (memory): frees the program buffer and label flags, alert, resume at the main loop.
+' Other GFA/GEMDOS errors -67..100: the error text in an alert.
+' Anything else prints a dump (opcode, offset, line numbers and lines) in inverse video and quits.
+^ WHILE update_count&>0
+' undo every WIND_UPDATE(1) and WIND_UPDATE(3)
+^ IF TIMER-last_error_time%<400
+^ ON ERROR GOSUB fault_handler
+^ ERASE code_buf&()
+^ PRINT AT(5,3);"p***  Unrecoverable error!  ***"
+' Unrecoverable error dump
+^ program_quit
+
+@ PROCEDURE gem_shutdown
+' Leaves GEM: closes the progress dialog window, closes and deletes both windows, removes the menu bar
+' and frees the resource.  Gives the memory back with RESERVE when the program text starts with $6024
+' (BRA.S, a compiled program) or a restart is pending.
+^ IF wdialog_handle&>0
+^ FOR win_idx|=FALSE TO 1
+^ ~MENU_BAR(mbar_tree%,0)
+^ IF INT{BASEPAGE+256}=24612 OR restart_wanted!=TRUE
+
+@ PROCEDURE program_quit
+' Leaves GEM and ends the program.
+
