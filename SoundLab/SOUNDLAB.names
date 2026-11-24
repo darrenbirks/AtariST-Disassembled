@@ -1,0 +1,813 @@
+# Names for SOUNDLAB.PRG (Sound Lab 1.1), worked out from the decompiled code.
+# usage: gfadec SOUNDLAB.PRG -inline -names SOUNDLAB.names -comments SOUNDLAB.comments
+fn_00028        le_word                         # DEFFN: reads a little-endian (Intel order) 16-bit word at an address
+func_125d8      keyboard_scancode               # returns the last byte from the keyboard ACIA $FFFC02 (scan code / release code)
+func_15608      keys_pending                    # Bconstat on the console; during a tour eats keys and flags an abort
+func_159e8      pointer_x                       # pointer x (tour, own pointer or MOUSEX)
+func_15a22      pointer_y                       # pointer y (tour, own pointer or MOUSEY)
+func_15a5c      pointer_buttons                 # pointer buttons (tour, own pointer or MOUSEK)
+func_1d242      msgbox_show                     # builds an alert-style dialog tree from a "[icon][lines][buttons][keys][LEFT]" string, runs it, returns button
+func_20cda      rect_hit                        # TRUE if a point lies inside a rectangular shape
+func_20d9e      obj_hit                         # TRUE if the mouse lies inside a clickable object
+func_23d20      wildcard_match                  # TRUE if a filename matches one of the |-separated patterns (* ? # wildcards)
+func_244ba      pixel_width_of                  # width in pixels of a string in a font (8 per char for fixed fonts)
+func_24590      font_find                       # returns the font header pointer for a font id
+func_27056      path_number_pop                 # returns the first number of a path string and removes it from the string
+func_271e8      fopen_channel                   # opens a file on a channel: I/O/U/A, or N = create (asks Erase/Rename/Cancel if it exists)
+func_274ce      fread_channel                   # GEMDOS Fread on a channel with Retry/Cancel alerts; 0 or error
+func_27578      fwrite_channel                  # GEMDOS Fwrite on a channel with Retry/Cancel alerts; 0 or error
+func_27622      fclose_channel                  # GEMDOS Fclose on a channel with Retry/Cancel alerts
+func_27674      fsize_of                        # file length from Fsfirst/DTA, or a negative GEMDOS error
+func_276de      fread_byte                      # reads one byte from a channel (never called)
+func_27740      fread_word                      # reads one word from a channel (never called)
+func_277a2      fseek_abs                       # GEMDOS Fseek from the start of the file on a channel
+func_27834      fseek_rel                       # GEMDOS Fseek from the current position on a channel
+func_278ca      fexists                         # -1 if a file exists (Fsfirst), else 0; also shows the mouse and resets the clip
+func_27bfe      thousands_commas                # number as a string with commas every three digits
+proc_00082      startup_check                   # checks for SOUNDLAB.COL/.MON and 150000 bytes free; prints an error and ENDs if not
+proc_001cc      program_init                    # sets up INLINE code, mouse, palette, memory, loads SOUNDLAB.COL/MON and SOUNDLAB.PRF, draws screen
+proc_0130a      program_run                     # lays out the Free Space drive menu, runs the main window event loop, then restores the system
+proc_015e2      sys_restore                     # removes own mouse driver and font, restores $118 vector, resolution, palette and conterm
+proc_01664      action_dispatch                 # dispatches a clicked object of a form (main window buttons and dialog handlers)
+proc_01c70      trace_draw                      # draws the visible part of the sample as lines, bars or dots, block and loop marked
+proc_027ac      status_block_draw               # draws block length (seconds or bytes) and, if enabled, file size and block offset
+proc_02c08      status_name_draw                # draws the path/file name in the status line, cut to fit
+proc_02d90      overview_bar_draw               # draws the bar under the waveform that shows where the block lies in the file
+proc_02f2a      status_zoom_draw                # draws the zoom factor (Max/16x..1x) and the sample rate in KHz
+proc_030e4      memory_size_draw                # draws "Memory Size: ..." (free sample memory) in the top bar
+proc_03238      sample_length_update            # rounds the sample length to 320 bytes, resets zoom and scroll bar, redraws everything
+proc_033de      zoom_apply                      # sets the scroll bar for the zoom level in v07f2& around the block or old centre, redraws
+proc_03720      block_mark_mouse                # lets the user mark block start (left button) and end (right button) in the waveform
+proc_03a96      all_button_down                 # shows main window object 7 (select whole file) pressed: state byte 0
+proc_03ac4      all_button_up                   # shows main window object 7 (select whole file) released: state byte 4
+proc_03af2      zoom_limit_calc                 # sets the highest useful zoom level from the sample length
+proc_03b42      rate_dialog_handle              # handles a click in the sample rate dialog (form 6): presets, text, slider, test, x2, /2, semitones
+proc_040ec      rate_timer_calc                 # reads the rate dialog text, snaps it to 614400/n Hz and sets the MFP Timer A control/data word
+proc_042c4      block_rate_convert              # Convert the marked block from the current rate v07fe& to the rate typed in tree 6 obj 15 (param 0 = ask first)
+proc_04bf2      sample_play                     # Play button: plays the block, the looped sample, or (alt mode / Shift+Space) the buffer
+proc_04e62      play_stop_cursor                # After Play: blinks an XOR line where playback stopped until click, key or menu bar
+proc_050de      input_monitor                   # Monitor button: live scope of the cartridge input, or (alt mode) record-and-play-through
+proc_054c8      sample_record                   # Record button: record over whole file or block, optionally waiting for sound
+proc_058f0      block_reverse                   # Reverse the marked block (INLINE v068e%)
+proc_0597a      block_sign_flip                 # Toggle signed/unsigned format of the block (add $80 to each byte, INLINE v0692%)
+proc_059d2      block_cut                       # Cut the block to the buffer at the top of memory, rotating it up in 10240-byte steps
+proc_05c12      block_copy                      # Copy the block to the buffer at the top of memory
+proc_05d0e      block_insert                    # Insert the buffer (or, in alt mode, a sample file) at the block start
+proc_06682      overlay_dialog                  # Event handler of the Overlay dialog (tree 11): level text fields, sliders, preview
+proc_06bba      overlay_mix                     # Overlay: mix the buffer (or, in alt mode, a sample file) into the block at two levels
+proc_08404      overlay_preview                 # Draw the Overlay dialog preview: two sine waves at their levels and their mix
+proc_095b0      preview_waves                   # Compute the two preview sine values and their mix for column v02f0& and the next one
+proc_096de      volume_dialog                   # Event handler of the Volume dialog (tree 8): preview play, factor text, slider
+proc_09964      volume_apply                    # Apply the Volume dialog factor to the block through a 256-byte map
+proc_09a9e      volume_preview_draw             # draws the amplify (mode 0) or fade (mode 1) preview: envelope outline, original and scaled waveform
+proc_0aa76      preview_point_calc              # preview helper: next original wave y pair (sample data or test sine) and envelope factor pair
+proc_0ae5c      amplify_try                     # Try in the amplify dialog: builds a gain table from slider 5 and plays the block through it
+proc_0af7e      fade_dialog_event               # event handler of the fade dialog 12: sliders, text fields, fade in/out presets, shape, try
+proc_0b8f6      fade_apply                      # applies the fade (start/end volume, shape) to the block through the volume tables
+proc_0bb72      fade_try                        # plays the block with the fade applied on the fly from a segment list, sample unchanged
+proc_0bdd6      echo_dialog_event               # event handler of the echo dialog 14: sliders, text fields, load/save .EKO; object 17 from panel = apply
+proc_0c950      echo_apply                      # applies the echo (decay, delay, repeats) to the block with the INLINE echo routines
+proc_0cbe6      prefs_dialog_event              # opens the preferences dialog 16 and saves SOUNDLAB.PRF; handles its rate/microwire/options buttons
+proc_0d78c      microwire_dialog_event          # opens the STE Microwire dialog 35 (volume, balance, bass, treble) or handles its events
+proc_0e74a      microwire_try                   # Test in dialog 35: sends the slider values to the LMC1992 and plays the block, globals unchanged
+proc_0e882      block_clear_gap                 # Clear (block/buffer/everything) or, in shift mode, insert a silent gap the size of the block
+proc_0edd4      block_remove                    # removes the block from the sample, closing the hole
+proc_0ef32      block_trim                      # keeps only the block: moves it to the sample start and silences the rest
+proc_0f08a      sample_loop_menu                # Loop button: alert Set Loop (loop = block) / Reset Block (block = loop) / Loop On/Off
+proc_0f190      sample_loop_shift               # moves the loop points after data is inserted (delta>0) or removed (delta<0) at a position
+proc_0f2ae      sample_loader                   # Load: whole file, into the marked block or into the buffer; partial loads, formats, rate
+proc_0ffa2      partial_dialog_events           # event handler of dialog 15 (partial load): slider <-> start offset text field
+proc_10202      sample_saver                    # Save: whole sample, block or buffer as SPL/SAM/AVR/WAV/SMP/rate-named raw; partial write back
+proc_10d4c      help_menu                       # Help: help topic dialog 38 when SOUNDLAB.HLP exists, else the key summary screen
+proc_10dc6      key_summary_screen              # draws the keyboard shortcut table over the waveform area and waits for a key or click
+proc_1123a      program_quit                    # Quit alert; dissolves the screen to black, restores the system and ENDs
+proc_112e6      main_shifted_keys               # keys of the main window: ^ menu shortcuts, Alt+A..P free space, shifted buffer functions, F-key rates
+proc_11aa2      fade_curve_keys                 # F1-F4 in the fade dialog (12) choose the fade curve type and redraw the curve
+proc_11af0      serial_decode                   # decodes the program serial string v05e6$ (XOR 250 on every byte)
+proc_11b52      buttons_normal_mode             # draws the normal button images and clears buffer mode v0274!
+proc_11c80      buttons_buffer_mode             # draws the buffer-function button images and sets buffer mode v0274!
+proc_11dae      fade_curve_build                # builds the fade segment list (volume table, start, end) for curve types 1-3
+proc_1244c      pointer_freeze                  # XBIOS Initmous relative mode, threshold 127: the mouse barely moves (during playback)
+proc_124b2      pointer_normal                  # XBIOS Initmous relative mode, threshold 1: normal mouse movement
+proc_12518      key_release_wait                # waits for a key's release code, for modifier keys to be released, flushes the keyboard
+proc_1261a      screen_frame_draw               # clears the screen and draws the main window frame and the title, mono or colour layout
+proc_12be4      format_detect                   # detects the sample file format from its header or extension, seeks to the sample data
+proc_12ec4      format_parameters               # sets signed, stereo and rate (v02d0! v028c! v026c%) for the detected format v0898&
+proc_13218      intel_long_store                # stores a long little-endian (Intel order) at an address
+proc_13296      intel_word_store                # stores a word little-endian (Intel order); never called
+proc_132e0      palette_read                    # reads the 16 colour registers (XBIOS Setcolor n,-1) into a 32-byte string
+proc_13342      txt_centred                     # draw string centred on x (width measured with font v01e4%, drawn with the current font)
+proc_133b8      txt_right                       # draw string right-aligned so it ends at x (width from font v01e4%)
+proc_13424      palette_fade_build              # build 8 palettes v07c8$(0..7) fading from palette 2 (step 0) to palette 1 (step 7)
+proc_1371a      disk_free_space                 # free bytes on a drive by reading its boot sector and counting free FAT entries
+proc_13a8e      fat_entry_fetch                 # fetch one 12-bit or 16-bit FAT entry from a FAT buffer
+proc_13b9a      rwabs_retry                     # BIOS Rwabs with error alert; sets v0370&
+proc_13c16      vbl_install                     # put a routine into the first free VBL queue slot, return the slot address
+proc_13ccc      media_change_force              # make GEMDOS re-log a drive via a one-shot hdv_mediach handler plus Fsfirst
+proc_13de0      selector_call                   # AES fsel_input / fsel_exinput called directly, returns full path and exit button
+proc_13f68      font_attr_set                   # select a font (font > 0) or set colour, style and top offset for txt_draw
+proc_14020      txt_draw                        # draw string with its top at y (subtracts the font top offset)
+proc_1405c      wrmode_set                      # set Line-A writing mode (and GRAPHMODE when the GEM pointer is used)
+proc_14098      linea_text_setup                # fill the Line-A TEXTBLT variables from a GEM font header
+proc_14234      txt_blit                        # draw a string char by char with Line-A $A008 TextBlt
+proc_143f6      player_code_setup               # INLINE block v0726%: the sample play/record machine-code routine
+proc_14404      sample_run_range                # play/record one memory range through the player routine, then fix the nag timer
+proc_145c6      sample_run_list                 # play a list of ranges through the player routine, then fix the nag timer
+proc_14770      keyclick_off                    # clear conterm bit 0 (key click off)
+proc_14794      keyclick_on                     # set conterm bit 0 (key click on)
+proc_147b8      tour_step                       # one step of the help-tour script player (simulated pointer, text boxes)
+proc_15486      tour_box_remove                 # restore the screen under the tour text box
+proc_154bc      tour_move_setup                 # set up the pointer glide from the current to the target position
+proc_155b4      tour_stop                       # end a help tour and give the pointer back to the user
+proc_15664      pointer_hide                    # hide the pointer (own VBL pointer or HIDEM), reset the Line-A clip
+proc_15812      pointer_show                    # show the pointer (own VBL pointer or SHOWM), reset the Line-A clip
+proc_1585a      pointer_busy                    # 0 = arrow, other = busy bee pointer form
+proc_15920      pointer_state                   # read pointer x, y and buttons (tour, own pointer or MOUSE)
+proc_15aee      desk_menu                       # Desk menu: Sound Lab info, Shareware, Thanks, or Accessories
+proc_15b34      info_screen                     # title picture screen; with Alternate held frees the picture memory for samples
+proc_16178      shareware_dialog                # Desk > Shareware dialog (tree 27)
+proc_16188      thanks_dialog                   # Desk > Thanks dialog (tree 28)
+proc_16198      accessories_menu                # show a real GEM menu bar so desk accessories can run, then redraw all
+proc_1628a      acc_menu_done                   # ON MENU handler: remove the GEM menu bar and end the accessory loop
+proc_16298      filedisk_menu                   # File/Disk menu dispatcher
+proc_162dc      cmd_rename_file                 # File/Disk > Rename File (selector, dialog 18, Frename)
+proc_164f8      cmd_delete_files                # File/Disk > Delete File(s) (wildcards allowed, Fdelete)
+proc_16722      cmd_create_folder               # File/Disk > Create Folder (Dcreate)
+proc_16830      cmd_remove_folder               # File/Disk > Remove Folder (Ddelete)
+proc_16bd0      cmd_free_space                  # File/Disk > Free Space > drive: alert with the free bytes
+proc_16ce8      cmd_format_disk                 # File/Disk > Format Disk: 80 tracks, 10 sectors, own boot sector
+proc_17130      menu_nop                        # empty procedure for menu separator lines
+proc_17132      rsc_init                        # set resource pointers from the loaded SOUNDLAB.COL/.MON data, set GUI defaults
+proc_17216      screen_metrics_init             # sets per-resolution sizes from Getrez: shadow offsets, screen limits, Line-A blit plane/line steps
+proc_1729c      vdi_colour_map_init             # fills v089e&() with the VDI pen -> hardware palette register map (0,15,1,2,4,6,3,5,...)
+proc_17388      dialog_run                      # runs a resource dialog: draw, mouse/keyboard loop, edit fields, until an exit object; VAR result
+proc_18c40      dialog_object_click             # handles a mouse click on one dialog object by its type (button, radio, slider, arrow, move bar)
+proc_19732      button_track                    # tracks the mouse while the button is held over an object, inverting it; VAR state flag
+proc_19996      hslider_drag                    # horizontal slider click/drag: page left/right, jump (right button), or drag the knob
+proc_1a4ac      vslider_drag                    # vertical slider click/drag: page up/down, jump (right button), or drag the knob
+proc_1afc2      rect_drag                       # drags a box (or an XOR outline when colour -1) with the mouse inside bounds; VAR final rect
+proc_1b882      dialog_draw                     # saves the background, zooms out and draws all objects of a dialog
+proc_1bb20      dialog_object_draw              # draws one object: selected state, sliders, edit field with cursor, line/box/image/text
+proc_1d0b4      object_action_call              # calls an object's action routine: kind 1 = dialog handler, kind 2 = main command dispatcher
+proc_1d160      edit_action_flush               # runs the pending action of the edited field once the mouse moves or clicks (or when forced)
+proc_1dd1a      msgbox_draw                     # draws the message box built by func_1d242: frame, shadow, icon, text lines, buttons
+proc_1e768      help_page_play                  # loads help page N from SOUNDLAB.HLP and starts its pointer-script playback
+proc_1e9cc      help_missing_msg                # alert: SOUNDLAB.HLP not found
+proc_1e9f6      dialog_key_dispatch             # passes an unused key to the key handler of the current dialog tree (1, 4, 12)
+proc_1ea4e      zoom_box_anim                   # XOR grow/shrink box animation between two rectangles (if zoom effects on)
+proc_1eece      obj_rect_store                  # stores an object's absolute rectangle in v0458&..v0464& (zoom origin)
+proc_1ef46      obj_draw_selected               # draws an object in its selected/pressed look (invert, shift by shadow, or image 2)
+proc_1f5de      obj_draw_normal                 # draws an object in its normal/released look (inverse of proc_1ef46)
+proc_1fb9a      image_blit                      # Line-A BITBLT of an image (w-1,h-1,planes,data) to screen x,y
+proc_1fd86      shape_paint                     # fills an object shape (rectangle or 4-point polygon) with colour, pattern, mode
+proc_1ffea      shape_bounds                    # bounding box of an object shape
+proc_20144      slider_thumb_h                  # horizontal slider thumb extent v0378&..v037c& from spec min/max/pos/size
+proc_202e8      slider_thumb_v                  # vertical slider thumb extent v0378&..v037c&
+proc_2048c      tree_find                       # finds a dialog tree header by tree id
+proc_204e6      obj_find                        # finds object N in a tree
+proc_2056a      radio_find_selected             # finds the selected radio button of a group in a tree (0 if none)
+proc_20644      slider_value_query              # returns a slider's position and size (spec +8, +10)
+proc_206be      obj_text_query                  # returns an object's text with trailing spaces removed
+proc_20778      obj_abs_pos                     # absolute position of the caller's object v0178% through its parent chain
+proc_20852      radio_others_off                # draws other selected buttons of a radio group unselected and clears them
+proc_20a3e      radio_set                       # selects one radio button of a group, clearing the others (no redraw)
+proc_20b6c      slider_setup                    # sets a slider's min, max, step down, step up, position, size
+proc_20c58      slider_set_pos                  # sets a slider's position and size
+proc_20f22      filesel_run                     # file selector: GEM fsel_(ex)input or Sound Lab's own selector dialog (tree 1)
+proc_213de      filesel_title_set               # sets the file selector title (tree 1 object 37)
+proc_21440      filesel_obj_action              # user-object handler of the own file selector (trees 1-3): draws and clicks
+proc_21a4c      filesel_refresh                 # re-reads the directory and redraws path and list
+proc_21ace      filesel_init                    # initialises per-drive paths and the 400-entry directory list buffer
+proc_21b88      filesel_key                     # file selector keys: Alt+A..P drive, F1..F10 filter
+proc_21e20      filesel_dir_scan                # reads a directory into the list buffer, sorted, folders first
+proc_2229a      filesel_list_draw               # draws file list rows first..last (24 slots, 3 columns)
+proc_2256c      filesel_path_draw               # draws the current path line, truncated to 364 pixels
+proc_226ea      filesel_drive_draw              # draws the current drive letter box
+proc_22a20      drive_popup                     # file selector drive button: pops up a 4x4 grid of drives A-P, tracks the mouse, switches drive
+proc_237dc      filelist_scroll_up              # file selector up arrow (object 31): moves the list rows down one row, redraws the top row, moves the selection
+proc_23976      filelist_scroll_down            # file selector down arrow (object 33): moves the list rows up one row, redraws the bottom row, moves the selection
+proc_23b04      fname_field_dot_remove          # filename edit field (type 7): takes the '.' out of the 8.3 text so editing works on 11 chars
+proc_23b66      fname_field_dot_insert          # filename edit field (type 7): puts the '.' back between name and extension
+proc_23bda      fname_pad_83                    # pads a filename to the fixed 12-char "NAME    .EXT" layout
+proc_23c86      strip_spaces                    # removes every space from a string
+proc_24102      font_convert_intel              # converts a GEM font from Intel byte order, makes its table offsets pointers, links it as font id
+proc_24226      font_link                       # appends a font header to the system font chain with the given font id (GEM mode only)
+proc_24268      font_chain_last                 # finds the last font header in the system font chain (sets v0776%)
+proc_24294      font_chain_first                # finds the first system font header (Line-A) for the current resolution (sets v077a%)
+proc_24362      font_unlink                     # selects font 1 and takes a font header out of the system font chain (GEM mode only)
+proc_243c4      font_restore_intel              # unlinks a font and turns it back into an Intel-order font with offsets (undo of proc_24102)
+proc_24606      mnu_dispatch                    # runs the menu choice in a path string ("2 7 3"): Desk menu or File/Disk menu handler
+proc_24688      mnu_item_disable                # greys out (disables) the menu item named by a path string
+proc_246e6      mnu_item_rect                   # sets x, y, w, h of the menu item named by a path (negative = keep; y doubled in mono)
+proc_247a8      mnu_sub_rect                    # sets x, y, w, h of the submenu box of the menu item named by a path
+proc_248be      mnu_build                       # builds the menu bar data (v062e$) from the DATA lines and sets the screen/menu metrics
+proc_24d40      mnu_list_build                  # reads one menu's items from DATA (recursing for '*' submenus) and appends them to a record
+proc_25166      mnu_item_find                   # finds the address of the menu record named by a path string (0 if none)
+proc_25380      mnu_item_parse                  # parses the prefixes of a menu DATA string (% ^ - * and effect byte) into the record header
+proc_25618      menubar_poll                    # when the pointer is on the menu bar: draws it, tracks the menus, runs the choice
+proc_2570e      menubar_draw                    # clears and draws the menu bar with its titles and bottom line
+proc_257a2      mnu_records_draw                # draws a run of menu records (fill, separator, image or text) at an origin
+proc_25c6a      mnu_track                       # recursive menu tracking: highlights items, opens submenus, builds the choice on release
+proc_26b86      mnu_hit_test                    # finds the enabled menu record under a point within a record range (-1 if none)
+proc_26dbe      mnu_path_build                  # builds the "t i s" path string (1-based numbers) of a menu record
+proc_270a2      frame_draw                      # draws a rectangle outline with ALINE/HLINE (colour, mode, line pattern)
+proc_271ce      channel_table_init              # DIMs the file handle and file position tables (channels 0-99)
+proc_27934      dos_error_alert                 # alert for a GEMDOS error code with Retry/Cancel; Retry sets the code to -999
+proc_27b1c      basic_err_report                # ON ERROR handler: reports the GFA BASIC error and the author's address, restores, ends
+label_24dae     mnu_item_next                   # top of the DATA reading loop in proc_24d40, re-entered after a submenu
+v0000           offs_f                          # shared LOCAL float: sample offset of the pixel being drawn
+v0004           px_step_f                       # LOCAL float: sample bytes per pixel
+v0008           ratio                           # float, shared local: rate ratio old/new or new/old in rate conversion; a scale factor elsewhere
+v000c           decay_level                     # shared local float: running gain decay^k while building echo tables (interpolation factor elsewhere)
+v0010           factor                          # shared local float: gain/volume factor (amplify gain, envelope value, fade value shown in text)
+v0014           level_log2                      # float, shared local: log2 of the volume factor, used to place the slider
+v0018           level_a                         # float, shared local: level of the existing sample (Overlay slider obj 6), first wave in previews
+v001c           level_b                         # float, shared local: level of the overlaid sound (Overlay slider obj 3), second wave in previews
+v0020           wave_y                          # shared local float: original waveform y of the current preview column
+v0024           scaled_y                        # shared local float: scaled waveform y of the current column (also envelope y)
+v0028           wave_y_next                     # shared local float: original waveform y of the next preview column
+v002c           scaled_y_next                   # shared local float: scaled waveform y of the next column
+v0030           wave_b                          # float, local: value of preview wave B at the column
+v0034           plot_b                          # float, local: clipped y offset of wave B
+v0038           wave_b_next                     # float, local: value of wave B at the next column
+v003c           plot_b_next                     # float, local: clipped y offset of wave B at the next column
+v0040           wave_mix                        # float, local: mixed value A*level_a + B*level_b at the column
+v0044           plot_mix                        # float, local: clipped y offset of the mix
+v0048           wave_mix_next                   # float, local: mixed value at the next column
+v004c           plot_mix_next                   # float, local: clipped y offset of the mix at the next column
+v0050           amplitude                       # float, shared local: preview amplitude in pixels (32 mono, 16 colour) or y scale
+v0054           level_step                      # shared float LOCAL: level step per curve point (+-0.005)
+v0058           factor_range                    # shared local float: difference between start and end factors (reciprocal in proc_11dae)
+v005c           echo_value                      # shared local float: value typed in an echo field; echo decay factor in proc_0c950
+v0060           angle_offset                    # float LOCAL of fade_curve_build: phase that selects the rising or falling half of the curve
+v0064           angle                           # float LOCAL of fade_curve_build: curve angle for the current level
+v0068           level                           # float LOCAL of fade_curve_build: current level while walking from start to end
+v006c           col_from                        # local proc_13424: start palette colour value
+v0070           r_from                          # local proc_13424: start red
+v0074           g_from                          # local proc_13424: start green
+v0078           b_from                          # local proc_13424: start blue
+v007c           col_to                          # local proc_13424: target palette colour value
+v0080           r_to                            # local proc_13424: target red
+v0084           g_to                            # local proc_13424: target green
+v0088           b_to                            # local proc_13424: target blue
+v008c           r_mix                           # local proc_13424: red of this fade step
+v0090           gb_mix                          # local proc_13424: green*16+blue of this fade step
+v0094           zoom_t                          # local proc_1ea4e: current interpolation factor
+v0098           zoom_t0                         # local proc_1ea4e: start factor
+v009c           zoom_step                       # local proc_1ea4e: factor multiplier or linear increment
+v00a0           zoom_unused                     # local proc_1ea4e: never used
+v00a4           work_text                       # shared local string: general work string (field text, file header, prefs record)
+v00a8           saved_filename                  # string LOCAL of loader/saver: v05da$ before the file selector, restored at the end
+v00ac           column_offsets                  # local: 40 words, screen byte offset of each 16-pixel column for the scope code
+v00b0           row_offsets                     # local: 400 words, screen line offset for each sample value for the scope code
+v00b4           average_table                   # local: byte table sum->average used by the down-sampling code v06c6%
+v00b8           work_text2                      # shared local string: second work string (field text, dialog position block of the prefs)
+v00bc           key_table                       # string LOCAL of key_summary_screen: '|' separated keys and function names
+v00c0           mnu_path                        # menu path string "2 7 3" (parameter / VAR parameter slot)
+v00c4           palette_str                     # string param: 32-byte palette (16 words)
+v00c8           palette_to                      # param proc_13424: target palette (16 words)
+v00cc           palette_unused                  # local proc_13424: declared, never used
+v00d0           path_z                          # shared local: NUL-terminated path (proc_13ccc, func_27674)
+v00d4           white_pal                       # local proc_15b34: 16 x $0777 white palette
+v00d8           folder_path                     # local of the File/Disk commands: folder path from the selector
+v00dc           chosen_file                     # local of the File/Disk commands: file name from the selector
+v00e0           alert_line1                     # local proc_16830: first text line patched into dialog 25
+v00e4           alert_line2                     # local proc_16830: second text line patched into dialog 25
+v00e8           dialog_background               # local of proc_17388 (dynamic): screen area under the dialog saved with GET
+v00ec           saved_bg                        # saved screen background under a popup (local slot)
+v00f0           msg_spec                        # parameter func_1d242: alert specification string
+v00f4           txt                             # shared parameter/local string: text (obj_text_query result, func_244ba text)
+v00f8           mask_spec                       # shared parameter: file name filter ("*.AVR|*.SPL|...")
+v00fc           path_dir                        # shared parameter/local: directory path with trailing backslash
+v0100           fname                           # shared parameter/local: file name (8.3, padded or trimmed)
+v0104           work_str                        # working string: menu title text, VAR record string (parameter/local slot)
+v0108           fname_arg                       # string parameter (VAR filename in proc_23bda/proc_23c86; local slot)
+v010c           button_img                      # GET image of one drive button in proc_22a20
+v0110           pattern_list                    # |-separated wildcard patterns of func_23d20
+v0114           item_header                     # 12-byte header of the menu record being built (LOCAL of proc_248be, used by callees)
+v0118           item_attr                       # default 4 attribute bytes of a menu record (font, flags, colours, height)
+v011c           subm_records                    # records of the submenu being built in proc_24d40
+v0120           prev_record                     # previous item record (gets a submenu attached by '*') in proc_24d40
+v0124           item_text                       # menu DATA string being read (global, used across the recursion)
+v0128           subm_bg                         # saved screen under an open submenu in proc_25c6a
+v012c           nest_stack                      # stack of submenu end offsets (MKI$ words), later a copy of the path bytes
+v0130           access_mode                     # open mode letter: N I O U A
+v0134           fname_z                         # filename parameter (null-terminated before GEMDOS calls)
+v0138           digits                          # decimal digits still to be grouped in func_27bfe
+v013c           linea_code                      # 6-byte machine code: Line-A init ($A000), move.l a1,d0, rts
+v0140           full_path                       # VAR param proc_13de0: selected folder + file name
+v0144           addr                            # shared param: memory address (fn_00028, proc_13a8e, proc_13b9a, proc_17132 ...)
+v0148           vbl_slot                        # global (set via proc_13c16 VAR): VBL queue slot holding the own pointer routine
+v014c           scratch_addr                    # global: 10240-byte scratch buffer below the sample (also tables, headers)
+v0150           output_table                    # global: 256-byte output conversion table passed to the player (v0672%+25600)
+v0154           length_bytes                    # shared LOCAL/global: file or data length in bytes
+v0158           work_long                       # shared LOCAL: file start offset in the loader; elsewhere an object address
+v015c           rsc_data                        # global: base of the resource object-spec data (object +24 offsets are relative to it)
+v0160           tree_end                        # global (LOCAL in func_1d242): end of the dialog tree list
+v0164           obj_found                       # shared local: object pointer returned by proc_204e6/proc_2056a
+v0168           src_pos                         # long, shared local: source offset in rate conversion; a value in other procs
+v016c           step_bytes                      # shared local long: sample bytes per preview column
+v0170           frame_left                      # shared slot: left x of the loop frame
+v0174           frame_right                     # shared slot: right x of the loop frame
+v0178           work_ptr                        # shared local: general work pointer (object spec, saved object pointer, temp long)
+v017c           size_change                     # long, local: bytes the block grows by when converting to a higher rate
+v0180           dest_pos                        # long, local: destination offset / new block end in rate conversion
+v0184           new_length                      # long, local: length of the converted block
+v0188           move_length                     # long, local: bytes of the sample tail to move
+v018c           old_sample_end                  # long, local: v0706% before the conversion
+v0190           range_pos                       # shared local long: start address/offset of a range or segment; removed length in proc_0edd4
+v0194           end_pointer                     # long, shared local: window end / buffer start pointer
+v0198           blink_timer                     # long, local: TIMER value for blinking the mouse while waiting for sound
+v019c           kept_addr                       # shared local: saved address (old hdv_mediach, pointer background address)
+v01a0           byte_count                      # long, shared local: a byte count (free space, insert size)
+v01a4           file_remaining                  # long, local: file bytes still to read; an end address in the buffer path
+v01a8           aux_long                        # long, local: refill length after rewinding the file, or second mix table address
+v01ac           chunk_len                       # shared local long: length of the gap to insert / chunk length
+v01b0           read_chunk                      # long, local: bytes read from the file per chunk (per channel)
+v01b4           write_chunk                     # long, local: bytes of the block mixed per chunk
+v01b8           seg_end                         # shared LOCAL: end of the current fade segment
+v01bc           segment_ptr                     # local: write pointer into the segment list (table, start, end) in proc_0bb72
+v01c0           echo_delay_bytes                # local: echo delay in sample bytes
+v01c4           echo_spare_long                 # local: declared in proc_0c950, never used
+v01c8           tail_len                        # local: bytes moved up when the gap eats into the buffer
+v01cc           view_end_pos                    # local: sample offset at the end of the zoom slider range
+v01d0           start_pos                       # shared param: start position/address
+v01d4           count                           # shared param: byte count / signed length change
+v01d8           stop_pos                        # shared param: end address
+v01dc           list_ptr                        # shared param: pointer to a parameter block / segment list being written
+v01e0           pointer_vector                  # LOCAL: mouse packet vector from Kbdvbase+16
+v01e4           font_ptr                        # shared param/local: GEM font header address
+v01e8           fat_index                       # param proc_13a8e: FAT entry number (reused as byte address)
+v01ec           fat_entry                       # VAR param proc_13a8e: FAT entry value
+v01f0           vbl_routine                     # param proc_13c16: routine to put in the VBL queue
+v01f4           vbl_queue                       # local proc_13c16: _vblqueue address
+v01f8           base_ptr                        # general pointer slot: font header, Line-A code, menu record, DTA
+v01fc           linea_call                      # local proc_14234: address of the $A008/RTS stub
+v0200           linea_code                      # local proc_14234: $A008 $4E75 (Line-A TextBlt, RTS)
+v0204           seg_table                       # param proc_14404: lookup table pointer put in the segment entry
+v0208           loop_from                       # shared param: loop start address for the player
+v020c           loop_to                         # shared param: loop end address for the player
+v0210           obj_clicked                     # shared local: the clicked object before parent walking; pattern/pointer elsewhere
+v0214           obj_end                         # shared local slot: end address of a tree's objects
+v0218           screen_limit                    # local proc_15664: screen end address
+v021c           bg_buf_ptr                      # local proc_15664: pointer into the pointer background buffer
+v0220           tree_first                      # global (LOCAL in func_1d242): first dialog tree header
+v0224           obj_ptr                         # shared local/parameter: pointer to a dialog record or a 28-byte object record
+v0228           scan_ptr                        # local: second scan pointer (next/previous edit field, character pointer, choice list)
+v022c           obj_scan                        # local: object pointer while scanning the list (hit test, key match, edit object)
+v0230           pattern_addr                    # shared parameter slot: fill pattern address
+v0234           font_hdr                        # font header being converted/linked
+v0238           pattern_val                     # shared local slot: fill pattern long value
+v023c           area_from                       # local proc_1ea4e: area of the start rectangle
+v0240           area_to                         # local proc_1ea4e: area of the end rectangle
+v0244           shape_p                         # shared parameter slot: pointer to an object's 4-point shape (obj+8)
+v0248           image_ofs                       # shared parameter/local slot: image offset in spec data / fill pattern
+v024c           unused_l                        # local proc_21ace: never used
+v0250           dta_addr                        # shared local slot: GEMDOS DTA address
+v0254           item_font                       # font header of a menu item being centred
+v0258           rec_ptr                         # address of a menu record while walking v062e$
+v025c           parent_rec                      # record whose disabled bit a nested submenu inherits
+v0260           target_rec                      # menu record address: hit result / record to build a path for
+v0264           fpos_seek                       # seek offset for Fseek
+v0268           num_value                       # number to format with commas
+v026c           header_rate                     # LOCAL of the loader (seen by format_parameters): sample rate stored in the file
+v0270           long_value                      # param of intel_long_store: value to store
+v0274           shift_mode                      # global: TRUE while Shift is held, the alternate button set (also LOCAL in some)
+v0278           ok_flag                         # boolean result slot: drive present, pattern matched, file chosen
+v027c           saved_alt_mode                  # local: v0274! saved over Play
+v0280           buffer_labels_shown             # local: TRUE while the panel shows the buffer labels during Shift+Space play
+v0284           cursor_drawn                    # local: TRUE while the XOR stop-position line is on screen
+v0288           signed_sample                   # shared local: the file holds signed samples (copy of v02d0!)
+v028c           header_stereo                   # LOCAL of the loader (seen by format_parameters): file holds stereo data
+v0290           rate_convert                    # local: the overlaid file is converted to the current rate
+v0294           block_load                      # LOCAL of loader/saver: load into / save from the marked block
+v0298           buffer_load                     # LOCAL of loader/saver: load into / save from the buffer
+v029c           partial_save                    # LOCAL of the saver: write the sample back into the original file at its offset
+v02a0           loop_on                         # shared param: player loop flag
+v02a4           dialog_done                     # local of proc_17388 (dynamic): set TRUE by an exit object to end the dialog
+v02a8           click_outside                   # local of proc_17388: last click was outside every object
+v02ac           cursor_in_ext                   # local of proc_17388: filename field cursor is on the extension
+v02b0           button_state                    # shared local: selected state of a button / slider pressed flag
+v02b4           action_done                     # local of proc_18c40: object action already handled (skip the final call)
+v02b8           flag_state                      # shared VAR/local boolean: button state in proc_19732; general flag elsewhere
+v02bc           full_draw                       # parameter of proc_1bb20: TRUE draws state/sliders/cursor, FALSE draws the plain object
+v02c0           zoom_geometric                  # local proc_1ea4e: factor grows by multiplying (else linear)
+v02c4           redraw_all                      # local proc_2229a: whole list redrawn
+v02c8           too_many_files                  # set for error -35 in proc_27934 but never used
+v02cc           saved_flag                      # shared local: saved boolean (v07af! in proc_16198)
+v02d0           signed_samples                  # LOCAL/global: file data is signed (converted with v0692%)
+v02d4           mw_master                       # global: Microwire master volume 0..40 (-80..0 dB)
+v02d8           mw_left                         # global: Microwire left volume 0..20 (-40..0 dB)
+v02dc           mw_right                        # global: Microwire right volume 0..20 (-40..0 dB)
+v02e0           mw_bass                         # global: Microwire bass 0..12, 6 = flat (2 dB steps)
+v02e4           mw_treble                       # global: Microwire treble 0..12, 6 = flat (2 dB steps)
+v02e8           output_device                   # global: playback output 0 YM2149, 1 STE DMA sound, 2 third choice of the prefs
+v02ec           obj_ofs                         # shared local slot: offset of the object being built
+v02f0           ix                              # shared local/parameter slot: x position or loop index
+v02f4           drive_map                       # BIOS Drvmap bits (drive B removed with one floppy)
+v02f8           dialog_id                       # shared parameter slot: dialog id in nearly every use (font number in func_24590/proc_24102)
+v02fc           obj_num                         # shared parameter slot: object number
+v0300           origin_x                        # shared local/parameter: dialog x origin
+v0304           origin_y                        # shared local/parameter: dialog y origin
+v0308           saved_inset_top                 # shared LOCAL: saved v0310& while the echo dialog runs
+v030c           saved_inset_bottom              # shared LOCAL: saved v0314& while the echo dialog runs
+v0310           cursor_top                      # global: edit cursor top offset from the field (-2)
+v0314           cursor_bottom                   # global: edit cursor bottom offset from the field (2)
+v0318           y_centre                        # word, shared local: preview baseline offset here; a line pattern in proc_01c70
+v031c           dot_style                       # LOCAL: dotted line style $5555 used outside the block
+v0320           slider_value                    # shared local word: value of a slider/object read by proc_20644
+v0324           slider_size                     # shared local word: second value of an object (slider page size), often a dummy
+v0328           y_or_j                          # y coordinate / second loop index / offset (shared local slot)
+v032c           width_name                      # LOCAL: room for the file name in pixels
+v0330           range_max                       # shared local word: upper clip of the preview y (64/32); slider max elsewhere
+v0334           rect_x1                         # left x of a rectangle / area origin
+v0338           rect_x2                         # right x of a rectangle / area
+v033c           k                               # shared third counter / buttons
+v0340           last_x                          # shared local: previous x position (drawn box); previous mouse x elsewhere
+v0344           button_previous                 # shared local: mouse button state of the previous loop pass
+v0348           saved_rate                      # shared LOCAL: saved sample rate, or slider position in the rate dialog
+v034c           saved_timer                     # shared LOCAL: saved timer setting, or the timer divider in the rate dialog
+v0350           num_val                         # shared slot: a word value (rate in Hz, width, counter)
+v0354           edit_object                     # shared local (dynamic): id of the active edit field; -1 redraw with cursor, 0 without
+v0358           ms_x                            # mouse x (global)
+v035c           ms_y                            # mouse y (global)
+v0360           ms_b                            # mouse buttons (global); -1 ends menu tracking
+v0364           tail_length                     # word, local: bytes of the last partial cut chunk (below 10240)
+v0368           channels                        # word, local: 1 = mono, 2 = stereo converted to mono
+v036c           pad_value                       # word, local: silence byte to pad the file data with (128 unsigned, 0 signed)
+v0370           gem_error                       # shared: GEMDOS/BIOS/XBIOS error code, -999 = Retry chosen
+v0374           colour_work                     # shared local: slider track colour here; line colour elsewhere
+v0378           knob_start                      # shared local (dynamic): slider knob start pixel (proc_20144); line pattern elsewhere
+v037c           knob_end                        # shared local (dynamic): slider knob end pixel; line pattern elsewhere
+v0380           lo_n                            # shared local/parameter slot: minimum (polygon min y, slider min)
+v0384           line_pattern                    # shared local word: line pattern ($5555 dotted in mono, -1 solid)
+v0388           mode_param                      # shared parameter word: preview mode 0 amplify / 1 fade; mode or flag elsewhere
+v038c           phase_offset                    # shared local word: start angle in degrees of the sine envelope shapes
+v0390           counter                         # loop counter / offset into v062e$ (shared local slot)
+v0394           fade_start_pct                  # global word: fade start volume in percent
+v0398           fade_end_pct                    # global word: fade end volume in percent
+v039c           fade_level                      # global word: current volume table number while stepping a linear fade
+v03a0           fade_steps                      # global word: number of linear fade segments (percent difference + 1)
+v03a4           step_counter                    # shared local word: segment loop counter / arrow step
+v03a8           echo_count                      # local word: number of echo repeats
+v03ac           echo_spare_word                 # local: declared in proc_0c950, never used
+v03b0           saved_default_rate              # local: default rate saved while the prefs dialog runs
+v03b4           key_code                        # shared param: key code (ASCII, or scan code +128 for Alt/function keys)
+v03b8           key_inp                         # global word: INP(2) key (scan code+128 for keys without ASCII); INSTR result elsewhere
+v03bc           rect_ay                         # shared local/parameter slot: rectangle A top
+v03c0           y_bottom                        # shared LOCAL/param: rectangle bottom y
+v03c4           curve_type                      # param of fade_curve_build: fade curve type 1-3
+v03c8           pal_index                       # local proc_13424: colour index 0-15
+v03cc           drive_no                        # shared param: drive number (0 = A)
+v03d0           fat_secs_left                   # local proc_1371a: FAT sectors still to scan
+v03d4           root_secs                       # local proc_1371a: root directory sectors
+v03d8           secs_per_clus                   # local proc_1371a: sectors per cluster
+v03dc           reserved_secs                   # local proc_1371a: set to 1, never used
+v03e0           root_first                      # local proc_1371a: first root directory sector
+v03e4           data_first                      # local proc_1371a: first data sector
+v03e8           clus_left                       # local proc_1371a: clusters (FAT entries) still to check
+v03ec           clus_bytes                      # local proc_1371a: bytes per cluster
+v03f0           aux                             # shared word: FAT sector offset here, unused param in proc_13f68, selector button
+v03f4           total_secs                      # local proc_1371a: total sectors
+v03f8           free_clus                       # local proc_1371a: free cluster count
+v03fc           sec_bytes                       # local proc_1371a: bytes per sector
+v0400           chunk_secs                      # local proc_1371a: sectors per 10K read chunk
+v0404           obj_type                        # local of proc_1bb20: object type byte (+3), changed to 130/131 for indirect image/text
+v0408           rw_flag                         # param proc_13b9a: Rwabs read/write flag
+v040c           sec_count                       # param proc_13b9a: sector count
+v0410           range_start                     # first item / start offset of a record range
+v0414           vbl_count                       # local proc_13c16: nvbls
+v0418           item_height                     # height parameter / text height
+v041c           font_no                         # param proc_13f68: font number (0 = keep font)
+v0420           text_fg                         # param proc_14098: text colour
+v0424           text_effects                    # param proc_14098: text style bits
+v0428           text_rotation                   # param proc_14098: CHUP rotation
+v042c           unused_param                    # param proc_14098: never used
+v0430           blit_x                          # param proc_14234: x of the next character
+v0434           blit_y                          # param proc_14234: y
+v0438           player_mode                     # param proc_14404/proc_145c6: device, +128 = record
+v043c           rate_code                       # param proc_14404/proc_145c6: timer/DMA rate code (v080a&)
+v0440           pix_width                       # shared local: pixel width (tour text line width, then line colour)
+v0444           object_x                        # shared local/parameter: object origin x including all parent offsets
+v0448           object_y                        # shared local/parameter: object origin y including all parent offsets
+v044c           busy                            # param proc_1585a: 0 = arrow, other = busy bee
+v0450           double_sided                    # local proc_16ce8: 1 = two sides
+v0454           virgin_word                     # local proc_16ce8: Flopfmt fill word ($E5E5, 0 on track 0)
+v0458           zoom_x1                         # global: left of the last zoom-box rectangle
+v045c           zoom_y1                         # global: top of the last zoom-box rectangle
+v0460           zoom_x2                         # global: zoom box source rectangle x2
+v0464           zoom_y2                         # global: zoom box source rectangle y2
+v0468           result_value                    # shared VAR parameter: exit value of proc_17388; alert button elsewhere
+v046c           click_x                         # shared local: mouse x from proc_15920
+v0470           click_y                         # shared local: mouse y from proc_15920
+v0474           click_buttons                   # shared local: mouse buttons from proc_15920 (1 left, 2 right)
+v0478           cursor_pos                      # local of proc_17388 (dynamic): character position of the cursor in the edit field
+v047c           background_x                    # local of proc_17388 (dynamic): x of the saved dialog background
+v0480           background_y                    # local of proc_17388 (dynamic): y of the saved dialog background
+v0484           edit_mouse_x                    # local of proc_17388 (dynamic): mouse x when the field was last edited, -1 = no pending action
+v0488           edit_mouse_y                    # local of proc_17388 (dynamic): mouse y when the field was last edited
+v048c           saved_zoom_x1                   # local of proc_17388: zoom rectangle on entry, restored on exit
+v0490           saved_zoom_x2                   # local of proc_17388: see saved_zoom_x1
+v0494           saved_zoom_y1                   # local of proc_17388: see saved_zoom_x1
+v0498           saved_zoom_y2                   # local of proc_17388: see saved_zoom_x1
+v049c           obj_draw_mode                   # shared parameter slot: object draw type (1 invert, 2/4 shift, 3 image)
+v04a0           parent_obj                      # shared local slot: parent object number
+v04a4           group_id                        # shared parameter slot: radio group id
+v04a8           box_x1                          # shared local/VAR: rectangle x1 (or box x)
+v04ac           rect_y1                         # shared local/VAR: rectangle y1 (or box y)
+v04b0           box_x2                          # shared local/VAR: rectangle x2 / width / slider pixel length
+v04b4           rect_y2                         # shared local/VAR: rectangle y2 / height / slider pixel length
+v04b8           slider_last                     # global/local: slider value last reported to the action routine
+v04bc           knob_colour                     # parameter of proc_1afc2: knob colour, -1 = drag an XOR outline
+v04c0           grab_dx                         # local of proc_1afc2: box x minus mouse x at the start of the drag
+v04c4           grab_dy                         # local of proc_1afc2: box y minus mouse y at the start of the drag
+v04c8           last_y                          # local of proc_1afc2: previous y position of the drawn box
+v04cc           action_kind                     # shared local/parameter: object action byte (+4): 1 dialog handler, 2 main dispatcher
+v04d0           flush_force                     # parameter of proc_1d160: 0 = run the pending action now
+v04d4           spec_ofs                        # local func_1d242: offset of the spec being built
+v04d8           zoom_dy1                        # local proc_1ea4e: top delta
+v04dc           zoom_dx2                        # local proc_1ea4e: right delta
+v04e0           zoom_dy2                        # local proc_1ea4e: bottom delta
+v04e4           zoom_cur_x1                     # local proc_1ea4e: current left
+v04e8           zoom_cur_x2                     # local proc_1ea4e: current right
+v04ec           zoom_cur_y1                     # local proc_1ea4e: current top
+v04f0           zoom_cur_y2                     # local proc_1ea4e: current bottom
+v04f4           ofs_x                           # shared parameter slot: drawing offset x
+v04f8           ofs_y                           # shared parameter slot: drawing offset y
+v04fc           delta_down                      # parameter proc_20b6c: slider step down
+v0500           delta_up                        # parameter proc_20b6c: slider step up
+v0504           sel_index                       # chosen drive in proc_22a20; menu depth in proc_25c6a
+v0508           list_bytes                      # local proc_21e20: bytes used in the list buffer (16 per entry), later rows
+v050c           fs_status                       # local proc_21e20: Fsfirst/Fsnext result
+v0510           range_end                       # end of an item/record range
+v0514           conv_len                        # length of the font part to byte-swap (data table offset)
+v0518           pix_total                       # accumulated pixel width
+v051c           mnu_item_h                      # height of a menu item (8 colour, 16 mono)
+v0520           subm_x                          # x of a submenu box
+v0524           subm_y                          # y of a submenu box
+v0528           subm_width                      # widest item = submenu box width
+v052c           subm_height                     # submenu box height
+v0530           rec_flags                       # flags word at record +10
+v0534           old_rec                         # offset of the highlighted record before the change (-1 none)
+v0538           subm_hdr                        # offset of the open submenu header (-1 none)
+v053c           value_edge                      # shadow edge coordinate in proc_25c6a; number popped in func_27056
+v0540           cur_rec                         # offset of the record under the pointer (-1 none)
+v0544           channel                         # file channel number 0-99
+v0548           active_dialog                   # local of proc_17388 (dynamic scope): id of the dialog being run, read by called routines
+v054c           short_value                     # param of intel_word_store: value to store
+v0550           scan_code                       # byte LOCAL: keyboard scan code
+v0554           attr_byte                       # local proc_21e20: DTA attribute byte
+v0558           pat_char                        # current pattern character in func_23d20
+v055c           fname_char                      # current filename character in func_23d20
+v0560           semitone                        # global: 2^(1/12), one semitone rate step
+v0568           env_level                       # global float: envelope factor at the current preview column
+v0570           env_level_next                  # global float: envelope factor at the next preview column
+v0578           tour_pos_x                      # global float: tour pointer x while gliding
+v0580           tour_step_x                     # global float: x step per glide frame
+v0588           tour_pos_y                      # global float: tour pointer y while gliding
+v0590           tour_step_y                     # global float: y step per glide frame
+v0598           palette                         # global: 4-colour program palette (8 bytes), saved in SOUNDLAB.PRF
+v059e           mform_busy_str                  # global: busy mouse form as a string for DEFMOUSE
+v05a4           home_path                       # global: drive and folder Sound Lab was started from
+v05aa           saved_palette                   # global: original 16-colour palette (XBIOS Setcolor reads)
+v05b0           sample_path                     # global: path of the file last loaded as the whole sample
+v05b6           block_path                      # global: path of the file last loaded into a block or the buffer
+v05bc           selector_folder                 # global: folder path of the file selector
+v05c2           echo_path                       # global: directory of the echo file selector
+v05c8           disk_path                       # global: folder of the File/Disk selectors
+v05ce           setup_file                      # global: "SOUNDLAB.COL" or "SOUNDLAB.MON"
+v05d4           title_palette                   # global: 16-colour palette of the title picture
+v05da           sample_filename                 # global: current sample file name (shown in the title bar)
+v05e0           echo_filename                   # global: file name of the echo file (default UNTITLED.EKO)
+v05e6           serial_number                   # global: decoded program serial number
+v05ec           saved_from_text                 # global: "Saved from Sound Lab 1.1, program ..., date" text written into AVR headers
+v05f2           scope_state                     # global: 640 last values (128) + 1280 counters for the scope code v06b6%
+v05f8           remove_path                     # global: null-terminated path for GEMDOS Fdelete
+v05fe           filesel_listed                  # global: path currently in the list buffer ("" forces a re-read)
+v0604           tour_moved_trees                # global: stack of saved dialog x,y (MKI$ pairs) moved by the tour
+v060a           tour_box_bg                     # global: screen saved under the tour text box (GET)
+v0610           msgbox_lines_str                # global: message text lines, "|" separated
+v0616           msgbox_buttons_str              # global: button labels, "|" separated
+v061c           msgbox_keys                     # global: button shortcut keys, one character per button
+v0622           filesel_filter                  # global: filter list given by the caller
+v0628           filesel_prev_filter             # global: filter list of the previous call
+v062e           mnu_data                        # menu bar data: all menu records (global)
+v0634           menubar_bg                      # saved menu bar area while the menus are tracked
+v063a           mnu_choice                      # chosen menu path string ("" = none)
+v0640           bak_fname                       # .BAK filename for the Rename choice
+v0646           command_file                    # global: file name passed on the command line, loaded at startup
+v0652           memory_top                      # global: offset of the end of sample memory (end of the buffer)
+v0656           font_main                       # INLINE 2634: "Power Menu Font" 8x8 GDOS font (colour); set to the mono font in high res
+v065a           mform_busy                      # INLINE 74: busy (hourglass) mouse form, hot spot 7,7, for own mouse driver and DEFMOUSE
+v065e           panel_image                     # global INLINE: panel button images (normal labels)
+v0662           panel_image_alt                 # global INLINE: panel button images (buffer/alt labels)
+v0666           serial_coded                    # INLINE 14: program serial number, each byte XOR 250 (decodes to "#GEnie.003")
+v066a           dissolve_masks                  # global INLINE: mask word tables for the screen dissolve
+v066e           dissolve_out_tab                # global: INLINE dissolve tables for v06a2%
+v0672           volume_tables                   # global INLINE: 101 volume lookup tables of 256 bytes
+v0676           arrow_form                      # global: INLINE arrow MFORM (74 bytes)
+v067a           icon_note                       # INLINE 518 (loaded from COL/MON): alert icon 1 (note)
+v067e           icon_question                   # INLINE 518 (loaded from COL/MON): alert icon 2 (question)
+v0682           icon_stop                       # INLINE 518 (loaded from COL/MON): alert icon 3 (stop)
+v0686           font_mono                       # INLINE 4666: "Power Menu Font (Monochrome)" 16-line font for high res
+v068a           code_byte_map                   # INLINE: map bytes [start,end) through a 256-byte table
+v068e           asm_reverse                     # INLINE 28: C:(start,middle,end) reverses the bytes of a block
+v0692           code_sign_flip                  # INLINE: add $80 to each byte of [start,end)
+v0696           asm_echo_checked                # global INLINE: echo pass with a check that the taps stay above the start
+v069a           raster_code                     # global: INLINE Timer B raster split (low-res picture over medium res)
+v069e           code_fill                       # INLINE: fill len bytes at addr with a byte value
+v06a2           dissolve_code                   # global: INLINE dissolve copy routine
+v06a6           asm_echo_fast                   # INLINE 102: same multi-tap echo as v0696 without the start check
+v06aa           code_mix                        # INLINE: dst=clip(tab1[dst]+tab2[src]+128) over [dst,dstend) with word tables
+v06ae           pointer_vbl_code                # global: INLINE VBL routine that draws the own pointer
+v06b2           asm_mouse_packet                # INLINE 116: IKBD mouse packet handler (mousevec): +4 x,+6 y,+8 buttons, clamps x/y
+v06b6           asm_input_scope                 # INLINE 196: live input display from the cartridge sampler until a key is pressed
+v06ba           code_halve                      # INLINE: average byte pairs in place (2:1 down-sample / stereo to mono)
+v06be           code_double                     # INLINE: 1:2 up-sample with linear interpolation to a destination
+v06c2           code_upsample                   # INLINE: up-sample by a 16-bit fractional step with linear interpolation
+v06c6           code_downsample                 # INLINE: down-sample by a 16.16 step, summing samples and dividing via table
+v06ca           asm_microwire                   # global INLINE: Supexec routine writing master/left/right/bass/treble/mix to the LMC1992
+v06ce           asm_mouse_vbl_mono              # INLINE 1334: VBL mouse pointer drawer for high res; copied into v06ae%
+v06d2           msgbox_tree_buf                 # global: buffer the message box tree is built in
+v06d6           saved_vec_118                   # global: original $118 (MFP ACIA, IKBD/MIDI) interrupt vector, restored at exit
+v06da           pattern_solid                   # global: fill pattern long, -1 solid (temporarily a dither for mono cursors)
+v06de           pattern_grey                    # global: fill pattern $AAAA5555 (grey)
+v06e2           pattern_light                   # global: fill pattern $5555FFFF (light)
+v06e6           screen_addr                     # global: physical screen address
+v06ea           vec_mouse_addr                  # global: address of the mousevec entry (Kbdvbase+16)
+v06ee           saved_mousevec                  # global: original mousevec, restored at exit
+v06f2           sample_base                     # global: address of sample memory (offsets are relative to it)
+v06f6           sample_loop_start               # global: loop start offset
+v06fa           sample_loop_end                 # global: loop end offset
+v06fe           block_start                     # global: marked block start offset
+v0702           block_end                       # global: marked block end offset
+v0706           sample_end                      # global: sample length (end offset)
+v070a           buffer_start                    # global: start offset of the cut/copy buffer (buffer runs to v0652%)
+v070e           sample_file_offset              # global: file offset of the partially loaded sample
+v0712           buffer_file_offset              # global: file offset of the last partial block/buffer load
+v0716           rsc_buffer                      # global: address of v08bc|(0), passed to proc_17132
+v071a           screen_back                     # global: second 32000-byte screen buffer (intro picture)
+v071e           saved_block_start               # global: block start saved by "select whole file"
+v0722           saved_block_end                 # global: block end saved by "select whole file"
+v0726           player_code                     # global: INLINE play/record routine with parameter block
+v072e           source_length                   # global: length of the file/buffer to insert or overlay
+v0732           mix_length                      # global: number of block bytes to overlay
+v0736           partial_length                  # global: window length for the partial load dialog
+v073a           saved_ssp                       # global: supervisor stack from GEMDOS Super
+v073e           font_current                    # global: header address of the current font
+v0742           tour_next_tick                  # global: TIMER of the next tour step (every 3 ticks)
+v0746           tour_ptr                        # global: read pointer in the tour script (work_buf+128)
+v074a           tour_wait_until                 # global: TIMER for tour waits and flashes
+v074e           pointer_data                    # global: data words of the current own pointer form
+v0752           pointer_mask                    # global: mask words of the current own pointer form
+v0756           picture_ptr                     # global: address of the title picture file in memory
+v075a           rsc_data_end                    # global: end of the resource object data, never read
+v075e           poly_points                     # global: 20-byte point buffer for APOLY / rectangles
+v0762           dblclick_time                   # global: TIMER limit for a radio-button double click (50 ticks)
+v0766           msgbox_icon                     # global: icon image of the current message box
+v076a           help_page_ofs                   # global: file offset of the help page
+v076e           ms_dummy                        # global: sink for real mouse movement during help playback
+v0772           filesel_list_addr               # global: address of the directory list buffer
+v0776           font_last                       # last font header in the chain
+v077a           font_chain                      # font header being walked / found
+v077e           mnu_pattern                     # fill/line pattern used by the menu code (normally solid)
+v0782           io_count                        # bytes moved by Fread/Fwrite, or error
+v0786           cookie_ptr                      # global: walks the cookie jar ($5A0)
+v078a           nag_deadline                    # global: TIMER when the shareware dialog next appears
+v0792           nag_interval                    # global: ticks between info dialog repeats (60000 = 5 minutes, shrinks by 10%)
+v0796           critic_vector                   # global: address of the etv_critic ($404) critical error handler at start-up
+v079a           cart_input                      # global: cartridge address the sampler input byte is read from ($FB0001-offset)
+v079e           file_rate_quant                 # global: file rate quantised to 614400/n
+v07a2           dlgs_ready                      # global: TRUE once the resource forms are set up, so the error handler may use an alert
+v07a3           sys_changed                     # global: TRUE once vectors/palette/resolution were changed and must be restored on exit
+v07a4           startup_failed                  # global: start-up error flag (missing file, too little memory, bad SOUNDLAB.COL/MON)
+v07a5           own_pointer                     # global: pointer drawn by the own VBL routine instead of GEM
+v07a6           own_mouse_start                 # global: own_mouse as found at start-up; never read again
+v07a7           dma_sound                       # global: TRUE if TOS>=1.06 and the _SND cookie has bit 1 (STE DMA sound)
+v07a8           mono                            # global: TRUE in high resolution (monochrome)
+v07a9           removable_mouse                 # global: TRUE if the own mouse driver may be removed again (GEM mouse present)
+v07aa           sample_loop_on                  # global: loop enabled
+v07ab           all_selected                    # global: TRUE while the whole file is selected by object 7
+v07ac           partial_loaded                  # global: the sample is part of a longer file
+v07ad           info_on                         # global pref: show "File: nK" and "Offset:" in the status line
+v07ae           seconds_on                      # global pref: show lengths in seconds, else bytes
+v07af           zoom_enabled                    # global: zoom-box effects on
+v07b0           menu_click_opt                  # global option: menus drop only on a click (FALSE = on touch)
+v07b1           rate_from_prefs                 # global: TRUE while the rate dialog 6 runs from the preferences
+v07b2           flag_7b2_unused                 # global: set TRUE at start, never read
+v07b3           block_played                    # global: last Play played the sample (not the buffer); enables the stop cursor
+v07b4           overlay_repeat                  # global: Overlay repeats the overlaid sound until the length is filled
+v07b5           help_allowed                    # global: Help key may start help playback
+v07b6           tour_active                     # global: help tour script is driving the pointer
+v07b7           title_freed                     # global: title picture memory given to samples
+v07b8           tour_key_hit                    # global: key pressed during a tour (abort)
+v07b9           tour_abortable                  # global: tour not yet aborted
+v07ba           info_at_startup                 # global: proc_15b34 called during start-up
+v07bb           button_released                 # global: mouse released since the last click (radio double-click test)
+v07bc           cursor_keep                     # global: never set TRUE, so the cursor is always clamped to the text end
+v07bd           mnu_shadows                     # draw drop shadows under submenus
+v07bf           opt_signed_default              # global option of dialog 58: signed data for the format that follows it
+v07c0           no_aes                          # global: TRUE when etv_critic is the BIOS default (no AES) or own mouse is used
+v07c1           acc_loop_done                   # global: GEM menu chosen, accessory loop ends
+v07c2           msgbox_part                     # global string array: message box fields, then text lines (0-4) and buttons (5-8)
+v07c8           fade_palettes                   # global array: 8 fade palettes for the title screen
+v07ce           drive_paths                     # global string array: last path per drive A..P
+v07d4           acc_menu                        # global string array: GEM menu bar ("Desk / Done with ACCs") used while ACCs run
+v07da           blit_params                     # global long array: Line-A BITBLT parameter block (23 entries)
+v07e0           chan_pos                        # array: file position per channel
+v07ec           cur_rez                         # global: current screen resolution (XBIOS Getrez)
+v07ee           saved_conterm                   # global: original conterm ($484) byte, restored at exit
+v07f0           start_rez                       # global: screen resolution at start, restored at exit
+v07f2           zoom                            # global: zoom level 0 (whole file, "Max") to 5 (1x)
+v07f4           fade_shape                      # global: fade envelope shape 0 linear, 1 and 2 quarter sine, 3 half sine (S curve)
+v07f6           trace_style                     # global pref: waveform drawing 1 = lines, 2 = bars, other = dots
+v07f8           opt_preview_sample              # global option: previews draw the block's data (FALSE = a test sine)
+v07fa           exists_option                   # global option: file-exists action 0 erase, 1 rename, 2 ask
+v07fc           default_rate                    # global: default sample rate in Hz from the prefs
+v07fe           sample_rate                     # global: sample rate in Hz
+v0800           choice                          # global: alert/dialog button result
+v0802           menubar_width                   # x of the next title while building, then menu bar width
+v0804           prev_zoom                       # global: zoom level before the last change
+v0806           zoom_max                        # global: highest useful zoom level for the sample length
+v0808           screen_max_y                    # global: bottom screen y (199 or 399)
+v080a           mfp_timer_a                     # global: MFP Timer A setting, prescaler code * 256 + data, for the player
+v080c           menubar_height                  # menu bar height (10 colour, 20 mono), then data height
+v080e           rate_before                     # global: v07fe& saved before reading a file's rate
+v0810           echo_decay                      # global: echo decay slider value (percent) for the .EKO file
+v0812           echo_delay_ms                   # global: echo delay slider value (ms) for the .EKO file
+v0814           echo_repeats                    # global: echo repeat count for the .EKO file
+v0816           fat16                           # global (should be local): 16-bit FAT flag from Getbpb in proc_1371a
+v0818           fat_loop                        # global (should be local): FAT entry loop counter in proc_1371a
+v081a           font_id                         # global: number of the selected font, never read
+v081c           text_colour                     # global: hardware pen for text (v089e& mapping)
+v081e           text_top                        # global: top offset subtracted by proc_14020
+v0820           text_style                      # global: text style bits
+v0822           wrmode_flag                     # global: writing mode not 0, never read
+v0824           linea_wrmode                    # global: Line-A WRT_MODE (0-3)
+v0826           sim_mouse_x                     # global: pointer x reported during a tour
+v0828           sim_mouse_y                     # global: pointer y reported during a tour
+v082a           sim_mouse_k                     # global: buttons reported during a tour
+v082c           tour_state                      # global: 0 next command, 1 drag, 3 wait, 4 flash, 5 glide, 6 glide then drag
+v082e           tour_cmd                        # global: current tour command code
+v0830           tour_target_x                   # global: glide target x
+v0832           tour_target_y                   # global: glide target y
+v0834           tour_buttons                    # global: buttons to report after this step
+v0836           tour_drag_x                     # global: drag destination x
+v0838           tour_drag_y                     # global: drag destination y
+v083a           tour_steps_left                 # global: glide frames left / flashes left
+v083c           tour_box_x                      # global: tour text box x
+v083e           tour_box_y                      # global: tour text box y
+v0840           tour_box_w                      # global: tour text box width (then text x)
+v0842           tour_text_len                   # global: tour text length (also help entry length in proc_1e768)
+v0844           tour_box_h                      # global: tour text box height (then text y)
+v0846           shadow_dx                       # global: shadow / outline x offset in pixels (2 low, 4 medium/high)
+v0848           shadow_dy                       # global: shadow / outline y offset in pixels (2, 4 in high)
+v084a           tour_steps_total                # global: glide frame count
+v084c           screen_max_x                    # global: 319 or 639
+v084e           menu_choice                     # global: menu number taken from menu_path
+v0850           filesel_drive                   # global: current file selector drive (0 = A)
+v0852           blit_nxwd                       # global: screen bytes to the next word of a plane (planes*2)
+v0854           screen_planes                   # global: bit planes (4/2/1)
+v0856           screen_line_bytes               # global: screen bytes per line
+v0858           dialog_text_dy                  # global: extra y offset for dialog text (8 in high resolution)
+v085a           shift_state                     # global: Kbshift BIOS(11,-1); reused as choice list counter
+v085c           key_original                    # global: typed key before field filtering, passed to the dialog key handler
+v085e           dblclick_object                 # global: object id of the last radio click for the double-click test
+v0860           letter_index                    # global: character index while trimming / scrolling a text field
+v0862           cursor_pixel_x                  # global: pixel x of the edit cursor inside the field
+v0864           msgbox_left                     # global: message text left aligned
+v0866           msgbox_text_w                   # global: widest text line in pixels
+v0868           msgbox_line_count               # global: number of text lines
+v086a           msgbox_button_w                 # global: widest button label in pixels
+v086c           msgbox_button_count             # global: number of buttons
+v086e           msgbox_h                        # global: message box height
+v0870           msgbox_w                        # global: message box width
+v0872           zoom_dx1                        # global used as a local by proc_1ea4e: left delta
+v0874           filesel_picked_obj              # global: list object of the picked file (0 none)
+v0876           filesel_entry_count             # global: number of directory entries listed
+v0878           scr_max_x                       # screen max x (319/639)
+v087a           scr_max_y                       # screen max y (199/399)
+v087c           shadow_w                        # submenu shadow width
+v087e           shadow_h                        # submenu shadow height
+v0880           txt_y_adj                       # extra y for menu text (3 in mono)
+v0882           sep_pattern                     # dotted line pattern $5555 for separators
+v0884           item_gap                        # extra space above an item from the '^n' prefix
+v0886           prev_button                     # mouse button state before the last read
+v0888           last_file_op                    # last file operation number (set, never read)
+v088a           dos_result                      # last GEMDOS result / error code
+v088c           got_word                        # word read by func_27740
+v088e           fsel_type                       # global pref: 1 = own file selector shows GEM paths, forced 0 without AES
+v0890           opt_sampler_port                # global option of dialog 58: cartridge sampler port 0 or 1
+v0892           opt_save_format                 # global option of dialog 58: format code used for an unknown extension
+v0894           opt_load_format                 # global option of dialog 58: format code for a file without a known header
+v0898           sample_format                   # global: format code 0 SPL 1 SAM 2 AVR 3 WAV 4 SMP 5 'G' 6 rate-byte 7 .### 8 .##K
+v089a           acia_byte                       # global byte: last keyboard ACIA data byte
+v089b           conterm_tmp                     # global: conterm byte read before changing the key click
+v089c           got_byte                        # byte read by func_276de
+v089e           vdi_to_hw_colour                # global array(15): VDI pen number -> hardware colour register
+v08a4           pen_map                         # array: colour number to VDI pen index
+v08aa           chan_handles                    # array: GEMDOS handle per channel
+v08b0           msgbox_tree_buf                 # global byte array (1024): built alert form
+v08b6           sample_buf_arr                  # global byte array: work buffer, sample memory and title picture
+v08bc           rsc_arr                         # global byte array: the forms (resource) part of SOUNDLAB.COL/MON
+v08c2           filesel_list                    # global byte array: 400 directory entries of 16 bytes

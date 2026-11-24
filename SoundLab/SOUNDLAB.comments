@@ -1,0 +1,2970 @@
+@ main
+' Sound Lab 1.1 (version string 1.11, July 28, 1993) by Damien M. Jones: an Atari ST/STE sample editor.
+' Loads and saves AVR, SPL, SAM, SMP, SND and WAV samples, records from a cartridge sampler, plays through
+' the YM2149 or STE DMA sound, edits blocks, loops, echo, fades, rate conversion and stereo to mono.
+' Runs in medium or high resolution, from the desktop or the AUTO folder, with its own forms, menus, file
+' selector and (without AES) its own mouse driver.  Needs SOUNDLAB.COL (colour) or SOUNDLAB.MON (mono).
+' Start-up: startup_check checks files and memory, program_init sets everything up, program_run runs the program.
+^ critic_vector%=LPEEK(1028)
+' Keep the etv_critic ($404) handler address; program_init looks at it to tell whether AES is running.
+^ dlgs_ready!=FALSE
+' Neither forms nor system changes exist yet, so the error handler basic_err_report prints plain text and restores
+' nothing.
+^ ON ERROR GOSUB basic_err_report
+' Any runtime error shows the error number and the author's address, restores the system and ENDs.
+
+@ DEFFN le_word
+' Reads an Intel order (little-endian) 16-bit word at address addr%.  Used for WAV and DOS disk structures.
+
+@ PROCEDURE startup_check
+' Start-up checks, before anything is changed.  Takes the command line (a sample to load), then checks that
+' SOUNDLAB.COL (colour) or SOUNDLAB.MON (high res) is in the current folder and that at least 150000 bytes
+' are free.  On failure it prints the reason, waits for a key and ENDs back to the desktop.
+' Sets command_file$ (command line), cur_rez& (resolution) and memory_top% (memory shortfall, re-used later).
+^ command_file$=UPPER$(TRIM$(LEFT$(CHAR{129+BASEPAGE},BYTE{BASEPAGE+128})))
+' Command line from the basepage: length byte at +128, text at +129.
+^ memory_top%=150000-FRE(0)
+' Bytes missing to the 150000 the program needs.
+^ IF cur_rez&<>2 AND (NOT @fexists("SOUNDLAB.COL"))
+' Colour resolutions need SOUNDLAB.COL, high resolution SOUNDLAB.MON.
+
+@ PROCEDURE program_init
+' Program set-up.  Places all machine-code helpers (INLINE blocks), checks TOS version, DMA sound and AES,
+' installs its own mouse driver when no GEM mouse is available, sets the palette and screen, builds the
+' memory layout (work buffer, sample memory, title picture), loads SOUNDLAB.COL/MON and SOUNDLAB.PRF,
+' sets the rate and draws the main screen.  On a bad set-up file it restores the system and ENDs.
+' Memory layout of sample_buf_arr|(): work buffer 10240 (scratch_addr%), sample memory memory_top% bytes (sample_base%), then the
+' title picture (20674 bytes, 20800 reserved).
+^ INLINE font_main%,2634
+' Machine code and data blocks.  font_main% font, mform_busy%/arrow_form% mouse forms, panel_image%/panel_image_alt% button strips,
+' serial_coded% serial number, dissolve_masks%/dissolve_out_tab% dissolve masks, volume_tables% volume tables, icon_note%..icon_stop% alert icons,
+' font_mono% mono font, code_byte_map%..code_downsample% sample routines, asm_microwire% Microwire, pointer_vbl_code%/asm_mouse_packet%/asm_mouse_vbl_mono% mouse driver.
+^ INLINE panel_image%,2270
+' panel_image%, panel_image_alt%, icon_note%, icon_question% and icon_stop% are empty here and filled from SOUNDLAB.COL/MON below.
+^ DIM msgbox_tree_buf|(1023)
+' Buffer in which msgbox_show builds alert forms.
+^ FOR ix&=0 TO 10
+' Menu bar strings (Desk / Done with ACCs) for the GEM menu shown while desk accessories run.
+^ vec_mouse_addr%=16+XBIOS(34)
+' XBIOS 34 Kbdvbase: +16 is mousevec.  If it points at an RTS ($4E75) no GEM mouse driver is installed
+' (started from the AUTO folder), so the program uses its own mouse driver (own_pointer!).
+^ dma_sound!=DPEEK(LPEEK(1266)+2)>=262
+' DMA sound: TOS 1.06 or later (sysbase $4F2 version word) and a '_SND' cookie with bit 1 (STE DMA) set.
+^ palette$=MKI$(1911)+MKI$(1093)+MKI$(547)+MKI$(0)
+' Default 4-colour palette: $777 white, $445, $223, $000 black.
+^ mform_busy_str$=SPACE$(74)
+' Busy mouse form as a string for DEFMOUSE.
+^ home_path$=CHR$(65+GEMDOS(25))+":"+DIR$(0)+"\"
+' Start path from GEMDOS Dgetdrv and the current folder.
+^ saved_vec_118%=LPEEK(280)
+' Save the $118 MFP ACIA (IKBD/MIDI) vector and the conterm byte ($484) for sys_restore.
+^ palette_read(saved_palette$)
+' Save the 16 colours of the desktop palette.
+^ pattern_solid%=-1
+' Fill patterns: $FFFFFFFF solid, $AAAA5555 grey, $5555FFFF dark.
+^ screen_addr%=XBIOS(3)
+' XBIOS 3 Logbase and XBIOS 4 Getrez.  Low resolution is switched to medium (XBIOS 5 Setscreen), and then
+' the own mouse driver is used too, as the GEM mouse does not know the new resolution.
+^ IF mono!
+' High resolution uses the monochrome font and the mono mouse drawer.
+^ LONG{pointer_vbl_code%+4}=screen_addr%
+' Mouse drawer data: +4 screen, +8 saved background address (none), +24/26 pointer x/y, +156/158 last drawn
+' x/y.  Packet handler asm_mouse_packet%: +4/+6 x/y, +8 buttons, +10 where to copy x/y (the drawer's +24).
+^ IF mono!
+' The packet handler clamps y with immediate operands at +78 and +86: 399 in high res, else 199.
+^ IF own_pointer!
+' Own mouse: hook the packet handler into mousevec and the pointer drawer into a free VBL queue slot.
+^ ~BIOS(11,BCLR(BIOS(11,-1),4))
+' BIOS 11 Kbshift: clear Caps Lock.  XBIOS 6 Setpalette with the program palette.
+^ font_convert_intel(font_main%,3)
+' Convert the font header to Motorola order and add it to the font chain as font 3.
+^ vdi_colour_map_init
+' VDI pen to hardware colour table, then show the busy mouse.
+^ IF mono!
+' Draw the "Loading, please wait..." screen: title line and patterned background.
+^ pointer_show
+' Show the mouse again, then set up the own menu bar and the file handle tables.
+^ IF NOT mono!
+' Colour only: 8 palettes for the title picture fade, filled by palette_fade_build.
+^ semitone=2^.0833333333333335
+' One semitone, 2^(1/12), for the rate dialog semitone buttons.
+^ mw_master&=40
+' Microwire (LMC1992) defaults: master 40, left 20, right 20, treble 6, bass 6.
+^ fsel_type&=0
+' Version 1.1 preferences: file selector type, sampler offset, save/load formats for unknown extensions.
+^ no_aes!=LPEEK(critic_vector%)=1895779957
+' etv_critic still points at the BIOS default "moveq #-1,d0 / rts" ($70FF4E75): AES is not running.
+^ memory_top%=FRE(0)-98000
+' Take all memory but 98000 bytes, a multiple of 320 (one waveform page), and clear it to 128 (silence).
+^ sample_base%=V:sample_buf_arr|(0)
+' Work buffer first (10240 bytes), sample memory after it; the end is kept for the title picture (20800).
+^ block_start%=0
+' The block and the sample cover the whole memory; the copy buffer at the end is empty.
+^ output_table%=volume_tables%+25600
+' Table 100 of the volume tables: the identity table used for playing.
+^ nag_interval%=60000
+' The shareware reminder appears after 60000 ticks (5 minutes at 200 Hz), then sooner each time.
+^ length_bytes%=@fsize_of(setup_file$)
+' Read the set-up file: title picture into the end of the buffer, the 3 alert icons, the 2 button strips,
+' and the rest (file size - 26768) as the forms.  Any error leaves startup_failed! TRUE.
+^ IF startup_failed!
+' Bad set-up file: restore the system and quit.
+^ title_palette$=SPACE$(32)
+' Palette of the title picture: 32 bytes after a 2-byte header.
+^ rsc_init(rsc_buffer%)
+' Set up the forms, the own file selector, the player code, and the main window scroll bar.
+^ screen_back%=255+scratch_addr% AND 16776960
+' Off-screen copy at a 256-byte boundary in the work buffer (it runs into the sample start, so it is only
+' used before a sample is loaded and when quitting).  XBIOS 5 makes it the logical screen.
+^ output_device&=0
+' Preference defaults: YM output, no file info, line waveform, fade preview from sample, seconds, zoom boxes,
+' menus on hover, ask when a file exists, 9600 Hz.
+^ IF @fexists("SOUNDLAB.PRF")<>0
+' SOUNDLAB.PRF, 1278 bytes: "SoundLab1.0Prefs" or "SoundLab1.1Prefs", palette (8), then words.  After the
+' first 8 characters are cut off, +16 output, +18 file info, +20 waveform style, +22 fade preview,
+' +24 seconds, +26 zoom boxes, +28 menu click, +30 file exists, +32 rate, +34..+42 Microwire,
+' +44 8 file selector masks of 80 bytes, then the 1.1 words at +684, then 16-byte form positions.
+^ REPEAT
+' REPEAT ... EXIT IF ... UNTIL TRUE skips the rest of the block when the file header is wrong.
+^ FOR ix&=13 TO 20
+' File selector (form 2) objects 13 to 20: user file masks, 80 characters each.
+^ IF LEFT$(work_text$,8)="1.1Prefs"
+' Version 1.1 adds 5 words and 23 more form positions (forms 36-57 are skipped).
+^ FOR ix&=1 TO y_or_j&
+' Saved form positions (16 bytes each); all zero means none saved.  High res doubles y and height.
+^ IF no_aes!
+' Without AES the GEM file selector cannot be used.
+^ sample_rate&=default_rate&
+' Start at the default rate, snapped to 614400/n Hz, and put it into the rate dialog (form 6 object 15).
+^ cart_input%=16449537-opt_sampler_port&
+' Cartridge sampler: reading $FB0001 (minus the offset) returns the converter value.
+^ flag_7b2_unused!=TRUE
+' Never read anywhere.
+^ sample_filename$="UNTITLED.AVR"
+' Draw the main screen and its status fields.
+^ BMOVE serial_coded%,V:serial_number$,14
+' Decode the serial number (XOR 250) and put it into the Shareware form (27, object 99).
+^ MODE 1
+' MODE 1 sets the DATE$ format used in the "Saved from" text that goes into saved AVR headers.
+^ IF NOT mono!
+' Colour: raster_code% mode 0 installs the idle Timer B handler (title raster split off).
+
+@ PROCEDURE program_run
+' Runs the program: places the 16 drive entries of the Free Space menu (2 7) in a 4x4 grid, disables
+' drives that do not exist, then runs the main window (form 4) in dialog_run until Quit, and finally
+' restores the system state.
+^ mnu_sub_rect("2 7",84,8,96,32)
+' Drive submenu box, then the entries A: to P:, each 24x8 pixels.
+^ IF no_aes!
+' Without AES the Accessories entry of the Desk menu is disabled.
+^ drive_map&=BIOS(10)
+' BIOS 10 Drvmap; with one floppy ($4A6 _nflops = 1) drive B is not real.
+^ dialog_run(4,choice&)
+' Main window event loop; returns when the program quits.
+
+@ PROCEDURE sys_restore
+' Restores the system state for exit: removes the own mouse driver (VBL slot, mousevec), removes the font
+' from the chain, restores the $118 vector, the resolution, the palette and the conterm byte.
+^ IF own_pointer!
+' Clear the VBL queue slot and put the old mousevec back.
+^ IF start_rez&<>XBIOS(4)
+' Back to the start resolution if it was changed.
+
+@ PROCEDURE action_dispatch
+' Handles a click on object obj_num& of form dialog_id& at form position origin_x&,origin_y&.  Form 4 is the main
+' window (play, record, zoom, block editing, effects, load/save, quit); the other forms call their dialog
+' handlers.  shift_mode! (Shift held) selects the alternate meaning of several buttons.
+^ SELECT dialog_id&
+' Form 4 main window buttons: 1 play, 2 monitor, 3 record, 4 rate, 5/6 zoom in/out, 7 select whole file,
+' 8 cut, 9 copy, 10 clear, 11 insert, 12 overlay, 13 amplify, 14 remove/trim, 15 loop, 16 fade, 17 echo,
+' 18 reverse, 19 sign, 20 load, 21 save, 22 help, 23 prefs/sound, 24 quit, 25-27 scroll, 28 waveform.
+^ sample_play
+' Play.
+^ input_monitor
+' Monitor (input display, or with Shift play-through).
+^ sample_record
+' Record.
+^ IF choice&=3
+' Rate: convert the block, or take the rate from the rate dialog and redraw.
+^ prev_zoom&=zoom&
+' Zoom in one step (Shift: to 1x), not below the zoom the file length allows.
+^ prev_zoom&=zoom&
+' Zoom out one step (Shift: whole file).
+^ IF all_selected!=FALSE
+' Select whole file: save the block and mark the whole sample; a second click brings the old block back.
+^ block_cut
+' Cut.
+^ block_copy
+' Copy.
+^ block_clear_gap
+' Clear (block, buffer or everything).
+^ block_insert
+' Insert file or buffer.
+^ IF shift_mode!
+' Overlay: with Shift from a file chosen in the file selector, else from the copy buffer.
+^ volume_apply
+' Amplify.
+^ IF shift_mode!
+' Shift: trim to the block, else remove the block.
+^ sample_loop_menu
+' Loop.
+^ fade_apply
+' Fade.
+^ saved_inset_top&=cursor_top&
+' Echo dialog (form 14) with no button frame offsets; the echo is applied when it returns 1.
+^ block_reverse
+' Reverse.
+^ block_sign_flip
+' Sign flip (signed <-> unsigned).
+^ sample_loader
+' Load.
+^ sample_saver
+' Save.
+^ help_menu
+' Help.
+^ IF shift_mode!
+' Shift: STE sound (Microwire) dialog, else the preferences.
+^ program_quit
+' Quit.
+^ IF shift_mode! AND obj_num&<>26
+' Scroll bar arrows: with Shift jump to the block start (25) or block end (27); 26 is the slider.
+^ block_mark_mouse
+' Click in the waveform: mark a block with the mouse.
+^ KEYPRESS 112
+' Sends 'p' and 'A' or 'Z' as keypresses for the keyboard handler.
+^ rate_dialog_handle
+' Form 6: rate dialog.
+^ volume_dialog
+' Form 8: amplify dialog.
+^ overlay_dialog
+' Form 11: overlay dialog.
+^ fade_dialog_event
+' Form 12: fade dialog.
+^ echo_dialog_event
+' Form 14: echo dialog.
+^ partial_dialog_events
+' Form 15: load block dialog.
+^ prefs_dialog_event
+' Form 16: preferences dialog.
+^ microwire_dialog_event
+' Form 35: STE sound dialog.
+
+@ PROCEDURE trace_draw
+' Draws the visible part of the sample into the waveform area (y 48-303 in high res, 24-151 in colour),
+' 640 pixels from scroll position slider_value& (pages of 320 bytes), slider_size&/2 bytes per pixel.  The loop is
+' shown as a dotted frame, the block solid and the rest dotted (high res) or in colour 3 against colour 1.
+' Style trace_style&: 1 lines, 2 bars from the centre line, else dots.  src_pos% and step_bytes% are not used.
+^ slider_value_query(4,26,slider_value&,slider_size&)
+' Scroll position and width from the main window slider (form 4 object 26).
+^ IF mono!
+' High resolution: centre line 176, sample byte added to 48.
+^ IF sample_loop_on!
+' Loop frame; at zoom Max the whole file fits, else only the parts of the frame that are on screen.
+^ IF trace_style&=1
+' Lines from each sample to the next.
+^ IF trace_style&=2
+' Bars from the centre line; outside the block every other bar is dotted.
+^ HLINE 0,176,639,1,0,V:pattern_solid%,1
+' Dots.
+^ ARECT 0,24,639,151,0,0,V:pattern_solid%,1
+' Colour: centre line 88, sample byte /2 added to 24.
+
+@ PROCEDURE status_block_draw
+' Draws the block length at the right of the status line ("Block: n sec" or bytes) and, when file info is
+' on (info_on!), "File: nK" and "Offset:" (block start).  High res draws a shadow text first.
+^ work_ptr%=ABS(block_end%-block_start%)
+' Block length, in seconds at the current rate or in bytes ("Blk:" when it would not fit).
+^ IF info_on!
+' File size in K and block offset.
+
+@ PROCEDURE status_name_draw
+' Draws the sample name in the status line, the name alone when file info is shown (104 pixels), else the
+' full path (360 pixels), cutting characters off the end until it fits in font font_main%.
+^ WHILE @pixel_width_of(font_main%,work_text$)>width_name&
+' pixel_width_of gives the text width in pixels.
+
+@ PROCEDURE overview_bar_draw
+' Draws the overview bar under the waveform: the file is 595 pixels from x 20, the block part left empty.
+
+@ PROCEDURE status_zoom_draw
+' Draws the zoom factor (Max, 16x, 8x, 4x, 2x, 1x) and the sample rate in KHz in the status line.
+
+@ PROCEDURE memory_size_draw
+' Draws "Memory Size:" centred in the top bar: the free sample memory (the copy buffer start buffer_start%), in
+' seconds at the current rate or in bytes.
+
+@ PROCEDURE sample_length_update
+' Called after the sample length changed: rounds it up to 320 bytes, sets zoom to Max and the scroll bar
+' to the whole file (at least 640 bytes), releases "select whole file", and redraws all status fields.
+^ IF all_selected!
+' A changed file ends "select whole file"; redraw object 7 released.
+
+@ PROCEDURE zoom_apply
+' Applies the zoom level zoom&: Max shows the whole file, levels 1-5 show 32, 16, 8, 4 or 2 pages of 320
+' bytes.  When zooming in from Max the view centres on the block, else it keeps the old centre.
+^ IF prev_zoom&<>0 OR zoom&=0
+' New scroll position: old centre, or the block centre limited to the file.
+^ SELECT zoom&
+' Slider range: the file in pages; the size is 64>>level pages, so a pixel shows 16, 8, 4, 2 or 1 bytes.
+^ slider_value_query(4,26,slider_value&,slider_size&)
+' Keep the slider inside the file, then redraw scroll bar and waveform.
+
+@ PROCEDURE block_mark_mouse
+' Marks a block with the mouse in the waveform: while a button is held a cursor line follows the mouse,
+' left button sets the block start, right button the block end, and the status line is updated.  Moving
+' out of the waveform and releasing there restores the old block.
+^ pointer_state(ix&,y_or_j&,k&)
+' Mouse x, y and buttons.
+^ REPEAT
+' Follow the mouse until the button state changes; x -1 means outside the waveform.
+^ IF last_x&<>ix&
+' Move the XOR cursor line and set the block start or end from the pixel position.
+^ IF ix&>=0
+' Draw the cursor line at the new position.
+^ IF button_previous&=2
+' Right button moves the block end, left button the block start.
+^ IF ix&>=0
+' Released inside: remove the cursor, order start and end, release "select whole file", redraw.
+^ block_start%=work_long%
+' Released outside: old block back.
+
+@ PROCEDURE all_button_down
+' Shows main window object 7 (select whole file) pressed by setting its state byte to 0.
+
+@ PROCEDURE all_button_up
+' Shows main window object 7 (select whole file) released by setting its state byte to 4.
+
+@ PROCEDURE zoom_limit_calc
+' Sets zoom_max&, the highest zoom level worth using: 5 up to 1280 bytes, 4 to 2560, 3 to 5120, 2 to 10240,
+' else 1.
+
+@ PROCEDURE rate_dialog_handle
+' Handles object obj_num& of the rate dialog (form 6).  1-11 preset rates, 15 the typed rate (snapped to
+' 614400/n Hz, 4915-30720), 17-19 slider and arrows (divider 145-position), 20 test play at the dialog rate,
+' 21-24 double, halve, a semitone up or down, 100 the current rate.  Writes the rate into object 15 and
+' moves the slider to match.
+^ work_text$=MKL$(925775416)
+' The 4 characters "7.68".
+^ num_val&=VAL(work_text$)*1000
+' Typed rate in Hz, kept in range and snapped to 614400/n, the rates the MFP timer can make.
+^ slider_value_query(6,18,saved_timer&,saved_rate&)
+' Slider: rate = 614.4 KHz / (145 - position); the arrows pause a little between steps.
+^ saved_rate&=sample_rate&
+' Test: play at the dialog rate, then put the real rate and timer setting back.
+^ obj_text_query(6,15,work_text$)
+' Double, halve, or one semitone up or down from the typed rate.
+^ IF obj_num&<>20
+' Show the new rate (6 characters) and set the slider position from it.
+^ IF obj_num&<>20 AND obj_num&<>100
+' Redraw the text and, unless it was dragged, the slider.
+
+@ PROCEDURE rate_timer_calc
+' When the rate dialog ended with OK (choice&=1): reads its rate text, limits it to 4915-30720 Hz, snaps it
+' to 614400/n and sets mfp_timer_a&, the MFP Timer A setting for the player (prescaler code * 256 + data, from
+' 2457600 Hz).  Sets sample_rate& to the rate.
+^ SELECT num_val&
+' Known rates with their timer values: 4915 uses prescaler /100, 7680 and 9600 /64, the others /4.
+' 10971 Hz gets data 55 ($137), which gives 11170 Hz; 614400/10971 is 56.  CASE "Mk" is 19819 ($4D6B).
+^ mfp_timer_a&=256+DIV(614400,num_val&)
+' Any other rate: prescaler /4 with data 614400/rate, at least 20 (30720 Hz).
+
+@ PROCEDURE block_rate_convert
+' Converts the marked block from the current rate sample_rate& to the rate typed in the rate field (tree 6 obj 15).
+' mode_param& = 0 asks first (alert 30), 1 converts at once.  Rates are clamped to 4915..30720 Hz and rounded
+' to 614400/n, the MFP timer clock (2457600 Hz / 4) divided by a whole timer count.
+' A higher rate makes the block longer: the sample tail is moved up, offering Lose Sample / Lose Buffer /
+' Convert to Fit when memory runs out.  A lower rate shrinks the block and fills the freed end with silence.
+' Sets block_start%/block_end%/sample_end%/buffer_start% and the loop points, then updates the rate (rate_timer_calc) and the display.
+^ num_val&=VAL(work_text$)*1000
+' Field text is in kHz; quantise the new rate to a timer count of the 614400 Hz MFP clock
+^ work_text$=TRIM$(STR$(CARD(sample_rate&)/1000))
+' Alert text "(from x KHz to y KHz)"
+^ IF num_val&<>sample_rate& AND block_end%>block_start%
+' Only when the rate changes and a block is marked
+^ IF num_val&>CARD(sample_rate&)
+' Up-sampling: the block grows by size_change% bytes
+^ IF sample_end%+size_change%>buffer_start%
+' The longer sample would run into the buffer: alert 47 Lose Sample / Lose Buffer / Convert to Fit / Cancel
+^ src_pos%=block_start%
+' Choice 0 (enough memory): move the whole tail up by size_change%
+^ BMOVE sample_base%+src_pos%,sample_base%+dest_pos%,move_length%
+' Open a gap of size_change% bytes at the block start; the old block now starts at block_start%+size_change%
+^ sample_loop_shift(block_start%,size_change%)
+' Shift the loop points behind the block start, then round the sample length up to whole 320-byte pages
+^ IF buffer_start%<sample_end%
+' Lose Buffer: the buffer start moves up with the sample end
+^ ratio=sample_rate&/num_val&
+' ratio is now old/new (below 1): the 16.16 step through the source for each output byte
+^ IF ABS(ratio-.5)<.0005
+' Exactly double the rate: the 1:2 interpolating copy (INLINE code_double%)
+^ ~C:code_upsample%(
+' Any other ratio: linear interpolation by the fractional step (INLINE code_upsample%)
+^ BYTE{sample_base%+dest_pos%}=ADD(
+' decay_level is never set, so this writes the first byte of the block back unchanged
+^ ratio=CARD(sample_rate&)/num_val&
+' Down-sampling: ratio = old/new (above 1); move_length% and new_length% are set but never used in this branch
+^ IF ABS(ratio-2)<.005
+' Exactly half the rate: average byte pairs in place (INLINE code_halve%)
+^ FOR ix&=0 TO 255*ratio
+' Table that divides a sum of ratio samples back to one byte, for the averaging code code_downsample%
+^ IF block_end%<sample_end%
+' Move the tail down to the new block end and fill the freed end of the sample with silence (128)
+^ rate_timer_calc
+' Store the new rate and its timer value, then refresh the sample length display
+@ PROCEDURE sample_play
+' Play button (main panel object 1, Space key).  Shift+Space (or the alt mode shift_mode!) plays the buffer
+' buffer_start%..memory_top%; otherwise plays the whole sample with its loop when the loop is on, else the block.
+' keyboard_scancode reads the last scancode from the keyboard ACIA ($FFFC02): 57 = Space pressed, 185 = released.
+' block_played! is set when the sample (not the buffer) was played, so play_stop_cursor can show the stop position.
+' shift_mode! is restored on exit.
+^ IF @keyboard_scancode=57
+' Started with Space from the main panel: Shift held (Kbshift bits 0-1) means play the buffer
+^ CARD{panel_image_alt%}=70
+' Draw only a 70x8 part of the buffer label image, then restore its size 79x19
+^ REPEAT
+' Wait for Space to be released
+^ WHILE BIOS(1,2)
+' Bconstat/Bconin on the console: flush pending keys, then wait until Shift/Ctrl/Alt are released
+^ pointer_busy(1)
+' Busy mouse; keyclick_off turns the key click off (conterm $484 bit 0) while playing
+^ IF shift_mode!
+' Buffer: play buffer_start%..memory_top% if it is not empty
+^ IF sample_loop_on! AND sample_loop_end%>sample_loop_start%
+' Loop on: play the whole sample, looping sample_loop_start%..sample_loop_end% until a key or click
+^ IF block_end%>block_start%
+' Otherwise play the marked block once
+^ IF buffer_labels_shown!
+' Put the normal label image back
+^ keyclick_on
+' Key click back on, arrow mouse
+@ PROCEDURE play_stop_cursor
+' Shows where playback stopped: called after the Play button is released when the sample was played.
+' LONG{player_code%+14} is the player's current address.  If that position is inside the visible window
+' (slider tree 4 obj 26, in 320-byte pages) an XOR vertical line blinks there every 80 ticks (0.4 s)
+' until a mouse click or key, or until the mouse moves into the menu bar (where a menu may open).
+^ range_pos%=LONG{player_code%+14}-sample_base%
+' Offset of the stop position, and the visible window from the scroll slider
+^ ix&=(range_pos%-work_ptr%)*640/(end_pointer%-work_ptr%)
+' Screen x of the stop position
+^ IF work_ptr%<TIMER
+' Toggle the XOR line (mono display y 48..303, colour 24..151)
+^ pointer_state(ms_x&,ms_y&,ms_b&)
+' Mouse over the menu titles (and clicked, or menus open on hover): leave so the menu can open
+^ IF cursor_drawn!
+' Remove the line if it is still drawn
+@ PROCEDURE input_monitor
+' Monitor button ('M').  Alt mode: records into the 10240-byte scratch buffer and plays it back in a loop
+' (monitor through) until the M key (scancode 50) is released.  Normal: a live oscilloscope of the
+' sampler cartridge input drawn by INLINE asm_input_scope% until a key is pressed.  Mouse reports are switched off
+' at the IKBD during the scope and relative mouse mode is set again afterwards.
+^ key_release_wait(50)
+' Wait for the M key to be released first
+^ sample_run_range(128+output_device&
+' Mode +128 = record; record and play the scratch buffer scratch_addr%..sample_base% as an endless loop
+^ OUT 4,10
+' IKBD $0A,$FF,$FF: mouse keycode mode with 255-step thresholds, so the mouse sends nothing
+^ work_ptr%=3842+XBIOS(3)
+' Logbase + line 24 (colour, second plane); mono uses line 48 (SUB 2 below)
+^ IF mono!
+' Tables for the scope code: column_offsets$ = byte offset of each 16-pixel column, row_offsets$ = line offset of
+' each sample value (mono: one line per value; colour: two values per 160-byte line)
+^ scope_state$=STRING$(640,128)+STRING$(1280,0)
+' Scope state: 640 previous values (silence) and the fade counters
+^ ACLIP 1,0,0,639,screen_max_y&
+' Clear the waveform area
+^ IF mono!
+' Draw the centre line by XOR: dotted in mono, solid in colour
+^ ~C:asm_input_scope%(
+' Plot the input byte at cart_input% column by column, XOR erasing old points, until Bconstat(2) is true
+^ trace_draw
+' Redraw the waveform, wait for the key to be released, restore relative mouse mode (IKBD $08)
+@ PROCEDURE sample_record
+' Record button.  With no block marked (block = whole sample) it records over the whole file, otherwise
+' alert 57 asks File / Block / Cancel; File turns Select All on (main panel object 7) first.
+' Alert 17 then asks Wait (start when the input leaves the 96..160 band) or Start now.
+' Recording over the whole file sets the new sample length from where recording stopped.
+^ IF block_start%=0 AND block_end%=sample_end%
+' Block covers the whole sample: record the file without asking
+^ IF all_selected!=FALSE
+' File chosen: press Select All so the block is the whole sample
+^ choice&=@msgbox_show(17,
+' Wait for sound or start now; then flush keys and wait for Return (scancode 28) to be released
+^ blink_timer%=TIMER
+' Wait: the mouse blinks (hidden/shown every 0.4 s) until the input byte is 32 or more from 128
+^ IF BIOS(1,2)
+' A key while waiting cancels the recording
+^ IF block_start%=0 AND block_end%=sample_end%
+' Whole file: record sample_base%..buffer_start% (all free memory up to the buffer); block: record the block only
+^ IF block_start%=0 AND block_end%=sample_end%
+' After a whole-file recording: silence the rest after the stop address, set the length to the next
+' 320-byte page (at least 640), reset the scroll slider and make the block the whole new sample
+^ sample_loop_on!=FALSE
+' Loop off and the loop markers reset
+^ trace_draw
+' Block recording: redraw the waveform and the panel indicators
+@ PROCEDURE block_reverse
+' Reverse button (main panel object 18): reverses the bytes of the marked block with INLINE asm_reverse%
+' (arguments start, middle, end) and redraws the waveform.  range_pos% is declared but unused.
+@ PROCEDURE block_sign_flip
+' Sign button (main panel object 19): adds $80 to every byte of the marked block (INLINE code_sign_flip%),
+' converting between signed and unsigned samples, and redraws.  range_pos% is declared but unused.
+@ PROCEDURE block_cut
+' Cut button (main panel object 8): moves the marked block into the buffer at the top of memory.
+' Memory layout: sample sample_base%+0..sample_end%, free space, buffer buffer_start%..memory_top%.  The old buffer is cleared
+' and the block is rotated to the top in 10240-byte steps through the scratch buffer scratch_addr%.
+' With less than 10240 bytes left after the cut the dialog tree 9 is shown instead.
+^ IF memory_top%-block_end%+block_start%<10240
+' Not enough room to rotate: show the warning dialog (tree 9)
+^ IF sample_loop_start%>block_start% AND sample_loop_start%<block_end%
+' Loop points inside the block move to the block start; sample_loop_shift shifts the ones behind it
+^ IF buffer_start%<memory_top%
+' Throw away the old buffer contents (fill with silence) and make the buffer empty
+^ WHILE block_end%-block_start%>=10240
+' Rotate one 10240-byte chunk: save it, move everything above it down, put it at the top of memory
+^ IF block_end%>block_start%
+' The last part of the block (below 10240 bytes) the same way
+^ IF sample_end%=0
+' Everything was cut: the sample becomes the whole free memory (silence)
+@ PROCEDURE block_copy
+' Copy button (main panel object 9): copies the marked block into the buffer at the top of memory
+' (buffer_start%..memory_top%), replacing the old buffer.  Alert 9 when the free memory is too small.
+^ kept_addr%=buffer_start%
+' New buffer start = top of memory - block length
+^ IF buffer_start%>kept_addr%
+' The buffer got smaller: silence the part of the old buffer below the new start
+^ memory_size_draw
+' Redraw the buffer information
+@ PROCEDURE block_insert
+' Insert button ('I').  Alt mode: inserts a sample file (file selector "Insert which sample?") at the
+' block start, offering Lose Sample / Lose Buffer / Insert to Fit when memory is short, then converts
+' it to mono and to the current rate on request.  Normal mode: inserts a copy of the buffer at the block
+' start with the same memory choices.  The inserted data becomes the marked block.
+' Bug: format_detect is never called here, so format_parameters uses the format (sample_format&) of the last loaded file,
+' and the data is read from offset 0, so a file header is inserted as sound.
+^ saved_filename$=sample_filename$
+' Keep the current sample name and rate; the file selector changes sample_filename$
+^ length_bytes%=@fsize_of(selector_folder$+sample_filename$)
+' File size; the REPEAT ... EXIT IF ... UNTIL TRUE block below skips the rest on any error or Cancel
+^ IF length_bytes%>=128
+' Read the first 128 bytes (the header) into the scratch buffer, parse it, close the file
+^ byte_count%=buffer_start%-sample_end%
+' Free space between the sample end and the buffer
+^ choice&=@msgbox_show(46,
+' Alert 46: Lose Sample / Lose Buffer / Insert to Fit / Cancel (keys Return, b, i, a)
+^ BMOVE sample_base%+block_start%,sample_base%+block_start%+source_length%,sample_end%-block_start%
+' Enough memory: open a gap of the file length at the block start
+^ byte_count%=buffer_start%-block_start%-source_length%
+' Lose Sample: the sample tail beyond the buffer start is lost
+^ byte_count%=sample_end%-block_start%
+' Lose Buffer: the sample may grow into the buffer up to the top of memory
+^ source_length%=buffer_start%-sample_end%
+' Insert to Fit: only as much of the file as fits in the free space
+^ EXIT IF @fopen_channel("I",1,selector_folder$+sample_filename$)<>0
+' Reopen the file and read the data into the gap (Fopen/Fread)
+^ IF signed_sample!
+' Signed file: convert to unsigned
+^ IF INT{scratch_addr%+12}
+' Stereo flag of an AVR header (read for every format): alert 51 offers to convert to mono
+^ ~C:code_halve%(
+' Average L/R pairs, silence the freed half and close the gap behind the inserted data
+^ block_end%=block_start%+source_length%
+' The inserted data becomes the block; shift the loop points behind it
+^ IF sample_rate&<>rate_before&
+' The file had another rate: offer to convert the inserted block to the rate in the rate field, then
+' take the current rate back from that field
+^ IF buffer_start%<memory_top%
+' Normal mode: insert the buffer if it is not empty
+^ IF buffer_start%-sample_end%<memory_top%-buffer_start%
+' Free space is smaller than the buffer: alert 10 Lose Sample / Lose Buffer / Insert to Fit / Cancel
+^ IF choice&=1
+' Lose Sample: shift the sample up (losing its end) and copy the buffer in at the block start
+^ IF choice&=2
+' Lose Buffer: rotate the buffer into the block in 10240-byte steps; afterwards the buffer keeps only
+' the first bytes of the inserted data that fit in the memory left over
+^ IF choice&=3
+' Insert to Fit: insert only the first part of the buffer that fits in the free space
+^ pointer_hide
+' Enough memory: copy the buffer in at the block start
+@ PROCEDURE overlay_dialog
+' Event handler of the Overlay dialog (tree 11), called with the clicked object in obj_num&.
+' Object 8 = level text of the existing sample (slider 6, parts 5-7); object 9 = level text of the
+' overlaid sound (slider 3, parts 2-4); 100 = draw the preview.  A typed level (0..1) sets its slider,
+' a slider move rewrites its text.  overlay_preview redraws the preview and returns the active level in factor.
+' edit_object& (LOCAL of the dialog handler dialog_run) is the text field being edited.
+^ IF edit_object&<>8
+' Leave the text field being edited: redraw it without the cursor
+^ factor=ROUND(100-VAL(work_text$)*100)
+' Slider position 0 = level 1.0 at the top, 100 = level 0
+^ work_text$=LEFT$(STR$(factor)+"    ",4)
+' Write the level into the object text (4 characters) and redraw it
+^ IF edit_object&<>8
+' Slider of the existing level moved: update the preview and text 8
+^ IF edit_object&<>9
+' Text field 9: level of the overlaid sound, slider 3
+^ IF edit_object&<>9
+' Slider of the overlay level moved: update the preview and text 9
+@ PROCEDURE overlay_mix
+' Overlay button (main panel object 12, 'O').  Mixes a sound into the marked block: in alt mode a sample
+' file (converted on request to the current rate and to mono), otherwise the buffer buffer_start%..memory_top%.
+' Levels: existing sample level_a (slider obj 6), overlaid sound level_b (slider obj 3), as two 256-word
+' tables for INLINE code_mix% (dst = clip(tab1[dst]+tab2[src]+128)).  Length from radio group obj 1:
+' 10 = block, 11 = overlaid sound, 12 = the longer, 13 = the shorter; obj 14 = repeat the overlaid sound.
+' The whole procedure is one REPEAT ... EXIT IF ... UNTIL TRUE block: EXIT IF skips the rest.
+' Bug: the file is closed before format_detect seeks past the header and is then reopened at offset 0, so
+' the header bytes are mixed in as sound.
+^ IF shift_mode!
+' File overlay: defaults are no rate conversion, mono, 10240-byte chunks
+^ IF length_bytes%>=128
+' Read the 128-byte header into the scratch buffer, then detect the format and parse it
+^ file_rate_quant%=header_rate%
+' File rate rounded to a timer count of the 614400 Hz clock
+^ IF sample_rate&<>WORD(file_rate_quant%)
+' Alert 56: Convert file? Yes / No / Cancel
+^ IF header_rate%>sample_rate&
+' File rate higher: averaging table for down-sampling; 10240 read bytes give 10240/ratio output bytes
+^ read_chunk%=10240*ratio
+' File rate lower: read fewer bytes so the up-sampled chunk is 10240 bytes
+^ IF header_stereo!
+' Stereo file: alert 52 offers mono (pairs averaged, chunks halved); No mixes the interleaved bytes
+^ radio_find_selected(11,1,obj_found%)
+' Overlay length from the radio group, limited to the sample end
+^ radio_find_selected(11,2,obj_found%)
+' Repeat the overlaid sound (object 14) or leave the rest of the length at the existing level only
+^ slider_value_query(11,6,slider_value&,slider_size&)
+' Levels from the sliders: position 0 = 1.0, 100 = 0
+^ work_text$=SPACE$(1024)
+' Mix tables: 256 words of (value-128)*level_a for the block, then 256 words of (value-128)*level_b for the file
+^ EXIT IF @fopen_channel("I",1,selector_folder$+sample_filename$)<>0
+' Reopen the file; pad_value& is the padding byte (silence) in the file's own sign format
+^ IF source_length%<=MUL(read_chunk%,channels&)
+' The whole file fits in one chunk: read it, convert sign, channels and rate in the scratch buffer
+^ IF file_rate_quant%>sample_rate&
+' Down-sample: 2:1 averages pairs, other ratios use the averaging code with the table average_table$
+^ BMOVE scratch_addr%,ADD(source_length%*(1/ratio-1),scratch_addr%),source_length%
+' Up-sample: move the data to the end of the output area, then interpolate forwards to the start
+^ IF overlay_repeat!
+' Repeat: mix the file again and again until the overlay length is used up
+^ IF mix_length%>source_length%
+' No repeat: mix once, then scale the rest of the length by the block level alone (byte map code_byte_map%)
+^ WHILE mix_length%>write_chunk%
+' Large file: read, convert and mix chunk by chunk
+^ IF file_remaining%>=MUL(read_chunk%,channels&)
+' A full chunk is left in the file
+^ gem_error&=@fread_channel(1,scratch_addr%,file_remaining%)
+' The file ends inside this chunk
+^ IF overlay_repeat!
+' Repeat: seek back to the start (128 for an AVR, else 0; Fseek) and fill the chunk from there
+^ ~C:code_fill%(
+' No repeat: pad the chunk with silence
+^ ~C:code_mix%(L:work_ptr%,L:work_ptr%+write_chunk%
+' Mix the converted chunk into the block
+^ mix_length%=ratio*mix_length%
+' The last partial chunk: convert the remaining output length into file bytes and do the same again
+^ ~@fclose_channel(1)
+' Close the file; the file overlay is finished
+^ radio_find_selected(11,1,obj_found%)
+' Buffer overlay: length from the radio group (11 = buffer length), limited to the sample end
+^ work_ptr%=sample_base%+block_start%
+' Pointers: block start, buffer start, top of memory; mix tables in the scratch buffer at +0 and +512
+^ IF mix_length%=memory_top%-buffer_start%
+' Length equals the buffer length, or the block is shorter than the buffer: one mix does it
+^ IF overlay_repeat!
+' Repeat: mix the whole buffer again and again, the last pass up to the block end
+^ chunk_len%=memory_top%-buffer_start%
+' No repeat: mix the buffer once, then scale the rest of the block by the block level alone
+@ PROCEDURE overlay_preview
+' Draws the preview of the Overlay dialog (tree 11) at dialog origin origin_x&+20,origin_y&: wave A at level
+' level_a, wave B at level level_b and their sum, 299/300 columns, in the waveform style trace_style&
+' (1 = lines, 2 = bars drawn longest first, else dots).  Mono uses patterns, colour uses colours 1-3.
+' Returns in factor the level that belongs to the clicked object (obj_num& 5..8 = level A, else level B).
+' step_bytes%, work_ptr% and end_pointer% are set but never used.
+^ IF mono!
+' Clear the preview box and draw its centre line
+^ IF mono!
+' Mono: amplitude 32, clip -63..64, centre 90; patterns $5555 (A) and $7777 (B).  Colour: amplitude 16,
+' clip -31..32, centre 45, solid lines in colours 1, 2 and 3
+^ FOR ix&=0 TO 298
+' Line style: a line from each column to the next for A, B and the mix
+^ FOR ix&=0 TO 299
+' Bar style: vertical bars from the centre line, the longest drawn first so the shorter stay visible
+^ FOR ix&=0 TO 299
+' Dot style: in mono A on odd columns, B on every fourth, the mix on all
+^ origin_x&=origin_x&+-20
+' Return the level for the text field that belongs to the clicked object
+@ PROCEDURE preview_waves
+' Preview waves for column ix& (and the next column): wave A = sine with 6 degrees per column,
+' wave B = sine with 2.4 degrees per column, both of amplitude amplitude; wave_mix/wave_mix_next = the mix
+' A*level_a + B*level_b.  Works on the caller's locals (overlay_preview).
+@ PROCEDURE volume_dialog
+' Event handler of the Volume dialog (tree 8), called with the clicked object in obj_num&.
+' Object 1 = play the block through the volume table (amplify_try), 2 = factor text (0.25..4),
+' 5-7 = slider (32 steps per doubling, -64..64), 8 = draw the preview.  volume_preview_draw draws the preview
+' and returns the factor in factor.  level_log2 holds log2 of the factor.
+^ factor=MIN(4,MAX(.25,factor))
+' Factor 0.25..4 to slider position -32*log2(factor) (up = louder)
+^ work_text$=LEFT$(STR$(factor)+"     ",5)
+' Write the factor back into the text (5 characters) and redraw it
+@ PROCEDURE volume_apply
+' Volume button (main panel object 13): applies the Volume dialog when it was closed with OK
+' (choice& = 1).  The factor is 2^(-slider/32); every byte of the block is mapped through a 256-byte
+' table clip((value-128)*factor+128) by INLINE code_byte_map%.  range_pos% and line_pattern& are declared but unused.
+^ factor=2^(-slider_value&/32)
+' Build the volume map in the scratch buffer
+
+@ PROCEDURE volume_preview_draw
+' Draws the 300-column preview of the amplify dialog (mode_param& = 0) or the fade dialog (mode_param& = 1).
+' Mode 0 reads the gain from slider 5 of dialog 8 (2^(-value/32)); mode 1 reads the start (slider 8) and
+' end (slider 5) volumes of dialog 12 and first draws the envelope outline for shape fade_shape&.
+' Then each column shows the original wave (grey/dotted) and the scaled wave (colour 3), as lines, bars or
+' dots by trace_style&; the larger of the two is drawn first.  The wave is the block data or a test sine (opt_preview_sample&).
+' On return in mode 1, factor holds the start or end factor, whichever control (obj_num&) was used.
+^ IF mode_param&
+' The fade preview area sits 20 pixels further right; undone at the end.
+^ IF mono!
+' Clear the preview area and draw the centre line (mono: 128 high, centre +90; colour: 64 high, +45).
+^ IF mode_param&=0
+' Amplify: constant gain from slider 5 of dialog 8, no slope.
+^ slider_value_query(12,8,slider_value&,slider_size&)
+' Fade: slider value 0..100 is inverted, factor = (100 - value) / 100.  Slider 8 = start, slider 5 = end.
+^ level_step=(level_b-level_a)/300
+! linear slope per column
+^ IF fade_shape&=0
+' Shape 0: straight envelope lines above and below the centre.
+^ IF fade_shape&=1
+' Shape 1: quarter sine (0.3 degrees per column, 90 degrees over 300 columns), phase picks rise or fall.
+^ IF fade_shape&=2
+' Shape 2: the other quarter sine (sine + 1 over 180..360 degrees).
+^ scaled_y=(factor*2+
+' Shape 3: half sine S curve (0.6 degrees per column).
+^ work_ptr%=sample_base%+block_start%
+' Read pointer into the block and bytes per column for the 300 columns.
+^ SELECT trace_style&
+' Draw style: 1 lines between columns, 2 vertical bars from the centre, otherwise dots.
+^ pointer_show
+' Show the mouse again.
+^ IF mode_param&
+' Restore the dialog x and hand the start or end factor back to the caller for its text field.
+
+@ PROCEDURE preview_point_calc
+' Helper of volume_preview_draw, called once per column ix&.
+' Sets wave_y/wave_y_next to the original wave y of this and the next column, from the block bytes (128 = zero)
+' when opt_preview_sample& is set, otherwise from a test sine (a faster, larger one for the fade preview).
+' Sets env_level/env_level_next to the envelope factor of this and the next column for shape fade_shape&.
+^ IF opt_preview_sample&
+' Unsigned sample bytes, 128 is the zero line; the pointer advances one column per call.
+^ SELECT fade_shape&
+' Envelope factor of this and the next column: 0 linear (stepped by level_step), 1-3 the sine shapes.
+
+@ PROCEDURE amplify_try
+' Try button of the amplify dialog 8: builds a 256-byte gain table in scratch_addr% from slider 5
+' (gain 2^(-value/32), clipped to 0..255) and plays the block through it.
+' The LOCAL output_table% makes the player use this table; the LOCAL shift_mode! = FALSE plays the block, not the buffer.
+' counter& is declared but never used.
+^ FOR ix&=0 TO 255
+' Table entry = (byte - 128) * gain + 128, clipped.
+^ sample_play
+' Play with the preview table.
+
+@ PROCEDURE fade_dialog_event
+' Event handler of the fade dialog 12 (called by action_dispatch for each object event).
+' Objects: 1 Try, 2 start text, 5..7 end slider, 8..10 start slider, 12 fade-in preset, 13 fade-out preset,
+' 14 end text, 15 shape button (opens dialog 13), 100 redraw request for the preview.
+' Text fields hold factors 0..1; sliders hold 100 - percent.  After a change the preview is redrawn and the
+' matching text field is rewritten with factor from volume_preview_draw.  level_log2 is declared but never used.
+^ fade_try
+' Try: play the block with the fade applied on the fly.
+^ IF edit_object&<>2
+' Start text typed: take the edit cursor off the current field (edit_object& = 0 redraws without cursor).
+^ obj_text_query(12,2,work_text$)
+' Convert the typed factor to a slider value 0..100 and set the start slider 8.
+^ work_text$=LEFT$(STR$(factor)+"    ",4)
+' Write the factor back into text 2 (spec text at +16); edit_object& = -1 redraws it with the cursor.
+^ IF edit_object&<>2
+' Start slider moved: update text 2 from the start factor.
+^ IF edit_object&<>14
+' Fade in preset: end slider to 100% (value 0), start slider to 0% (value 100).
+^ work_text$=MKL$(824188960)
+' "1   " into the end text 14, then "0   " into the start text 2.
+^ IF edit_object&<>14
+' Fade out preset: end 0%, start 100%; texts "0   " and "1   ".
+^ IF edit_object&<>14
+' End text typed: set the end slider 5 from it.
+^ IF edit_object&<>14
+' End slider moved: update text 14 from the end factor.
+^ radio_find_selected(13,1,obj_found%)
+' Shape button: preselect radio fade_shape&+2 in group 1 of dialog 13 and run that dialog.
+^ IF choice&=1
+' OK: the selected radio object (2..5) gives the new shape; redraw the preview if it changed.
+
+@ PROCEDURE fade_apply
+' Applies the fade of dialog 12 to the block (called from the main panel with choice& = 1 when OK was chosen).
+' Start and end volumes in percent come from sliders 8 and 5.  Shape 0 splits the block into one segment
+' per percent step and maps each through volume table volume_tables% + level * 256.  Other shapes get a segment list
+' (table, start, end) from fade_curve_build in scratch_addr%, each segment mapped by the INLINE code_byte_map%.
+^ pointer_hide
+' Hide the mouse, busy pointer.
+^ slider_value_query(12,8,slider_value&,slider_size&)
+' Start and end volume in percent; number of linear segments = difference + 1.
+^ IF fade_shape&
+' Curved shapes: build the segment list, then map each entry (list ends with a 0 table pointer).
+^ range_pos%=sample_base%+block_start%
+' Linear: segment ends spread evenly over the block, table level stepped by one percent per segment.
+^ pointer_busy(0)
+' Normal pointer, redraw the waveform.
+
+@ PROCEDURE fade_try
+' Try button of the fade dialog: builds the fade as a segment list in scratch_addr% (12 bytes per entry:
+' volume table, start address, end address; 0 ends the list) without changing the sample, and plays the
+' block through it with sample_run_list on output output_device&.
+' range_pos%, seg_end%, fade_start_pct&..step_counter& are not LOCAL here and change the caller's or global copies.
+^ pointer_hide
+' Busy pointer, then read the start and end volume in percent.
+^ IF fade_shape&
+' Curved shapes: fade_curve_build writes the segment list.
+^ segment_ptr%=scratch_addr%
+' Linear: one list entry per percent step, as in fade_apply.
+^ key_release_wait(57)
+' Wait until the Space key (scan code 57) is released, key click off, play the list, key click on.
+^ pointer_hide
+' Normal pointer again.
+
+@ PROCEDURE echo_dialog_event
+' Event handler of the echo dialog 14, and the echo apply when called from the main panel (dialog_id& = 4).
+' Objects: 3..5 decay slider (value 0..100 percent, text 13 shows 0..1), 6..8 delay slider (0..5000 ms,
+' text 14 shows seconds), 9..11 repeat slider (1..40, text 15), 13/14/15 typed values, 16 Load, 17 Save.
+' Echo file *.EKO: 18 bytes, "SoundLabEcho" then three words: decay percent, delay ms, repeat count.
+^ IF edit_object&<>13
+' Decay slider moved: take the cursor off the current field and show the decay in text 13.
+^ IF edit_object&<>14
+' Delay slider moved: show the delay in seconds in text 14.
+^ IF edit_object&<>15
+' Repeat slider moved: show the count in text 15.
+^ obj_text_query(14,13,work_text$)
+' Decay typed: clamp to 0..1 and set slider 4 (range 0..110, page 10).
+^ obj_text_query(14,14,work_text$)
+' Delay typed: clamp to 0.001..5 seconds and set slider 7 in ms (range 0..5500, page 500).
+^ obj_text_query(14,15,work_text$)
+' Repeats typed: clamp to 1..40 and set slider 10 (range 1..44, page 4).
+^ filesel_title_set("Load which echo?")
+' Load: file selector for *.EKO; the file must exist and be exactly 18 bytes long.
+^ IF @fopen_channel("I",1,echo_path$+echo_filename$)=0
+' Open for reading (handle 1), read 18 bytes, close.
+^ REPEAT
+' REPEAT ... EXIT IF ... UNTIL TRUE skips the rest when the header is not "SoundLabEcho".
+^ slider_setup(14,4,0,110,-10,10,echo_decay&,10)
+' Set the three sliders and refresh each text field by calling this handler again for objects 4, 7, 10.
+^ IF dialog_id&=4
+' Called from the main panel after the dialog closed with OK: apply the echo.
+^ filesel_title_set("Save echo as...?")
+' Save: file selector for *.EKO, create the file ("N" asks first if it exists, per exists_option&).
+^ slider_value_query(14,4,echo_decay&,slider_size&)
+' Read decay, delay and repeats from the sliders and write the 18-byte record.
+^ IF @fsize_of(echo_path$+echo_filename$)<>18
+' File shorter than 18 bytes on disk: disk full alert, then delete the file with GEMDOS Fdelete (65).
+' Bug: it deletes echo_path$+sample_filename$ (the sample's name in the echo folder), not the echo file echo_filename$.
+^ filesel_listed$=""
+' Force the file selector to read the directory again.
+
+@ PROCEDURE echo_apply
+' Applies the echo of dialog 14 to the block.  Decay d = slider 4 / 100, delay = slider 7 ms converted to
+' bytes at sample_rate& Hz, n = slider 10 repeats.  Builds n gain tables of 256 bytes in scratch_addr%, table k scaling by
+' d^(k+1); the INLINE echo routines add, for every byte, the n delayed bytes through these tables, clipped to
+' 0..255.  They run from the end down to the start, so the taps read bytes not yet changed.
+' seg_end%, echo_spare_long% and echo_spare_word& are declared but never used.
+^ slider_value_query(14,4,slider_value&,slider_size&)
+' Decay factor, delay in bytes, repeat count.
+^ decay_level=echo_value
+' Gain tables: table k at scratch_addr% + k * 256 holds (x - 128) * d^(k+1) + 128.
+^ range_pos%=echo_delay_bytes%*echo_count&
+' Total delay span.  The part beyond it uses the fast routine (all taps inside the block); the first span
+' uses the checked routine that stops at the block start.  Both work from end down to just above start, so
+' the byte at start + span is left without echo.
+^ ~C:asm_echo_checked%(L:sample_base%+block_start%,L:sample_base%+block_end%,L:scratch_addr%,L:echo_delay_bytes%,echo_count&-1)
+! block shorter than the span: checked pass only
+
+@ PROCEDURE prefs_dialog_event
+' Preferences.  From the main panel (dialog_id& = 4) it opens dialog 16 with its radio groups set from the
+' options: 1 output device, 2 name only, 3 draw style, 4 preview data, 5 seconds, 6 grow boxes, 7 menu click,
+' 8 file-exists action; object 100 shows the default rate.  Exit 1 = Save (applies and writes SOUNDLAB.PRF),
+' 2 = use, 3 = cancel.  As the handler of dialog 16 it serves object 3 (Microwire dialog 35),
+' 21 (rate dialog 6 for the default rate) and 25 (dialog 58: sampler port, file selector, load/save formats).
+^ IF dialog_id&=4
+' Keep rate, timer and default rate: the nested rate dialog changes them.
+^ radio_set(16,1,output_device&+2)
+' Select the radio button of each option (booleans are -1/0, so 5 - info_on! gives 5 or 6, and so on).
+^ dialog_run(16,choice&)
+' Run the preferences dialog, then restore rate and timer.
+^ IF choice&<3
+' Save or use: read every radio group back into the options.
+^ IF output_device&=1 AND dma_sound!=FALSE
+' No DMA sound on this machine: fall back to the YM2149.
+^ status_name_draw
+' Redraw the status lines with the new options.
+^ IF choice&=1
+' Save: build SOUNDLAB.PRF (702-byte record, then 576 bytes of dialog positions).
+^ work_text$="SoundLab1.1Prefs"
+' 16-byte id, 8-byte palette, 9 option words, 5 Microwire words.
+^ FOR ix&=13 TO 20
+' The eight 80-character path entries of dialog 2 (objects 13..20).
+^ work_text$=work_text$+MKI$(opt_sampler_port&)+MKI$(fsel_type&)+MKI$(opt_load_format&)+MKI$(opt_save_format&)+MKI$(opt_signed_default!)
+' The five dialog 58 options (new in version 1.1).
+^ work_text2$=SPACE$(576)
+' 36 dialog records (1..35 and 58), 16 bytes each from record offset +4; y values halved in mono so the
+' file is resolution independent.  Missing dialogs are stored as zeros.
+^ ix&=exists_option&
+' Overwrite an old SOUNDLAB.PRF without asking: file-exists option forced to 0 (erase) while saving.
+^ default_rate&=saved_default_rate&
+! cancel: restore the default rate
+^ SELECT obj_num&
+' Handler of dialog 16 (dialog_id& = 16).
+^ microwire_dialog_event
+! Microwire dialog
+^ rate_from_prefs!=TRUE
+' Default rate: open the rate dialog 6 with default_rate& snapped to a rate the MFP can make (614400 / n Hz).
+^ dialog_run(6,choice&)
+' OK: rate_timer_calc reads the new rate; it becomes the default and object 100 is redrawn with it.
+^ radio_set(58,1,opt_sampler_port&+2)
+' Dialog 58: preselect sampler port, file selector type, load format, signed option and save format.
+^ SELECT opt_save_format&
+' Save format code to radio object: 2 -> 8, 0 -> 9, 7 -> 10, 3 -> 11, 1 -> 12, 8 -> 13.
+^ IF choice&=1
+' OK: read the groups back, mapping the save format radio to its code again.
+^ cart_input%=16449537-opt_sampler_port&
+' Cartridge sampler read address: $FB0001, or $FB0000 for port option 1.
+
+@ PROCEDURE microwire_dialog_event
+' STE Microwire (LMC1992) settings, dialog 35.  From the main panel (shift mode, dialog_id& = 4) or the
+' preferences (dialog_id& = 16) it opens the dialog: sliders 4 master 0..40, 7 left 0..20, 10 right 0..20,
+' 20 bass and 23 treble -6..6 (stored +6); texts 13/14/15 show -80..0 / -40..0 dB, 17/18 show +-12 dB.
+' After the dialog the values (new on OK, old on cancel) go to the INLINE asm_microwire% and are sent with
+' XBIOS Supexec (38) on a DMA-sound machine.  As the dialog's handler it keeps sliders and texts in step.
+^ slider_set_pos(35,4,mw_master&,4)
+' Set the sliders from the current settings.
+^ obj_find(35,13,obj_found%)
+' Write the dB values into the text fields (2 dB per step).
+^ saved_inset_top&=cursor_top&
+' Edit cursor offsets -1/0 for this dialog, restored afterwards.
+^ IF choice&=1
+' OK: read the sliders back into the settings.
+^ BYTE{asm_microwire%+4}=mw_master&
+' Microwire data bytes of the INLINE: +4 master, +5 left, +6 right, +7 bass, +8 treble.
+^ IF dma_sound!
+' Supexec the routine: each value is ORed into its LMC1992 command and written to $FF8922 (data) with
+' mask $07FF in $FF8924, waiting until the data register reads its old value again (word shifted out).
+^ SELECT obj_num&
+' Handler of dialog 35.
+^ microwire_try
+! Test button
+^ IF edit_object&<>13
+' Master slider moved: show the dB value in text 13.
+^ IF edit_object&<>14
+' Left slider moved: text 14.
+^ IF edit_object&<>15
+' Right slider moved: text 15.
+^ IF edit_object&<>17
+' Bass slider moved: text 17 with a + sign above 0 dB.
+^ IF edit_object&<>18
+' Treble slider moved: text 18.
+^ obj_text_query(35,13,work_text$)
+' Master dB typed: half the value, forced negative, clamped to -40..0, slider = 40 + value.
+^ obj_text_query(35,14,work_text$)
+' Left dB typed: clamped to -20..0 steps, slider = 20 + value.
+^ obj_text_query(35,15,work_text$)
+' Right dB typed.
+^ obj_text_query(35,17,work_text$)
+' Bass dB typed: half the value, clamped to -12..12 although the slider and the chip only take -6..6.
+^ obj_text_query(35,18,work_text$)
+' Treble dB typed.
+
+@ PROCEDURE microwire_try
+' Test button of the Microwire dialog: reads the five sliders into LOCAL copies of the settings, sends them
+' to the LMC1992 (XBIOS Supexec of asm_microwire%) and plays the block through DMA sound, or the YM2149 on an ST.
+' The globals stay unchanged; microwire_dialog_event sends the kept or new values when the dialog closes.
+^ ADD mw_bass&,6
+' Bass and treble sliders run -6..6; the chip wants 0..12.
+^ IF dma_sound!
+' Supexec the Microwire routine and play through DMA sound (local output_device& = 1).
+^ shift_mode!=FALSE
+' Play the block, not the buffer.
+
+@ PROCEDURE block_clear_gap
+' Clear button of the main panel (also key G).  In shift mode it inserts a gap of silence (128) the size of
+' the block at the block start, moving the rest of the sample up; when memory is short alert 48 offers
+' Lose Sample (the end falls off), Lose Buffer (the sample grows into the buffer), Insert to Fit (a smaller
+' gap) or Cancel.  Otherwise alert 31 clears the block, the buffer or everything to silence (no undo).
+' Loop points are moved with sample_loop_shift.
+^ IF shift_mode!
+' Gap length = block length.  view_end_pos% = sample offset at the end of the zoom slider range.
+^ IF view_end_pos%=block_start%
+' Block start equal to view_end_pos%: no gap, the sample is extended up to the buffer instead.
+^ IF buffer_start%-sample_end%<chunk_len%
+' Not enough free memory between the sample end and the buffer.
+^ IF choice&=1
+' Lose Sample: shift up within the sample memory, the end beyond buffer_start% is lost.
+^ ~C:code_fill%(L:sample_base%+block_start%,L:chunk_len%,128)
+! fill the gap with silence
+^ IF choice&=2
+' Lose Buffer: move the rest up into the buffer area (limited to memory_top%), the buffer starts at the new end.
+^ IF choice&=3
+' Insert to Fit: shrink the gap to the free memory, the block becomes the gap.
+^ pointer_hide
+' Enough memory: move the rest up, fill the gap, lengthen the sample.
+^ IF choice&=1
+' Block: when the block is the whole sample, the sample is cleared and renamed UNTITLED.AVR with its
+' length reset to all memory below the buffer; otherwise only the block is filled with silence.
+^ IF choice&=2
+' Buffer: fill buffer_start%..memory_top% with silence and mark the buffer empty (buffer_start% = memory_top%).
+^ IF choice&=3
+' Everything: silence all memory, empty buffer, untitled sample of full length, loop off.
+
+@ PROCEDURE block_remove
+' Removes the block from the sample after alert 26 (no recovery): the data after the block moves down,
+' the freed end is filled with silence, the sample shortens and the block becomes empty at its old start.
+' Loop points inside the block move to the block start.  An emptied sample is reset to full length.
+^ IF sample_loop_start%>block_start% AND sample_loop_start%<block_end%
+' Loop start or end inside the block: move it to the block start.
+^ IF block_end%<sample_end%
+' Close the hole, then silence the bytes freed at the end.
+^ range_pos%=block_end%-block_start%
+' Shorten the sample by the block length and shift the loop points after it.
+
+@ PROCEDURE block_trim
+' Trim (shift + Remove, key T) after alert 49: only the block is kept.  It moves to the sample start, the
+' rest of the old sample is filled with silence and the sample length becomes the block length rounded up
+' to 320 bytes.  Loop points move down by the old block start.
+' Bug: the loop end uses MAX instead of MIN, so it is never pulled back inside the shorter sample.
+^ BMOVE sample_base%+block_start%,sample_base%,block_end%-block_start%
+' Move the block to the start, silence what is left of the old sample.
+^ SUB block_end%,block_start%
+' The block is now 0..length; the sample is the block, rounded up to a multiple of 320.
+^ SUB sample_loop_start%,range_pos%
+' Shift the loop points down; loop off if they cross.
+
+@ PROCEDURE sample_loop_menu
+' Loop button of the main window.  Asks what to do with the loop:
+'   Set Loop    - the loop becomes the marked block and looping is switched on
+'   Reset Block - the marked block becomes the loop (un-hides a hidden block first)
+'   Loop On/Off - toggles looping
+' Redraws the waveform, the block bar and the block size afterwards.
+^ choice&=@msgbox_show(33,
+! keys: Return = Set Loop, r = Reset Block, l = Loop On/Off, a = Cancel
+^ sample_loop_on!=TRUE
+' Set Loop: loop start/end = block start/end.
+^ IF all_selected!
+' Reset Block: leave Hide Blk mode (deselect button 7 of tree 4) before moving the block.
+^ block_start%=MAX(0,sample_loop_start%)
+! block = loop, clipped to the sample
+^ sample_loop_on!=NOT sample_loop_on!
+! Loop On/Off
+@ PROCEDURE sample_loop_shift
+' Keeps the loop points in step with an edit.  start_pos% is the offset where the edit happened,
+' count% the length change: positive when data was inserted, negative when it was removed.
+' Points after the edit move by count%; points inside a removed range move to start_pos%.
+' The loop is clipped to the sample and switched off when it becomes empty.
+^ IF count%>0
+' Insert: shift the loop points that lie after the insert position.
+^ IF sample_loop_start%>start_pos% AND sample_loop_start%<start_pos%-count%
+' Remove: a point inside the removed range goes to its start, a point after it moves back.
+^ sample_loop_start%=MAX(0,sample_loop_start%)
+^ IF sample_loop_end%<sample_loop_start%
+! empty loop: switch looping off
+@ PROCEDURE sample_loader
+' Load.  Loads a sample file as the whole sample, into the marked block (block_load!) or into the
+' buffer at the top of sample memory (buffer_load!, buffer mode shift_mode!).  Uses the command line file
+' command_file$ once instead of the file selector.  Files longer than the space go through dialog 15,
+' which picks the start offset of the part to load.  Detects the format (format_detect/12ec4),
+' converts signed data, offers stereo to mono, and handles the sample rate of the file:
+' block loads are rate-converted to the current rate, whole loads above 30KHz offer a conversion.
+' Restores sample_filename$ unless the whole sample was replaced.
+^ saved_filename$=sample_filename$
+^ rate_before&=sample_rate&
+! remember the rate before the load
+^ IF shift_mode!
+' Buffer mode: always a buffer load.
+^ IF block_start%=0 AND block_end%=sample_end%
+' No block marked (block = whole sample): plain load, else ask File or Block.
+^ choice&=@msgbox_show(37,
+! keys: Return = File, b = Block, a = Cancel
+^ IF all_selected!=FALSE
+' Whole-file load with a block marked: press Hide Blk (button 7 of tree 4) first.
+^ IF command_file$<>""
+' A file name from the command line is split into folder and name and used only once.
+^ filesel_run("*.AVR|*.SPL|*.SAM|*.SMP|*.SND|*.WAV|*.#|*.#K",selector_folder$,sample_filename$,ok_flag!)
+! file selector; *.# and *.#K are raw files named by their rate
+^ IF @fexists(selector_folder$+sample_filename$)<>0
+^ REPEAT
+' REPEAT ... UNTIL TRUE runs once; each EXIT IF skips the rest of the load.
+^ EXIT IF @fopen_channel("I",1,selector_folder$+sample_filename$)<>0
+! open the file for reading as handle 1
+^ IF buffer_load!=FALSE AND block_load!=FALSE
+' Remember which file was loaded; a new file starts its partial-load offset at 0.
+^ length_bytes%=@fsize_of(selector_folder$+sample_filename$)
+! file size
+^ IF length_bytes%>=128
+^ EXIT IF @fread_channel(1,scratch_addr%,128)<>0
+! read the first 128 bytes for the header check
+^ format_detect
+! detect the format, seek to the data, length_bytes% = data length
+^ IF buffer_load!
+' Buffer load: room between the sample end and the memory end, keeping 10K for the sample.
+' A longer file may overwrite the end of the sample (the buffer grows down over it).
+^ choice&=@msgbox_show(32,
+^ EXIT IF work_ptr%<1024
+! No: give up when less than 1K of room is left
+^ IF block_load!
+' Block load: room = block length.  Whole load: room = everything below the buffer.
+^ IF length_bytes%>work_ptr%
+' The file does not fit: dialog 15 asks for the start offset of the part to load.  The offset
+' starts at the last offset used for this file; the slider shows the file and window size in K.
+^ slider_setup(15,4,0,length_bytes% DIV 1024,
+! slider object 4: total = file size, window = room, position = offset
+^ BMOVE V:work_text$,16+(rsc_data%+LONG{obj_found%+24}),7
+! offset text into edit field 6
+^ partial_length%=work_ptr%
+! window length for the slider handler partial_dialog_events
+^ dialog_run(15,choice&)
+^ IF choice&=1
+' OK: clamp the offset, skip that far into the data (Fseek relative) and remember it.
+^ IF @fseek_rel(1,work_long%)<>0
+^ IF block_load! OR buffer_load!
+^ partial_loaded!=TRUE
+! the sample is a part of a longer file (allows a partial save)
+^ length_bytes%=0
+! Cancel
+^ EXIT IF length_bytes%=0
+' Bug: on this exit (and the ones before the file is read) header_rate% is still 0, so the rate code
+' after UNTIL takes 0 as the file rate: a whole load sets the rate to 4.9152KHz, a block load
+' calls the resampler with a source rate of 0.
+^ IF length_bytes%<sample_end% AND block_load!=FALSE AND buffer_load!=FALSE
+' Whole load shorter than the old sample: fill the rest with silence (128).
+^ IF memory_top%-buffer_start%>length_bytes% AND buffer_load!
+' Buffer load smaller than the old buffer: silence the part of the old buffer below the new one.
+^ IF buffer_load!
+' Destination: buffer = top of memory (new buffer start), block = block start, whole = offset 0.
+^ EXIT IF @fread_channel(1,work_ptr%,length_bytes%)<>0
+! Fread the sample data
+^ ~@fclose_channel(1)
+! Fclose
+^ format_parameters
+! format -> signed signed_samples!, stereo header_stereo!, file rate header_rate%
+^ IF signed_samples!
+^ ~C:code_sign_flip%(L:work_ptr%,L:work_ptr%+length_bytes%)
+! signed data: flip bit 7 of every byte to the unsigned form used in memory
+^ IF header_stereo!
+^ choice&=@msgbox_show(50,
+^ ~C:code_halve%(L:work_ptr%,L:work_ptr%+length_bytes%)
+! average the left/right pairs into the first half, silence the second half
+^ IF buffer_load!
+' The buffer must stay at the top of memory: move the mono data up by its length.
+^ IF buffer_load!
+' Buffer: keeps the current rate.  If the buffer now overlaps the sample, cut the sample down
+' to the buffer start, in steps of 320 bytes.
+^ EXIT IF TRUE
+^ IF block_load!
+' Block: the block now ends after the loaded data.
+^ EXIT IF TRUE
+^ ACLIP 1,0,0,639,screen_max_y&
+' Whole sample: length at least 640, rounded up to 320, block = whole sample, new title.
+^ UNTIL TRUE
+^ IF header_rate%<>rate_before&
+' The file rate differs from the rate before the load.
+^ IF block_load!
+' Block load: resample the block from the file rate to the current rate (block_rate_convert).
+^ IF header_rate%>30720
+' Whole load above 30.72KHz: offer to resample to 30KHz or half the rate (keys Return, h, a).
+^ work_text$=STR$(sample_rate&/1000)
+! target rate into the rate field (tree 6 object 15), then resample from the file rate
+^ header_rate%=MIN(30720,MAX(4915,header_rate%))
+' Clamp to 4.9152-30.72KHz and snap to the nearest rate 614400/n, show it and set it.
+@ PROCEDURE partial_dialog_events
+' Event handler of dialog 15 (partial load), called by the dialog loop with obj_num& = object.
+' Objects 3-5 (slider): the slider position (in K) is written to the start offset field 6.
+' Object 6 (offset field): the typed offset is clamped and the slider is moved to it.
+' Uses length_bytes% (file length), partial_length% (window length) and work_text$ of sample_loader.
+^ slider_value_query(15,4,slider_value&,slider_size&)
+! slider position and size of object 4
+^ edit_object&=-1
+! no edit field active while the field is redrawn
+^ obj_text_query(15,6,work_text$)
+^ src_pos%=MIN(MAX(0,src_pos%),length_bytes%-partial_length%)
+! the window must stay inside the file
+@ PROCEDURE sample_saver
+' Save.  Saves the whole sample, the marked block (block_load!) or the buffer (buffer_load!) in the format
+' given by the extension (.SPL .SAM .AVR .WAV .SMP) or the preferred format opt_save_format&; formats 7 and
+' 8 put the rate into the extension (.125 = 12.5KHz, .12K).  A sample loaded as part of a file
+' can be written back into that file at its offset (partial_save!).  Signed formats are converted
+' before writing and back afterwards.  A short write means a full disk: the file is deleted.
+^ partial_save!=FALSE
+^ IF shift_mode!
+' Buffer mode: always save the buffer.
+^ choice&=@msgbox_show(53,
+! keys: Return = File, b = Block, a = Cancel
+^ IF all_selected!=FALSE
+' Saving the whole file with a block marked: press Hide Blk (button 7 of tree 4) first.
+^ IF choice&<3
+^ IF ok_flag!
+^ SELECT RIGHT$(sample_filename$,4)
+' Format from the extension: .SPL 0, .SAM 1, .AVR 2, .WAV 3, .SMP 4, else the preferred format.
+^ SELECT sample_format&
+' Signed formats: SAM and SMP always, AVR when the preferences say so; SPL, WAV and 7/8 unsigned.
+^ IF block_load!=FALSE AND buffer_load!=FALSE
+' Whole sample: the saved name becomes the sample name.
+^ IF block_load!=FALSE AND buffer_load!=FALSE AND ((selector_folder$+sample_filename$)=sample_path$)
+' Saving a partially loaded sample over its own file: write back the part (Partial) or
+' replace the file (Whole); Cancel clears the name, which skips the save.
+^ choice&=@msgbox_show(34,
+^ REPEAT
+' REPEAT ... UNTIL TRUE runs once; each EXIT IF skips the rest of the save.
+^ EXIT IF sample_filename$=""
+^ IF partial_save!
+' Partial save: open the file for update, check its header and seek to the part's offset.
+' Bug: length_bytes% is still 0 here, so format_detect skips the header check and the format comes from
+' the extension; the write starts 128 bytes plus sample_file_offset% into the file, right only for AVR.
+^ EXIT IF @fopen_channel("U",1,selector_folder$+sample_filename$)<>0
+^ EXIT IF @fseek_rel(1,sample_file_offset%)<>0
+^ IF signed_samples!
+^ IF sample_format&=7
+' Format 7: extension = rate in 100Hz, 3 digits.
+^ IF sample_format&=8
+' Format 8: extension = rate in KHz followed by K.
+^ IF sample_format&=4
+^ IF sample_rate&<>12538
+' SoundWizard (.SMP) samples are 12.5KHz; ask before saving another rate.
+^ choice&=@msgbox_show(59,
+^ EXIT IF choice&=2
+^ EXIT IF @fopen_channel("N",1,selector_folder$+sample_filename$)<>0
+! create the file as handle 1
+^ IF buffer_load!
+' Data range: buffer = buffer_start% to the memory end, otherwise the block.
+^ ~C:code_fill%(L:scratch_addr%,L:128,0)
+! clear the header buffer
+^ IF sample_format&=2
+' AVR header (128 bytes): "2BIT", name (8 chars, from the file name), +12 stereo 0,
+' +14 resolution 8, +16 signed flag, +18 loop flag, +20 MIDI note $FFFF, +22 rate with top
+' byte $FF, +26 length, +30/+34 loop start/end, +64 user text saved_from_text$.
+^ LONG{scratch_addr%}=843204948
+! "2BIT"
+^ IF block_load!=FALSE AND buffer_load!=FALSE
+' The loop is saved only with the whole sample.
+^ CHAR{scratch_addr%+64}=saved_from_text$
+^ EXIT IF @fwrite_channel(1,scratch_addr%,128)<>0
+! Fwrite the header
+^ IF sample_format&=3
+' WAV header (44 bytes, little-endian): RIFF size, "WAVEfmt ", chunk size 16, PCM 1, 1 channel,
+' rate, bytes per second = rate, block align 1, 8 bits, "data" length.
+^ LONG{scratch_addr%}=1380533830
+! "RIFF"
+^ IF sample_format&=4
+' SoundWizard SMP header (12 bytes): $7E817E81, word 4, word 0, length.
+^ IF signed_samples!
+^ ~C:code_sign_flip%(L:work_ptr%,L:work_ptr%+length_bytes%)
+! convert to signed for writing
+^ obj_found%=chan_pos%(1)
+! file position after the header
+^ EXIT IF @fwrite_channel(1,work_ptr%,length_bytes%)<>0
+! Fwrite the sample data
+^ ~@fclose_channel(1)
+^ IF signed_samples!
+^ ~C:code_sign_flip%(L:work_ptr%,L:work_ptr%+length_bytes%)
+! back to unsigned
+^ work_ptr%=@fsize_of(selector_folder$+sample_filename$)
+' Data written = file size - header size; less than the length means the disk is full.
+^ IF length_bytes%<>work_ptr% AND partial_save!=FALSE
+^ choice&=@msgbox_show(25,
+^ ~GEMDOS(65,L:V:remove_path$)
+! Fdelete the incomplete file
+^ UNTIL TRUE
+^ filesel_listed$=""
+! filesel_listed$ is never set to anything else
+@ PROCEDURE help_menu
+' Help.  With SOUNDLAB.HLP in the program folder, dialog 38 lists the help topics: topics 0-7
+' start help entry 38+n (help_page_play), button 8 shows the key summary.  Without the help file the
+' key summary is shown.  The Help key is off meanwhile and comes back unless a help
+' demonstration is now replaying (tour_active!).
+^ help_allowed!=FALSE
+^ IF @fexists(home_path$+"SoundLab.HLP")<>0
+^ dialog_run(38,choice&)
+^ IF tour_active!=FALSE
+@ PROCEDURE key_summary_screen
+' Key summary: draws a table of keys and their functions over the waveform area, three pairs of
+' columns (keys, names) of 16 rows; the column headings "Edit Functions" and "Menu Items" are
+' drawn in a different style.  Waits for a key or a mouse click, then redraws the waveform.
+^ key_table$="|Space|m|Return|p|z|a|h|x|c|Home|i|o|v|Delete|u|"
+' Entries are '|' separated: a column of 16 keys, then the column of their 16 names, and so on.
+^ ARECT 0,48,639,303,0,0,V:pattern_solid%,1
+! clear the waveform area (mono)
+^ font_attr_set(0,0,0,0,3)
+! text style for the table
+^ WHILE line_pattern&<=LEN(key_table$)
+^ work_text$=MID$(key_table$,line_pattern&,INSTR(key_table$,"|",line_pattern&)-line_pattern&)
+! next entry
+^ IF y_centre&=5 AND y_or_j&=72 AND mono!=FALSE OR
+' The two headings (column 1 row 0, column 5 row 6) get text effect 1.
+^ txt_blit(ix&,y_or_j&,work_text$)
+^ IF mono!
+' Next row (16 pixels mono, 8 colour); after 16 rows go to the next column's x position.
+^ REPEAT
+' Wait for a key (BIOS Bconstat) or a mouse button, then for the button release.
+^ IF BIOS(1,2)
+^ trace_draw
+! redraw the waveform
+@ PROCEDURE program_quit
+' Quit.  After the alert the screen is dissolved to black in 9 steps: an empty 32000-byte screen
+' is copied over the screen through the mask tables of dissolve_masks% (dissolve_code%, 200 lines of 80 words).
+' Then the system is restored (sys_restore) and the program ends.
+^ choice&=@msgbox_show(7,
+^ ~C:code_fill%(L:screen_back%,L:32000,0)
+! clear the work screen
+^ FOR ix&=0 TO 128 STEP 16
+^ sys_restore
+! restore vectors, palette and resolution
+@ PROCEDURE main_shifted_keys
+' Key handler of the main window (tree 4) for the keys not handled elsewhere.  key_code& is the
+' key code: ASCII, or scan code + 128 for Alt and function keys.
+'   Alt+A..Alt+P        - Free Space of that drive (menu "2 7 n"), if the drive exists
+'   ^I ^S ^T            - About (unless title_freed!), Shareware, Thanks
+'   ^N ^D ^C ^R ^F      - Rename, Delete, Create Folder, Remove Folder, Format
+'   M Z A G I O T L S   - the button functions in buffer mode (Listen, Min/Max Zoom, Gap, Insert
+'                         File, Overlay File, Trim, Load Buffer, Save Buffer)
+'   F1-F10, Shift+F10   - set the sample rate 4.9152-24.576KHz, 30.72KHz
+' shift_mode! is LOCAL here, so the buffer mode set by buttons_buffer_mode ends when this returns.
+^ work_text$=
+' Alt+A..Alt+P codes: the A..P scan codes + 128.
+^ IF key_inp&=0
+' Not a drive key.
+^ IF NOT title_freed!
+^ mnu_path$="1 1 2"
+! ^S Shareware
+^ mnu_path$="1 1 3"
+! ^T Thanks
+^ mnu_path$="2 1"
+! ^N Rename File
+^ mnu_path$="2 2"
+! ^D Delete File(s)
+^ mnu_path$="2 4"
+! ^C Create Folder
+^ mnu_path$="2 5"
+! ^R Remove Folder
+^ mnu_path$="2 8"
+! ^F Format
+^ buttons_buffer_mode
+' M: Listen through the buffer.  Every buffer key shows the buffer buttons, highlights the
+' button (tree 4 object n), runs the function, then deselects it and shows the normal buttons.
+^ LOOP WHILE BIOS(11,-1) AND 15
+! wait until Shift, Control and Alt are released (BIOS Kbshift)
+^ buttons_buffer_mode
+' Z: Min Zoom (zoom level 5).
+^ buttons_buffer_mode
+' A: Max Zoom (zoom level 0).
+^ buttons_buffer_mode
+' G: Gap.
+^ buttons_buffer_mode
+' I: Insert File into the buffer.
+^ buttons_buffer_mode
+' O: Overlay File.
+^ buttons_buffer_mode
+' T: Trim the buffer.
+^ buttons_buffer_mode
+' L: Load Buffer.
+^ buttons_buffer_mode
+' S: Save Buffer.
+^ SELECT key_code&+-186
+' F1-F10 (codes 187-196) and Shift+F10 (221) pick a rate; written to the rate field
+' (tree 6 object 15) and set with rate_timer_calc.
+^ work_text$=MKL$(925775416)
+! "7.68"
+^ work_text$=LEFT$(work_text$+"      ",6)
+^ IF seconds_on!
+! sizes in seconds depend on the rate: redraw them
+^ IF mnu_path$<>""
+^ mnu_dispatch(mnu_path$)
+! run the menu entry
+^ drive_map&=BIOS(10)
+' Alt+drive letter: BIOS Drvmap; with one floppy (_nflops $4A6 = 1) drive B is not real.
+^ IF BTST(drive_map&,PRED(key_inp&))
+@ PROCEDURE fade_curve_keys
+' Key handler of the fade dialog (tree 12): F1-F4 (codes 187-190) choose the fade curve type
+' fade_shape& 0-3 (0 = linear) and redraw the curve preview.
+^ IF key_code&>186 AND key_code&<191
+@ PROCEDURE serial_decode
+' Decodes the program serial string serial_number$ in place: every byte XOR 250.
+^ FOR ix&=0 TO LEN(serial_number$)-1
+@ PROCEDURE buttons_normal_mode
+' Draws the five normal button strip images (panel_image%) at the bottom of the main window and
+' clears buffer mode shift_mode!.  Redraws the marker line at x 240 when Hide Blk is on.
+^ IF mono!
+! y positions of the two button rows, mono or colour
+^ image_blit(0,rect_ay&,panel_image%)
+^ IF all_selected!
+@ PROCEDURE buttons_buffer_mode
+' Draws the five buffer-mode button strip images (panel_image_alt%) and sets buffer mode shift_mode!, so the
+' buttons act on the buffer.  Redraws the marker line at x 240 when Hide Blk is on.
+^ IF mono!
+^ image_blit(0,rect_ay&,panel_image_alt%)
+^ IF all_selected!
+@ PROCEDURE fade_curve_build
+' Builds the segment list for a curved fade.  curve_type& = curve type 1-3, level_a/level_b = start and
+' end level 0..1, start_pos%..stop_pos% = address range, list_ptr% = list buffer.  Walks the level from
+' start to end in steps of 0.005 and works out where each level is reached on the curve:
+' type 1 a quarter sine, type 2 the other quarter sine, type 3 a half sine (S curve).
+' Each entry is 12 bytes: volume table address (volume_tables% + level*256), start, end; a 0 long
+' ends the list.  The caller runs the volume table routine code_byte_map% over every entry.
+^ ratio=(stop_pos%-start_pos%)*2/PI
+! address units per radian of a quarter sine
+^ level_step=SGN(level_b-level_a)*.005
+^ IF factor_range>0
+! reciprocal of the level range
+^ IF curve_type&=1
+^ EXIT IF ABS(level-level_b)<.0025
+! end level reached
+^ LONG{list_ptr%}=volume_tables%+SHL&(INT((level-level_step)*100),8)
+! volume table of the previous level for this segment
+^ IF curve_type&=2
+^ DIV ratio,2
+' Type 3: half sine over the whole range.
+^ IF range_pos%<stop_pos%
+' The rest of the range gets the end level and the list end marker.
+@ PROCEDURE pointer_freeze
+' Slows the mouse to a stop: XBIOS Initmous relative mode with the parameter bytes 0,0,127,127
+' (top mode, buttons, x and y threshold 127), mouse vector from Kbdvbase+16.  Used while playing.
+^ work_text$=MKI$(0)+MKI$(32639)
+^ ~XBIOS(0,1,L:V:work_text$,L:pointer_vector%)
+@ PROCEDURE pointer_normal
+' Normal mouse again: XBIOS Initmous relative mode with x and y threshold 1.
+^ work_text$=MKI$(0)+MKI$(257)
+@ PROCEDURE key_release_wait
+' Waits until a key is let go.  key_code& = scan code of the key that started the action, or 0 for
+' any key: if the keyboard ACIA last sent that key's make code, waits for its break code (+128).
+' Then waits until no Shift, Control, Alt or Alt+Clr/Insert mouse key is held (Kbshift AND 111)
+' and empties the keyboard buffer.
+^ scan_code|=@keyboard_scancode
+^ DO
+^ WHILE BIOS(1,2)
+@ FUNCTION keyboard_scancode
+' Returns the last byte received by the keyboard ACIA: GEMDOS Super, read the status $FFFC00
+' and the data $FFFC02, back to user mode.  Make codes are below 128, break codes 128 and up.
+^ saved_ssp%=GEMDOS(32,L:0)
+@ PROCEDURE screen_frame_draw
+' Clears the screen and draws the main window: title bar boxes, the shaded frame, the info line,
+' the waveform area and the button rows, with the mono (640x400) or colour (640x200) layout.
+' The version text " Sound Lab 1.11  July 28, 1993 " is centred at x 165 in the title bar.
+^ IF mono!
+^ txt_centred(165,15,
+^ ACLIP 1,0,0,639,199
+' Colour layout, half the heights.
+@ PROCEDURE format_detect
+' Detects the format of the file whose first 128 bytes are in scratch_addr% and whose size is length_bytes%.
+' Sets sample_format&, seeks handle 1 to the sample data and makes length_bytes% the data length:
+'   "2BIT" AVR (2), "RIFF" WAV (3, 44-byte header), $7E817E81 SoundWizard SMP (4, 12 bytes),
+'   'G' 8-byte header with a rate code (5), first byte 0-7 = rate code with a 2-byte header (6).
+' Otherwise the extension decides: .SPL (0), .SAM (1), a number or number+K (7), else the
+' preferred format for headerless files opt_load_format&.
+^ IF length_bytes%>=128
+^ IF LONG{scratch_addr%}=843204948
+! "2BIT": AVR, data after the 128-byte header
+^ IF LONG{scratch_addr%}=1380533830
+! "RIFF": WAV, data length little-endian at +40
+^ IF LONG{scratch_addr%}=2122415745
+! SoundWizard SMP, length at +8
+^ IF BYTE{scratch_addr%}=71
+! 'G': length at +2, rate code at +6
+^ IF BYTE{scratch_addr%}>=0 AND BYTE{scratch_addr%}<=7
+^ SUB length_bytes%,chan_pos%(1)
+! minus the header (the file position after the seek)
+^ IF sample_format&<0
+' No header found: decide by the extension.
+^ IF (RIGHT$(work_text$)="K") AND VAL?(work_text$)+1=LEN(work_text$) OR
+! the extension is all digits, or digits followed by K
+@ PROCEDURE format_parameters
+' Sets the sample parameters for the format sample_format& found by format_detect, from the header in scratch_addr%
+' or fixed values: signed_samples! signed data, header_stereo! stereo, header_rate% sample rate in Hz.
+' Raw SPL and SAM keep the current rate; AVR also brings its loop when the whole sample is loaded.
+^ signed_samples!=FALSE
+' SPL: unsigned, mono.
+^ signed_samples!=TRUE
+' SAM: signed, mono.
+^ signed_samples!=INT{scratch_addr%+16}
+' AVR: signed flag, stereo flag and rate from the header; loop points for a whole-sample load.
+^ signed_samples!=FALSE
+' WAV: unsigned 8-bit, channels - 1 = stereo, rate from the low word (little-endian).
+^ signed_samples!=TRUE
+' SoundWizard SMP: signed, 12.538KHz.
+^ signed_samples!=TRUE
+' 'G' format: signed, rate from the code at +6.
+^ signed_samples!=FALSE
+' Rate-byte format: unsigned, rate from the code in the first byte.
+^ signed_samples!=FALSE
+' Rate in the extension: .##K = KHz, otherwise hundreds of Hz.
+@ PROCEDURE intel_long_store
+' Stores the long long_value% at addr% in Intel (little-endian) byte order, for WAV headers.
+^ BYTE{addr%}=long_value% AND 255
+@ PROCEDURE intel_word_store
+' Stores the word short_value& at addr% in Intel (little-endian) byte order.  Never called.
+^ BYTE{addr%}=short_value& AND 255
+@ PROCEDURE palette_read
+' Reads the 16 colour registers with XBIOS Setcolor(n,-1), 12 bits each, into palette_str$
+' (32 bytes, the XBIOS Setpalette layout).
+^ FOR ix&=0 TO 15
+
+@ PROCEDURE txt_centred
+' Draws work_text$ centred on x = ix&, top at y = y_or_j&.
+' The width is measured with font header font_ptr%; the string is drawn with the current font font_current%.
+
+@ PROCEDURE txt_right
+' Draws work_text$ right-aligned so that it ends at x = ix&, top at y = y_or_j&.
+' The width is measured with font header font_ptr%; the string is drawn with the current font font_current%.
+
+@ PROCEDURE palette_fade_build
+' Builds the 8 fade palettes fade_palettes$(0..7) for the title screen.
+' palette_str$ is the palette at step 0, palette_to$ the palette at step 7 (16 ST colour words each).
+' Each colour is split into its 3-bit red, green and blue nibbles and blended linearly per step.
+^ r_to=col_to DIV 256
+' Split target and start colours into red, green and blue.
+^ r_mix=INT((r_to-r_from)*ix&/7)+r_from
+' Blend: red in r_mix, green*16+blue in gb_mix.
+
+@ PROCEDURE disk_free_space
+' Counts the free space of drive drive_no& by reading its FAT directly with BIOS Rwabs.
+' scratch_addr% is a work buffer of at least 10K; the result (free bytes) is returned in byte_count%.
+' The boot sector gives the BPB; the FAT is read in 10K chunks and every 0 entry is a free cluster.
+' Bugs: each chunk is scanned as 5120 entries, which is right only for a 16-bit FAT, and the
+' last two clusters are never checked (entries 2..count-1 instead of 2..count+1).
+^ media_change_force(drive_no&)
+' Force a media change first so the boot sector and FAT are current.
+^ rwabs_retry(2,scratch_addr%,1,0,drive_no&)
+' Read sector 0 (boot sector).  Rwabs flag 2 = read, ignoring media change.
+^ sec_bytes&=FN le_word(11+scratch_addr%)
+' BPB from the boot sector (Intel byte order): bytes/sector at 11, sectors/FAT at 22,
+' root entries at 17 (/16 = root sectors), sectors/cluster at 13, total sectors at 19.
+^ chunk_secs&=DIV(10240,sec_bytes&)
+' Sectors that fit in the 10K buffer.
+^ fat16&=INT{BIOS(7,drive_no&)+16}
+' BIOS Getbpb: bflags at offset 16, bit 0 set = 16-bit FAT.
+^ WHILE fat_secs_left&>chunk_secs&
+' Read and scan the FAT in full 10K chunks; the first chunk skips the two reserved entries.
+^ rwabs_retry(2,scratch_addr%,fat_secs_left&,aux&+1,drive_no&)
+' Read the last (partial) chunk of the FAT and scan the remaining entries.
+^ byte_count%=free_clus&*clus_bytes&
+! free clusters * bytes per cluster
+
+@ PROCEDURE fat_entry_fetch
+' Fetches FAT entry fat_index% from the FAT buffer addr% into fat_entry%.
+' obj_type& <> 0: 16-bit FAT, the Intel-order word is byte-swapped with ROR.W #8.
+' Otherwise 12-bit FAT: two entries share 3 bytes; values $F00 and up are extended to $FFxx.
+^ IF ODD(fat_index%)
+' Odd entry: high nibble of byte 1 and all of byte 2.  Even entry: byte 0 and low nibble of byte 1.
+
+@ PROCEDURE rwabs_retry
+' BIOS Rwabs (BIOS 4): rw_flag& = flag, addr% = buffer, sec_count& = sector count, range_start& = first
+' sector, drive_no& = drive.  The result is left in gem_error&; errors are shown by dos_error_alert.
+' Bug: dos_error_alert sets gem_error& to -999 for Retry, but the loop tests 999, so it never retries.
+
+@ PROCEDURE vbl_install
+' Installs the routine at vbl_routine% in the first free slot of the VBL queue.
+' $454 = nvbls (slot count), $456 = _vblqueue (slot table).  The slot address is returned in vbl_slot%.
+' If no slot is free, the long just after the table is overwritten.
+
+@ PROCEDURE media_change_force
+' Makes GEMDOS treat drive drive_no& as changed, so its directory and FAT are read again.
+' A tiny 68000 routine is built in work_text$ and put in hdv_mediach ($47E):
+'   MOVE.L #old_vector,$47E(A5) / MOVEQ #2,D0 / RTS
+' It restores the old vector and answers "media changed" once; it relies on A5 being 0 in the BIOS.
+' Fsfirst (GEMDOS 78) on "X:\*.*" then makes GEMDOS ask the drive.
+^ CARD{work_ptr%}=11132
+! $2B7C: MOVE.L #imm,d16(A5)
+^ CARD{work_ptr%+8}=28674
+! $7002 MOVEQ #2,D0 and $4E75 RTS
+^ SLPOKE 1150,work_ptr%
+! hdv_mediach -> the routine in work_text$
+
+@ PROCEDURE selector_call
+' Calls the AES file selector directly through GEMSYS.
+' work_str$ = title, path_dir$ = path with mask, fname_arg$ = default file name.
+' Returns full_path$ = folder of the path + chosen name, result_value& = exit button (1 = OK).
+^ IF DPEEK(LPEEK(1266)+2)>=260
+' TOS 1.04 or later (sysbase $4F2 + 2 = version >= $0104): fsel_exinput (91) with a title;
+' otherwise fsel_input (90).
+^ ADDRIN(0)=V:work_text$
+' addrin: path buffer (128 bytes), file buffer (128 bytes), title.
+
+@ PROCEDURE font_attr_set
+' Sets the text attributes used by txt_draw/txt_blit.
+' font_no& > 0: selects font font_no& (2 is treated as 1) and sets font_current% to its header.
+' font_no& = 0: y_centre& = VDI colour index (mapped with vdi_to_hw_colour&), num_val& = text style,
+' item_height& = top offset (doubled + 1 in high res).  aux& is not used.
+
+@ PROCEDURE txt_draw
+' Draws work_text$ at x = ix& with its top at y = y_or_j& (the font top offset text_top& is subtracted).
+
+@ PROCEDURE wrmode_set
+' Sets writing mode mode_param& (1 replace, 2 transparent, 3 XOR, 4 reverse transparent).
+' linea_wrmode& gets the Line-A WRT_MODE (0-3); GRAPHMODE is only set when the GEM pointer is in use.
+' wrmode_flag& is set but never read.
+
+@ PROCEDURE linea_text_setup
+' Fills the Line-A TEXTBLT variables from font header font_ptr%.
+' text_fg& = text colour, text_effects& = style, text_rotation& = CHUP rotation; unused_param& is not used.
+' Offsets in the Line-A block: 36 WRT_MODE, 66 DDA_INC, 68 T_SCLSTS, 70 MONO_STATUS,
+' 84 FBASE, 88 FWIDTH, 90 STYLE, 92 LITEMASK, 94 SKEWMASK, 96 WEIGHT, 98 R_OFF, 100 L_OFF,
+' 102 SCALE, 104 CHUP, 106 TEXT_FG, 108 SCRTCHP (work buffer scratch_addr%), 112 SCRPT2, 114 TEXT_BG.
+^ LONG{base_ptr%+84}=LONG{font_ptr%+76}
+' Font header: 76 data, 80 form width, 62 lighten, 64 skew, 58 thicken, 56/54 right/left offset.
+
+@ PROCEDURE txt_blit
+' Draws work_text$ at x = blit_x&, y = blit_y& one character at a time with Line-A TEXTBLT ($A008).
+' The font header font_current% gives the offset table (72), first character (36) and form height (82).
+^ linea_code%=-1610068363
+! $A008 $4E75: Line-A TextBlt, RTS
+^ CARD{base_ptr%+72}=INT{src_pos%+y_or_j&*2}
+' SOURCEX = character's offset in the font form, DELX = its width, DELY = form height.
+
+@ PROCEDURE player_code_setup
+' Holds the 2778-byte machine-code play/record routine (player_code%); its parameter block is set by
+' sample_run_range and sample_run_list.
+
+@ PROCEDURE sample_run_range
+' Plays (or records, player_mode& + 128) one range through the player routine player_code% in supervisor mode.
+' player_mode& = device (1 = STE DMA), seg_table% = table, start_pos%..stop_pos% = range,
+' loop_from%..loop_to% = loop range, loop_on! = loop on, rate_code& = rate code (mfp_timer_a&).
+' Player block: +4 mode, +6 segment list (here the one entry at +10: table, start, end, 0),
+' +26/+30 loop start/end, +34 loop flag, +36 rate code, +38 cartridge sampler address.
+' work_ptr% is not LOCAL here, so the caller's or the global work_ptr% is overwritten.
+^ IF output_device&=1
+' STE DMA output: run the DMA set-up routine first (XBIOS 38 Supexec).
+^ pointer_freeze
+' Stop mouse packets and hide the pointer while the routine runs.
+^ ~XBIOS(38,L:player_code%)
+' Run the player routine in supervisor mode (XBIOS 38 Supexec).
+^ OUT& 4,136
+! IKBD $88: mouse mode status inquiry
+^ REPEAT
+' Wait for the buttons to be released, give the mouse back and flush the keyboard.
+^ work_ptr%=LONG{player_code%+14}-start_pos%
+' The 200 Hz clock stops while the routine runs: move the shareware nag time nag_deadline% back by
+' the time played (bytes played / rate * 200).
+
+@ PROCEDURE sample_run_list
+' Plays a list of ranges through the player routine player_code% (see sample_run_range).
+' list_ptr% = list of 12-byte entries (table, start, end) ending with a 0 long.
+' loop_from%..loop_to% = loop range, loop_on! = loop on, rate_code& = rate code.
+^ ~XBIOS(38,L:player_code%)
+' Run the player (XBIOS 38 Supexec), then wait for buttons up and flush the keyboard.
+^ work_ptr%=0
+' Add up the list's lengths and move the shareware nag time nag_deadline% back by the time played.
+
+@ PROCEDURE keyclick_off
+' Turns the key click off: clears bit 0 of conterm ($484).
+
+@ PROCEDURE keyclick_on
+' Turns the key click on: sets bit 0 of conterm ($484).
+' The setting from before keyclick_off is not restored: the click is always switched on.
+
+@ PROCEDURE tour_step
+' One step of the help tour player.  SoundLab.HLP entries are scripts of word commands at
+' scratch_addr%+128 that move the pointer, click, drag dialogs and show text boxes; tour_ptr% reads them.
+' Called through pointer_state while tour_active! is set; runs a step every 3 ticks of the 200 Hz clock.
+' Uses dialog_id&, origin_x&, origin_y& and obj_end% of the dialog loop dialog_run that is running.
+' Commands: 0 glide to x,y and set buttons; 1 drag the dialog to x,y; 2 flash the pointer;
+' 3 wait n seconds; 4 text box; 5 end (chain to help entry n if n >= 0); 6 drag a dialog back;
+' 7 click an object; 8 glide to an object; 128/129 redraw the bottom panel graphics.
+^ tour_active!=FALSE
+' Read the real pointer state (buttons only: the packet handler writes to a dummy position).
+^ IF sim_mouse_k&=2 OR tour_key_hit! AND tour_abortable! AND tour_state&=0
+' Right button, or a key between commands: abort.  The script is rewritten as one
+' "drag back" (6) per dialog the tour has moved, then "end" (5) with no chained entry.
+^ SELECT tour_state&
+' tour_state& state: 0 read the next command, 1 drag, 3 wait, 4 flash, 5 glide, 6 glide then drag.
+^ tour_cmd&=INT{tour_ptr%}
+' Read the next command word.
+^ tour_state&=5
+' Command 0: x, y, buttons after the glide.  The y in all coordinates is doubled in high res.
+^ tour_state&=6
+' Command 1: save the dialog position on tour_moved_trees$, glide to its top-left corner, then drag it
+' with the left button held to the script position.
+^ tour_state&=4
+' Command 2: flash the pointer 5 times.
+^ tour_wait_until%=TIMER+MUL(INT{tour_ptr%},200)
+' Command 3: wait n seconds (a click ends it early).
+^ tour_box_remove
+' Command 4: text box at x, y, width, then the text (length, characters).
+^ work_text$=SPACE$(tour_text_len&)
+' Word wrap: lines are stored as C strings at scratch_addr%+8192, counter& counts them.
+^ ADD pix_width&,@pixel_width_of(font_main%,CHR$(BYTE{ix&+V:work_text$}))
+' Add the character's width; past the box width, end the line at the last word end y_or_j&
+' and skip the spaces after it.
+^ IF BYTE{ix&+V:work_text$}<>32 AND BYTE{ix&+V:work_text$+1}=32
+' Remember the end of each word.
+^ IF k&<tour_text_len&
+' Store the last line.
+^ IF mono!
+' Box height: 20 pixels a line in high res (grey fill), 10 in colour (solid fill).
+^ GET tour_box_x&,tour_box_y&,tour_box_x&+tour_box_w&+shadow_dx&,tour_box_y&+tour_box_h&+shadow_dy&,tour_box_bg$
+' Save the screen under the box and its shadow, then draw the box, frame and shadow.
+^ font_attr_set(0,0,0,0,3)
+' Font 3; every line is drawn twice, the offset copy first as a shadow.
+^ tour_buttons&=0
+' Command 5: end of script, then start help entry n if n >= 0.
+^ tour_state&=6
+' Command 6: drag a dialog back to the position popped from tour_moved_trees$.
+^ k&=INT{tour_ptr%}
+' Commands 7 and 8: glide to near the bottom-right corner of object n of the current dialog;
+' 7 then clicks it (glide-then-drag to the same place), 8 only glides.
+^ buttons_buffer_mode
+' Command 128: redraw the bottom panel graphics from panel_image_alt%.
+^ buttons_normal_mode
+' Command 129: redraw the bottom panel graphics from panel_image%.
+^ IF sim_mouse_k& AND tour_steps_left&>0 AND tour_steps_left&<tour_steps_total&
+' Gliding: a real click jumps straight to the target.
+^ IF tour_steps_left&=0
+' Glide finished: 5 is done, 1 and 6 go on to their second phase.
+^ IF tour_steps_left&<0
+' Second phase: 6 starts the drag with the left button held, 1 releases the button.
+^ IF tour_steps_left&>=tour_steps_total&
+' First frame of a glide only waits.
+^ tour_pos_x=tour_pos_x+tour_step_x
+' Move one step and update the own pointer's position (VBL routine +24/+26).
+^ IF sim_mouse_k&
+' Waiting: while the real button is held, wait for its release and end the wait.
+^ IF sim_mouse_k&
+' Flashing: a click ends it.  The pointer shows for 0.4 s and hides for 0.4 s.
+^ sim_mouse_k&=tour_buttons&
+! the buttons the tour reports for this step
+
+@ PROCEDURE tour_box_remove
+' Restores the screen under the tour text box from tour_box_bg$ and frees it.
+
+@ PROCEDURE tour_move_setup
+' Sets up a glide of the tour pointer from sim_mouse_x&,sim_mouse_y& to tour_target_x&,tour_target_y&.
+' The number of frames tour_steps_total& is the distance / 3 + 1, plus one waiting frame.
+
+@ PROCEDURE tour_stop
+' Ends the help tour: removes the text box, waits for the buttons to be released and points the
+' mouse packet handler back at the pointer position.  If the own pointer was only borrowed for
+' the tour (removable_mouse!), mousevec and the VBL slot are restored and the GEM pointer comes back.
+
+@ FUNCTION keys_pending
+' Returns Bconstat for the console (BIOS 1, device 2).
+' During a tour it returns 0 and eats the keys; the Help key (226) also eats the next byte,
+' any other key sets tour_key_hit! to abort the tour.
+
+@ PROCEDURE pointer_hide
+' Hides the pointer.  Own pointer: stops the VBL routine drawing it and puts back the 16 lines
+' of screen it saved (+8 address, +28 saved data; 80-byte lines in high res, 160 in medium res),
+' only inside the screen.  +156 = -1 forces a redraw when shown again.  GEM: HIDEM.
+' Both reset the Line-A clip to the whole screen.
+
+@ PROCEDURE pointer_show
+' Shows the pointer.  Own pointer: gives the VBL routine the form data and mask and forces a
+' redraw.  GEM: SHOWM.  Both reset the Line-A clip to the whole screen.
+
+@ PROCEDURE pointer_busy
+' Sets the pointer form: busy& = 0 arrow, other = busy bee.
+' Own pointer: picks the MFORM mask (+10) and data (+42) and the hot spot (0,0 or 7,7); the
+' visible pointer changes at once only if it is shown.  GEM: DEFMOUSE.
+^ OUT 4,136
+! IKBD $88: mouse mode status inquiry
+
+@ PROCEDURE pointer_state
+' Returns pointer x, y and buttons in ix&, y_or_j&, k&.
+' During a tour it runs a tour step and returns the simulated values.
+' Own pointer: position from the VBL routine, buttons from the packet handler (bits 0 and 1
+' swapped to GEM order).  Otherwise MOUSE.
+
+@ FUNCTION pointer_x
+' Returns the pointer x (tour, own pointer or MOUSEX).
+
+@ FUNCTION pointer_y
+' Returns the pointer y (tour, own pointer or MOUSEY).
+
+@ FUNCTION pointer_buttons
+' Returns the pointer buttons (tour, own pointer with bits swapped to GEM order, or MOUSEK).
+
+@ PROCEDURE desk_menu
+' Desk menu.  mnu_path$ holds the rest of the menu path: item 1 is the submenu
+' (1 Sound Lab info, 2 Shareware, 3 Thanks); any other item is Accessories.
+
+@ PROCEDURE info_screen
+' Desk > Sound Lab: the title picture screen, also shown at start-up (info_at_startup! set).
+' The picture is kept after the end of sample memory (sample_base%+memory_top%, 34-byte header first).
+' With Alternate held (Kbshift bit 3) the picture's 20800 bytes are given to sample memory instead.
+' The screen stays up until a key or click, or a timeout (short when a file is on the command line).
+^ IF (BTST(BIOS(11,-1),3))=FALSE
+' Alternate not held: show the picture.
+^ IF mono!
+' High res: dissolve the picture onto the screen below the menu with dissolve_code%.
+^ IF flag_state!
+' Timeout: 2 s with a command-line file, 1 hour otherwise.
+^ num_val&=0
+' Wipe the picture with vertical lines 17 columns apart (17 and 640 share no factor, so all
+' 640 columns are hit), then redraw the waveform and the block bar.
+^ pointer_hide
+' Colour: the picture is low res, shown above the medium-res panel by the Timer B raster split.
+^ white_pal$=STRING$(16,MKI$(1911))
+' Fade palettes from white to the picture's palette; the split gets fade step 0 for the top
+' and palette$ for the panel below.
+^ IF info_at_startup!
+' At start-up the picture is already on screen at full colour: start at fade step 7.
+^ IF flag_state!
+' Timeout in frames: 2.4 s with a command-line file, 7.2 minutes otherwise (at 50 Hz).
+^ CARD{raster_code%+54}=200
+' Install the raster split (mode 1, XBIOS 38).  +54 is its line counter: below 5 at the top of
+' a frame, above 160 after the split, so each wait pair below is one frame.
+^ IF info_at_startup!=FALSE
+' Copy the picture data (129 lines of 160 bytes) to screen line 24.
+^ FOR ix&=num_val& TO 7
+' Fade in, one step every 2 frames.
+^ IF info_at_startup!
+' At start-up the picture is dissolved again with the second table set.
+^ REPEAT
+' Wait for a key, a click or the timeout, counting frames.
+^ FOR ix&=6 DOWNTO 0
+' Fade out to white, clear the area and remove the raster split (mode 2).
+^ IF info_at_startup! AND mono!=FALSE
+' Alternate held: at start-up in colour the raster split is removed.
+^ IF buffer_start%<memory_top%
+' Free the picture: move the free tail of sample memory up 20800 bytes and fill the gap
+' with 128 (silence), then grow the memory size (and the sample if it filled memory).
+^ mnu_item_disable("1 1 1")
+' Desk > Sound Lab is disabled: the picture is gone.
+
+@ PROCEDURE shareware_dialog
+' Desk > Shareware: shows dialog 27.
+
+@ PROCEDURE thanks_dialog
+' Desk > Thanks: shows dialog 28.
+
+@ PROCEDURE accessories_menu
+' Desk > Accessories: shows a real GEM menu bar (Desk with the accessories and "Done with ACCs")
+' on a cleared screen so desk accessories can run.  Any menu choice ends the loop; then the
+' whole Sound Lab screen is redrawn without zoom effects, and zoom boxes open and close it.
+^ ~FORM_DIAL(3,0,0,0,0,0,0,1280,960)
+! FMD_FINISH: send redraws for the whole screen
+^ saved_flag!=zoom_enabled!
+' Redraw the background, the main panel (tree 4), waveform and the status fields.
+
+@ PROCEDURE acc_menu_done
+' ON MENU handler for the accessory menu bar: removes the bar and ends the loop.
+
+@ PROCEDURE filedisk_menu
+' File/Disk menu: 1 Rename File, 2 Delete File(s), 4 Create Folder, 5 Remove Folder,
+' 7 Free Space (drive submenu), 8 Format Disk, 10 Quit; 3, 6 and 9 are separators.
+
+@ PROCEDURE cmd_rename_file
+' File/Disk > Rename File.  The file is picked with the selector, then dialog 18 shows the
+' old name (object 5) and an editable new name (object 3), both in 8.3 form.
+' GEMDOS 86 Frename renames it; errors offer Retry.
+^ REPEAT
+' REPEAT ... UNTIL TRUE: EXIT IF skips the rest when cancelled or nothing changed.
+^ cursor_top&=0
+' Objects are drawn without the usual extra 2 pixels above and below.
+^ EXIT IF choice&=2
+! Cancel
+^ gem_error&=GEMDOS(86,0,L:V:chosen_file$,L:V:work_text$)
+! Frename
+^ filesel_listed$=""
+! the selector must read the folder again
+
+@ PROCEDURE cmd_delete_files
+' File/Disk > Delete File(s).  Repeats until the selector is cancelled: the chosen name (wildcards
+' allowed) is confirmed by alert 22, then every matching file is deleted with GEMDOS 65 Fdelete.
+' work_text$ is not LOCAL here, so the caller's string is used.
+^ work_text$=RIGHT$(folder_path$+chosen_file$,32)
+' Shorten the path for the alert: CHR$(4) marks cut text until it is under 168 pixels wide.
+^ obj_found%=GEMDOS(47)
+' Fgetdta, then Fsfirst/Fsnext (GEMDOS 78/79) over the matches.
+^ IF (BYTE{obj_found%+21} AND 24)=0
+' Skip folders and volume labels (attributes $10 and $08).
+
+@ PROCEDURE cmd_create_folder
+' File/Disk > Create Folder: the name typed in the selector is created with GEMDOS 57 Dcreate.
+' Bug: disk_path$ keeps the new folder's name and a NUL, so the next File/Disk selector starts with
+' that string as its path.
+^ REPEAT
+' REPEAT ... UNTIL TRUE: EXIT IF skips the rest when no name was typed.
+
+@ PROCEDURE cmd_remove_folder
+' File/Disk > Remove Folder: the user opens the folder in the selector (no file name) and it is
+' deleted with GEMDOS 58 Ddelete.  Remembered paths inside it are cut back to the parent.
+^ REPEAT
+' REPEAT ... UNTIL TRUE: EXIT IF skips the rest when a file name was given.
+^ IF gem_error&=-36
+' Access denied: the folder is not empty.  Dialog 25 ("Diskette is full") is reused with
+' its two text lines patched, shown, and patched back.
+^ IF (selector_folder$+CHR$(0))=folder_path$
+' Cut the sample, echo and selector drive paths back to the parent folder.
+
+@ PROCEDURE cmd_free_space
+' File/Disk > Free Space > drive: counts the free bytes with disk_free_space and shows them.
+
+@ PROCEDURE cmd_format_disk
+' File/Disk > Format Disk.  Dialog 24 picks the drive (radio group 1) and the sides (group 2).
+' Formats 80 tracks of 10 sectors with XBIOS 10 Flopfmt (track 79 down to 0), then writes an
+' own boot sector with XBIOS 9 Flopwr: 800K double sided or 400K single sided.
+^ IF choice&=1 AND (drive_no&=0 OR DPEEK(1190)=2)
+' Drive B only if _nflops ($4A6) is 2.
+^ IF BIOS(1,2) OR @pointer_buttons
+' A key or click asks whether to stop.
+^ IF ix&=0
+' Track 0 is filled with 0 so the FAT and root directory start empty; the rest with $E5E5.
+^ gem_error&=XBIOS(10,L:scratch_addr%,L:0,drive_no&,10,ix&,L:1,L:-2023406815,virgin_word&)
+' Flopfmt side 0: 10 sectors, interleave 1, magic $87654321.
+^ IF double_sided&
+' Double sided: format side 1 too.
+^ ~C:code_fill%(L:scratch_addr%,L:512,0)
+' Build the boot sector: serial number from XBIOS 17 Random, 512 bytes/sector, 2 sectors/cluster,
+' 1 reserved sector, 2 FATs, 112 root entries, 1600 sectors, media $FE, 5 sectors/FAT,
+' 10 sectors/track, 2 sides (800, 1 side when single sided).
+^ CHAR{scratch_addr%+60}=
+' The message names version 1.0, although the program is 1.1.
+^ gem_error&=XBIOS(9,L:scratch_addr%,L:0,drive_no&,L:65536,L:1)
+' Flopwr sector 1, track 0, side 0, 1 sector.  Then force a media change.
+
+@ PROCEDURE menu_nop
+' Empty: the File/Disk menu separators lead here.
+
+@ PROCEDURE rsc_init
+' Sets up the resource pointers from the loaded SOUNDLAB.COL/.MON data at addr%
+' (long 0 = tree data size, long 4 = object data size, data from offset 8), then the GUI defaults.
+' rsc_data_end% is set but never read.
+^ INLINE poly_points%,20
+' 20-byte point buffer.
+^ pattern_solid%=-1
+' Fill patterns: solid, $AAAA5555 grey, $55557FFF.
+^ zoom_x1&=screen_max_x& DIV 2
+' The first zoom box starts from the screen centre.
+
+@ PROCEDURE screen_metrics_init
+' Sets the resolution-dependent sizes used by the dialog code from XBIOS(4) Getrez.
+' shadow_dx&/shadow_dy& are the shadow offsets, screen_max_x&/screen_max_y& the screen limits, blit_nxwd& the bytes between
+' words of one plane, screen_planes& the plane count, screen_line_bytes& the bytes per line (Line-A BITBLT values) and
+' dialog_text_dy& the extra text offset of the 8x16 font in high resolution.
+^ cur_rez&=XBIOS(4)
+! Getrez: 0 low, 1 medium, 2 high
+^ shadow_dx&=2
+' Low resolution: 320x200, 4 planes, 160 bytes per line
+^ IF cur_rez&>0
+' Medium and high: 640 wide, 2 planes
+^ IF cur_rez&=2
+' High resolution: 640x400 monochrome, 1 plane, 80 bytes per line, 16-pixel font
+@ PROCEDURE vdi_colour_map_init
+' Builds vdi_to_hw_colour&(), the map from a VDI pen number to the hardware colour register it uses
+' (pen 1 is register 15, pen 2 register 1, and so on). Used to pick the colour of the edit cursor.
+@ PROCEDURE dialog_run
+' Runs dialog dialog_id& from the resource until an exit object is chosen; result_value& returns that object's
+' exit value. Dialog records (from tree_first% to tree_end%): INT +0 id, +2 record length, +4..+14 frame,
+' then 28-byte objects from +20: INT +0 id, byte +3 type (1 toggle, 2 radio, 3 button, 4 exit,
+' 5 edit field, 6 slider arrow, 7/8 h/v slider, 10 move bar, 128+ line/box/image/text, drawn only),
+' byte +4 action (see object_action_call), byte +5 flags (low nibble border style, bit 4 touch exit),
+' INT +6 parent id, +8..+18 rectangle, LONG +24 offset of the object's data from rsc_data%.
+' Button data: LONG +0 normal image, +4 selected image, INT +8 state or exit value, +10 key or group.
+' Dialog 4 is the main screen, which also brings in the start-up picture and intro.
+^ saved_zoom_x1&=zoom_x1&
+' Keep the zoom-box rectangle of the caller; it is put back on exit
+^ tree_find(dialog_id&,obj_ptr%)
+! find the dialog record
+^ IF obj_ptr%<tree_end%
+' Only when the dialog exists in the resource
+^ dialog_draw(dialog_id&)
+! save background and draw the dialog
+^ IF dialog_id&=4
+' Main screen start-up: show both screens as XBIOS(5) Setscreen, then wipe the picture in 16 mask
+' steps with the INLINE wipe (Alternate held skips the wipe and copies it at once)
+^ ~C:code_fill%(L:screen_back%,L:32000,128)
+! fill the picture buffer with $80 bytes
+^ WHILE BIOS(1,3)
+' BIOS(1,3) Bconstat MIDI: while MIDI bytes come in, ask for the MIDI equipment to be switched off
+' and empty the MIDI input with BIOS(2,3) Bconin
+^ info_at_startup!=TRUE
+' Start-up intro runs with info_at_startup! set
+^ IF (command_file$<>"") AND @fexists(command_file$)
+' A sample named on the command line that exists is loaded now, with the Load button (object 20)
+' drawn pressed while it loads
+^ obj_end%=obj_ptr%+INT{obj_ptr%+2}
+! end of this dialog's objects
+^ origin_x&=INT{obj_ptr%+4}
+' Dialog origin, rounded up to an even position
+^ REPEAT
+' Main dialog loop: read the mouse, run any pending edit-field action, then handle clicks and keys
+^ IF nag_deadline%<TIMER AND tour_active!=FALSE
+' Repeats the info dialog 27 every nag_interval% ticks (5 minutes at first, 10% shorter each time) when
+' no demo runs. The program carries a hand patch here: tour_active! reads as TRUE in this test, so the
+' IF never runs and the dialog never comes back.
+^ menubar_poll
+! drop-down menu when the mouse is in the menu bar
+^ IF click_buttons&
+' A mouse button is down
+^ IF button_previous&<>2 AND click_buttons&=2 AND dialog_id&=4
+' Right button on the main screen shows the second set of command buttons while held
+^ IF @rect_hit(click_x&,click_y&,obj_ptr%+4)<>0
+' Inside the dialog frame: find the clickable object under the mouse and handle it
+^ click_outside!=TRUE
+' Click outside the dialog: after 200 loop passes with the button held, ring the bell (OUT 2,7)
+^ IF button_previous&
+' Button released
+^ IF y_centre&>0 AND button_previous&>0 AND click_outside!
+' Short click outside the dialog: bell
+^ IF @keys_pending<>0
+' A key is waiting: key_inp& is the key (INP(2) gives scan code + 128 for keys without ASCII),
+' shift_state& the BIOS(11,-1) Kbshift state
+^ obj_scan%=20+obj_ptr%
+' Find the object with this shortcut key: buttons and toggles keep it at data +10, radio buttons
+' at data +14
+^ IF obj_scan%<obj_end%
+' A shortcut key matched: handle the object as a click
+^ IF INT{obj_scan%+2}=3
+' Button: flash it, open its sub-dialog (data +8) if any, run its action, draw it normal
+^ IF dialog_id&=4 AND INT{obj_scan%}=1 AND block_played!
+! main screen object 1 after playback: show the play position
+^ IF INT{obj_scan%+2}=1
+' Toggle: flip the state at data +8 and redraw
+^ IF INT{obj_scan%+2}=2
+' Radio button: select it if not selected and clear the rest of its group
+^ dialog_done!=TRUE
+' Exit object (drawn selected above): end the dialog with its exit value (data +8)
+^ IF key_inp&=226
+' Help key ($62+128): show the help text of this dialog
+^ IF edit_object&>0
+' Other keys go to the active edit field. Field data: INT +0 kind, +2 cursor colour, +4 font,
+' +6 alignment, +8 text y offset, +14 length, text from +16 (blank filled)
+^ SELECT key_inp&
+' Up arrow ($48+128): previous edit field; with Shift the first one
+' Down arrow ($50+128): next edit field; with Shift the last one
+' Left/right arrows (203/205) move the cursor, the right one not past the text end
+' Esc clears the field, Backspace and Delete remove a character
+^ IF INT{work_ptr%}=7 AND cursor_pos&=9 AND LONG{work_ptr%+24}=773857312
+! filename field: cursor just after ". " ($2E202020) of an empty extension
+^ BMOVE work_ptr%+17+cursor_pos&,work_ptr%+16+cursor_pos&,PRED(INT{work_ptr%+14}-cursor_pos&)
+! close the gap
+^ IF INT{work_ptr%}=7 AND cursor_pos&<8
+' Filename field: shift the extension back so the dot stays at position 8
+^ IF cursor_pos&<INT{work_ptr%+14}
+' Printable key with room in the field: filter it by the field kind; a rejected key becomes 0
+^ IF key_inp&<32
+! kind 1: any character from space up
+^ IF key_inp&<32 OR key_inp&>127
+! kind 2: ASCII 32 to 127
+^ IF NOT key_inp&=32 OR (key_inp&>64 AND key_inp&<91) OR (key_inp&>96 AND key_inp&<123) OR (key_inp&>47
+! kind 3: letters, digits, space
+^ IF NOT key_inp&=32 OR (key_inp&>64 AND key_inp&<91) OR (key_inp&>96 AND key_inp&<123)
+! kind 4: letters, space
+^ IF key_inp&<46 OR key_inp&>57 OR key_inp&=47
+! kind 5: decimal number (digits and point)
+^ IF key_inp&<48 OR (key_inp&>57 AND key_inp&<65) OR key_inp&>70
+! kind 6: hexadecimal digits
+^ IF key_inp&>96 AND key_inp&<123
+' Kind 7: 8.3 filename in upper case; a typed dot moves what follows the cursor into the extension
+' and puts the cursor after the dot
+^ IF INSTR("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?*_",CHR$(key_inp&))=0
+! name characters and wildcards
+^ IF INSTR("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?*_.|",CHR$(key_inp&))=0
+! kind 8: path or wildcard list in upper case
+^ shift_state&=INT{work_ptr%}-9
+' Kind 9 and up: walks the resource string list to entry kind-9 (the list is not used further)
+^ IF key_inp&>0
+' Accepted key: insert it at the cursor, shifting the rest of the field right
+^ IF INT{work_ptr%}=7 AND cursor_pos&<9 AND cursor_in_ext!=FALSE
+! filename: never leave a gap before the cursor
+^ dialog_key_dispatch(key_original&)
+! rejected key goes to the dialog's own key handler
+^ dialog_key_dispatch(key_inp&)
+! field full: key goes to the dialog's key handler
+^ SELECT key_inp&
+' Ctrl+left ($73+128) puts the cursor at the start, Ctrl+right ($74+128) after the last character
+^ dialog_object_draw(obj_scan%,origin_x&,origin_y&,-1)
+! redraw the field with its cursor
+^ dialog_key_dispatch(key_inp&)
+! no edit field: dialog key handler
+^ IF dialog_background$<>""
+' Put the saved background back and zoom the box in to the caller's rectangle
+@ PROCEDURE dialog_object_click
+' Handles a mouse click on object obj_ptr% of dialog dialog_id& at dialog origin origin_x&,origin_y& (VAR: a
+' move bar click changes them). Toggles, radio buttons, buttons and exit objects are tracked with
+' button_track; arrows step their slider while held; sliders are dragged; type 10 moves the dialog.
+' The object's action (byte +4) runs at the end unless the type already ran it.
+^ IF INT{obj_ptr%+6}
+' Add the offsets of all parents to get the object's screen origin object_x&,object_y&
+^ obj_draw_mode&=BYTE{obj_ptr%+5} DIV 16 AND 1
+! flags bit 4: touch exit, act on press without waiting for release
+^ SELECT BYTE{obj_ptr%+3}
+^ button_state!=INT{rsc_data%+LONG{obj_ptr%+24}+8}
+' Toggle: track the click and store the new state
+^ button_state!=INT{rsc_data%+LONG{obj_ptr%+24}+8}
+' Radio button: a second click on the same one within 50 ticks of the release is a double click
+' and presses Return (KEYPRESS 13)
+^ IF button_state!=FALSE OR INT{rsc_data%+LONG{obj_ptr%+24}+12}
+' Track it when not selected yet, or when data +12 allows deselecting; then clear its group
+^ button_state!=FALSE
+' Button: when released over it, open its sub-dialog (data +8), run its action and draw it normal
+^ IF dialog_id&=4 AND INT{obj_ptr%}=1 AND block_played!
+! main screen object 1 after playback: show the play position
+^ button_state!=FALSE
+' Exit object: released over it ends the dialog with data +8 as the result
+^ IF edit_object&<>INT{obj_ptr%}
+' Edit field: move the cursor to this field and redraw the old and new fields
+^ action_done!=TRUE
+' Slider arrow: data +8 is the slider object, data +10 the step added on each pass while held
+^ IF INT{work_ptr%+8}>INT{work_ptr%} AND step_counter&<0 OR (INT{work_ptr%+8}+INT{work_ptr%+10}<INT{work_ptr%+2} AND step_counter&>0)
+' Step only while the slider can still move that way; clamp to min and max-visible
+^ hslider_drag(obj_ptr%,object_x&,object_y&)
+! horizontal slider
+^ vslider_drag(obj_ptr%,object_x&,object_y&)
+! vertical slider
+^ tree_find(dialog_id&,work_ptr%)
+' Move bar: drag an outline of the dialog frame over the screen, then redraw it at the new place
+^ IF box_x1&<>origin_x& OR rect_y1&<>origin_y&
+' Moved: store the new frame, restore the old background and draw the dialog again
+@ PROCEDURE button_track
+' Tracks the mouse while the button is held over object obj_ptr% at origin object_x&,object_y&: the object
+' is drawn selected while the mouse is over it and in its old state when not. flag_state! (VAR) holds
+' the state on entry and returns the state when the button is released. With the touch-exit flag
+' (obj_draw_mode& of the caller) it returns after one pass.
+@ PROCEDURE hslider_drag
+' Horizontal slider obj_ptr% at origin object_x&,object_y&. Slider data: INT +0 min, +2 max, +4 step
+' left, +6 step right, +8 value, +10 visible size, +12 knob colour, +14 shadow colour (-1 none),
+' +16 track colour. slider_thumb_h sets work_ptr% to the data and knob_start&..knob_end& to the knob pixels.
+' The action routine runs whenever the value changes.
+^ IF click_buttons&=2
+' Right button: centre the knob on the mouse at once, then wait for the release
+^ button_state!=TRUE
+' Left button left of the knob: step left (+4)
+^ IF click_x&>knob_end&
+' Right of the knob: step right (+6), clamped
+^ knob_colour&=INT{work_ptr%+12}
+' On the knob: clear the slot, drag the knob with rect_drag inside the track, then work out the
+' new value from its position
+^ box_x2&=INT{obj_ptr%+16}-INT{obj_ptr%+8}
+' Value = min + (max-min)*knob offset/track length, rounded, clamped to min..max-visible
+@ PROCEDURE vslider_drag
+' Vertical slider obj_ptr% at origin object_x&,object_y&; the same as hslider_drag with y in place of x.
+' slider_thumb_v sets work_ptr% to the slider data and knob_start&..knob_end& to the knob pixels.
+^ IF click_buttons&=2
+' Right button: centre the knob on the mouse at once, then wait for the release
+^ button_state!=TRUE
+' Left button above the knob: step up (+4)
+^ IF click_y&>knob_end&
+' Below the knob: step down (+6), clamped
+^ knob_colour&=INT{work_ptr%+12}
+' On the knob: clear the slot, drag the knob inside the track, then work out the new value
+^ rect_y2&=INT{obj_ptr%+18}-INT{obj_ptr%+10}
+' Value = min + (max-min)*knob offset/track length, rounded, clamped to min..max-visible
+@ PROCEDURE rect_drag
+' Drags box box_x1&,rect_y1&..box_x2&,rect_y2& (VAR) with the mouse until the button is released,
+' keeping it inside rect_x1&,rect_ay&..rect_x2&,y_bottom& (top at least 11, below the menu bar).
+' Knob colour knob_colour& -1 drags an XOR outline (dialog move); otherwise the track is filled with
+' colour colour_work& and the box with knob_colour& at each new position. Returns the final box position
+' (x2/y2 come back as width and height).
+^ rect_ay&=MAX(11,rect_ay&)
+^ SUB box_x2&,box_x1&
+! x2/y2 become width/height
+^ grab_dx&=box_x1&-click_x&
+! grab offset from the mouse
+^ IF knob_colour&=-1
+' Outline: XOR the four sides (HLINE/ALINE mode 2)
+^ REPEAT
+' Follow the mouse, clamped to the bounds; redraw only when the position changes
+^ UNTIL click_buttons&=0
+! then a last draw removes the outline or draws the final box
+@ PROCEDURE dialog_draw
+' Draws dialog dialog_id&: saves the screen under it (with shadow) in dialog_background$ (not for the main screen
+' 4, which covers it all), zooms a box out from zoom_x1&.. to the dialog frame, then draws all
+' objects: first plain, calling the action of each drawn-only object that has one, then a second
+' pass with the selected states, sliders and edit cursor.
+^ shape_bounds(obj_ptr%+4,background_x&,background_y&,box_x1&,rect_y1&)
+! bounding box of the frame objects
+^ zoom_box_anim(zoom_x1&,zoom_y1&,zoom_x2&,zoom_y2&,INT{obj_ptr%+4},INT{obj_ptr%+6},INT{obj_ptr%+12},INT{obj_ptr%+14})
+! zoom box
+^ WHILE obj_ptr%<obj_end%
+' First pass: plain objects
+^ WHILE obj_ptr%<obj_end%
+' Second pass: states, sliders and edit fields
+@ PROCEDURE dialog_object_draw
+' Draws object obj_ptr% of the current dialog at dialog origin origin_x&,origin_y&. With full_draw! TRUE it
+' draws the live parts: selected buttons, slider knobs and the edit field background with its
+' cursor. With FALSE it draws the plain object: 128 line, 129 box, 130 image, 131 text (an
+' indirect image 132 is followed to its image). An edit field is drawn as its text object.
+^ obj_type&=BYTE{obj_ptr%+3}
+! object type
+^ IF INT{obj_ptr%+6}
+' Add the parents' offsets to get the screen origin object_x&,object_y&
+^ work_ptr%=rsc_data%+LONG{obj_ptr%+24}
+! object data
+^ IF obj_type&=132
+' Indirect image: data +0 is the offset of the real image
+^ IF full_draw! AND obj_type&=5
+' Edit field: the first one drawn becomes the active field, cursor at the end of its text
+^ IF mono!
+' Mono: grey dither fill for the field, its phase chosen by the parent id
+^ IF edit_object&=INT{obj_ptr%} OR edit_object&=0
+' Clear the field background, extended by the cursor height (cursor_top&/cursor_bottom&) on the active field
+^ IF cursor_keep!=FALSE
+' Clamp the cursor to the end of the text; cursor_keep! is never set TRUE, so this always runs and the
+' ELSE branch is never used
+^ ADD work_ptr%,4
+' Draw the field's text as a type 131 text object (its data starts at +4)
+^ IF INT{rsc_data%+LONG{obj_ptr%+24}+8}
+' Toggle, radio: draw selected when the state is set
+^ slider_thumb_h(obj_ptr%)
+' Horizontal slider: track (grey dither on mono), knob, knob shadow
+^ slider_thumb_v(obj_ptr%)
+' Vertical slider: track, knob, knob shadow
+^ ALINE object_x&+INT{obj_ptr%+8},object_y&+INT{obj_ptr%+10},object_x&+INT{obj_ptr%+16}
+! line: data colour, pattern
+^ shape_paint(obj_ptr%+8,object_x&,object_y&,INT{work_ptr%},INT{work_ptr%+2},work_ptr%+4)
+! box: colour, pattern, fill
+^ image_blit(object_x&+INT{obj_ptr%+8},object_y&+INT{obj_ptr%+10},work_ptr%)
+! image: bit image by Line-A BITBLT
+^ work_text$=SPACE$(INT{work_ptr%+10})
+' Text: data +10 length, +12 characters; trailing blanks removed
+^ font_ptr%=INT{work_ptr%+4}
+! font: 0-2 system font, else loaded font from font_find
+^ pix_width&=SUCC(INT{obj_ptr%+16}-INT{obj_ptr%+8})
+' Cut the text to the object width
+^ IF BTST(INT{work_ptr%+6},7)
+' Data +6 bit 7 centres the text, bit 6 aligns it right
+^ IF edit_object&=INT{obj_ptr%}
+' Active edit field: find the cursor pixel x; when the cursor is past the visible text, scroll
+' the text so the cursor and up to 5 characters after it fit in the field
+^ font_hdr%=LONG{font_ptr%+72}+MUL(2,BYTE{y_centre&+V:work_text$-1}-BYTE{font_ptr%+37})
+! GDOS font: offset table entry of the character (+72 table, +37 first character)
+^ wrmode_set(2)
+! transparent writing
+^ IF INT{work_ptr%+2}>=0
+' Data +2 shadow colour (-1 none): text shadow and its cursor, offset by shadow_dx&,shadow_dy&
+^ IF INT{work_ptr%}=0 AND INT{work_ptr%+2}=-1 AND mono!
+' White text without shadow on mono: black outline one pixel down/right
+^ font_attr_set(INT{work_ptr%},INT{work_ptr%+6},0,INT{work_ptr%+8},0)
+' Text in data +0 colour, then the cursor line in the hardware colour of that pen
+@ PROCEDURE object_action_call
+' Calls the action routine of object obj_num& of dialog dialog_id& at origin origin_x&,origin_y&.
+' Action kind action_kind& 1: dialog handlers (filesel_obj_action for dialogs 0-3, msgbox_draw for 4 and up);
+' kind 2: the main command dispatcher action_dispatch.
+@ PROCEDURE edit_action_flush
+' Runs the pending action of the active edit field (edit_object&) after typing, set up by
+' edit_mouse_x&/edit_mouse_y& (mouse position at the edit, -1 = nothing pending). It runs when flush_force& is 0, a
+' mouse button is down or the mouse has moved.
+
+@ FUNCTION msgbox_show
+' Sound Lab's own alert box.  msg_spec$ is "[icon][line|line...][button|button...][keys][LEFT]":
+' icon 1/2/3 picks icon_note%/icon_question%/icon_stop%, keys are one per button ("^M" = Control-M, a CHR$(127) prefix
+' adds 128 for a scan-code key), LEFT left-aligns the text.  The box is built as a dialog tree with id
+' dialog_id& (also its help topic) in the msgbox_tree_buf% buffer, centred on screen, and run by dialog_run.
+' Returns the number (1..4) of the button chosen.
+^ msgbox_part$(3)=""
+' Split the "[...]" fields into msgbox_part$(0..4): icon, text lines, buttons, keys, alignment.
+^ SELECT msgbox_part$(0)
+' Icon image for the box.
+^ msgbox_lines_str$=msgbox_part$(1)+"|"
+^ IF UPPER$(msgbox_part$(4))="LEFT"
+^ WHILE msgbox_lines_str$<>""
+' Text lines into msgbox_part$(0..), msgbox_text_w& = widest line in the system font.
+^ WHILE msgbox_buttons_str$<>""
+' Button labels into msgbox_part$(5..), msgbox_button_w& = widest label, msgbox_button_count& = button count.
+^ WHILE msgbox_keys$<>""
+' Decode the shortcut keys into one character per button.
+^ IF LEFT$(msgbox_keys$,3)
+! three CHR$(127) characters give key code 128
+^ IF LEFT$(msgbox_keys$)="^"
+! ^x = Control-x
+^ IF LEN(work_text$)=1
+' No key list (or a single key): the button answers Return.
+^ IF msgbox_button_count&<>LEN(msgbox_keys$)
+' Key count does not match the buttons: Return for the first button, Undo (128+$61) for the last.
+^ IF mono!
+' Box height: two rows of buttons when there are 4; doubled in high resolution.
+^ IF msgbox_button_count&=4
+' Box width: text plus icon area, or the button row (2x2 grid for 4 buttons).
+^ CARD{msgbox_tree_buf%}=dialog_id&
+' Tree header: id, size, box x1,y1 at +4/+6 and x2,y2 at +12/+14, centred on the screen.
+^ obj_ofs&=20
+' Objects of 28 bytes start at offset 20, their spec data at offset 800.
+^ FOR counter&=5 TO msgbox_button_count&+4
+' One button object per label: number, type 4 (exit button), draw type 2 (pressed look by shifting),
+' rectangle, spec offset; spec +8 = button number, +10 = its shortcut key.
+^ IF counter&=6 AND msgbox_button_count&=4
+! with 4 buttons, buttons 3 and 4 go on a second row
+^ CARD{msgbox_tree_buf%+obj_ofs&}=5
+' Closing object 5: type 129 (not clickable), 1x1 at 1,2, spec words 1,0,-1.
+^ CARD{msgbox_tree_buf%+2}=obj_ofs&
+^ tree_first%=msgbox_tree_buf%
+' tree_first%, tree_end% and rsc_data% are LOCAL here, so dialog_run sees only the message box tree.
+^ dialog_run(dialog_id&,choice&)
+@ PROCEDURE msgbox_draw
+' Draws the message box tree built by msgbox_show (called through object_action_call for trees from 4 up).
+' dialog_id& = tree id, origin_x&,origin_y& = box origin; obj_num& is not used.
+' Draws the patterned background, raised frame and drop shadow, the icon, the text lines in
+' msgbox_part$(0..) and the button frames with their centred labels in msgbox_part$(5..).
+^ IF mono!
+' High resolution: checkerboard pattern and black edges; colour: solid colour 1 and colour 2 edges.
+^ tree_find(dialog_id&,obj_found%)
+^ ARECT INT{obj_found%+4}+1
+' Background, then light top/left edges and dark bottom/right edges.
+^ ARECT shadow_dx&+INT{obj_found%+4}
+' Drop shadow below and to the right of the box.
+^ image_blit(origin_x&+17
+' Alert icon at the top left.
+^ pix_width&=INT{msgbox_tree_buf%+12}
+' Text area width (box width less the icon area); lines are centred in it unless left aligned.
+^ FOR counter&=0 TO PRED(msgbox_line_count&)
+' Each line is drawn first in colour 1 shifted by the shadow offset, then in colour 0 on top.
+^ FOR counter&=1 TO msgbox_button_count&
+' Buttons: raised frame, shadow, then the label centred; the label shadow is drawn in high res only.
+@ PROCEDURE help_page_play
+' Starts help topic dialog_id& (a dialog tree id or a help menu entry).  SOUNDLAB.HLP starts with a
+' 600-byte index of 100 entries (LONG offset after the index, WORD length); the page is a pointer
+' script that tour_step plays back, moving the mouse, clicking and typing in the real dialogs.
+' Sets tour_active! (playback running) and keeps help_allowed! FALSE while it runs.
+' Bug: when a read or seek fails the file on channel 2 is never closed.
+^ IF @fexists(home_path$+"SoundLab.HLP")<>0
+^ IF @fopen_channel("I",2,home_path$+"SoundLab.HLP")=0
+' Open the help file on channel 2 and read its index to scratch_addr%+128.
+^ help_page_ofs%=LONG{scratch_addr%+128+dialog_id&*6}
+^ IF tour_text_len&
+! topics without a page have length 0
+^ IF @fseek_abs(2,help_page_ofs%+600)=0
+' Seek to the page and read it over the index.
+^ tour_active!=TRUE
+' Reset the playback state and point the script at the start of the loaded page.
+^ LONG{asm_mouse_packet%+10}=V:ms_dummy%
+' The mouse packet handler now writes real mouse movement into a dummy long.
+^ IF NOT own_pointer!
+' Install the own mouse pointer: hook mousevec (Kbdvbase, XBIOS 34, +16) and add the VBL routine.
+^ vbl_install(pointer_vbl_code%,vbl_slot%)
+^ IF tour_active!=FALSE
+' Help could not start: allow the Help key again.
+^ help_missing_msg
+@ PROCEDURE help_missing_msg
+' Alert (tree 5): SOUNDLAB.HLP is not in the folder Sound Lab was started from.
+' The Help key is disabled while the alert is shown.
+^ choice&=@msgbox_show(5,
+@ PROCEDURE dialog_key_dispatch
+' Passes key key_code& to the key handler of the dialog being run.  dialog_id& is not a parameter here:
+' it is the tree id of the calling dialog_run.  Tree 1 = file selector, 4 = main screen, 12 = fade_curve_keys.
+^ IF dialog_id&=1
+@ PROCEDURE zoom_box_anim
+' Zoom box animation from rectangle rect_x1&,rect_ay&-rect_x2&,y_bottom& to box_x1&,rect_y1&-box_x2&,rect_y2&,
+' drawn only when zoom_enabled! is set.  Five XOR frames are drawn, then drawn again to erase them.
+' Growing boxes double their step from 1/16 to 1, shrinking ones halve from 1 to 1/16 (starting at
+' the large box), boxes of the same size move in linear quarters.
+^ ACLIP 1,0,0,639,screen_max_y&
+! the clip width is 639 in every resolution
+^ zoom_dx1&=box_x1&-rect_x1&
+' Corner deltas; zoom_dx1& is a global, not one of the LOCALs.
+^ area_from%=(rect_x2&-rect_x1&)*(y_bottom&-rect_ay&)
+^ IF area_from%>area_to%
+' Shrinking: swap the rectangles; .8408964^4 = 0.5, factors 1, 1/2 .. 1/16.
+^ IF area_from%=area_to%
+' Same size: linear 0, .25, .5, .75, 1.
+^ zoom_t=.03125
+' Growing: 1.189207^4 = 2, factors 1/16, 1/8 .. 1.
+^ FOR y_or_j&=0 TO 1
+' Pass 0 draws the frames, pass 1 draws them again to remove them (XOR, colour 15).
+@ PROCEDURE obj_rect_store
+' Stores the absolute rectangle of object addr% (origin origin_x&,origin_y&) in zoom_x1&..zoom_y2&,
+' the box the next dialog zooms out of.
+^ zoom_x1&=origin_x&+INT{addr%+8}
+@ PROCEDURE obj_draw_selected
+' Draws object shape shape_p% (obj+8) at offset ofs_x&,ofs_y& in its selected look.  Draw type
+' obj_draw_mode& (low 4 bits): 1 = invert the shape, 2/4 = move the image down-right by the shadow offset
+' and fill the uncovered top/left strip (4 = lighter pattern), 3 = draw the selected image at
+' spec offset image_ofs%.  The object shape is 4 points; points 2 and 4 zero = plain rectangle.
+^ obj_draw_mode&=obj_draw_mode& AND 15
+^ pointer_hide
+^ IF LONG{shape_p%+4}=0 AND LONG{shape_p%+12}=0
+' Rectangle: XOR fill; otherwise a 4-point polygon through APOLY.
+^ blit_params%(0)=box_x1&-rect_x1&+1
+' Line-A BITBLT block: width, height, planes, colours 15/0, replace ($03030303), source at the
+' object, destination shifted by shadow_dx&,shadow_dy&, both on the screen.
+^ IF mono!
+' Fill the strip left at the top and left edge.
+^ image_blit(ofs_x&+INT{shape_p%},ofs_y&+INT{shape_p%+2},rsc_data%+image_ofs%)
+@ PROCEDURE obj_draw_normal
+' Draws object shape shape_p% at offset ofs_x&,ofs_y& in its normal look: the reverse of obj_draw_selected.
+' Type 1 inverts again, 2/4 move the image back up-left and draw the shadow strip below and to the
+' right in colour 15, 3 draws the normal image at spec offset image_ofs%.
+^ obj_draw_mode&=obj_draw_mode& AND 15
+^ blit_params%(0)=box_x1&-rect_x1&+1
+' Source is the shifted image, destination the object position.
+^ ARECT rect_x1&+shadow_dx&
+' Shadow strips along the bottom and right edge.
+@ PROCEDURE image_blit
+' Copies image work_ptr% to the screen at ofs_x&,ofs_y& with the Line-A BITBLT.  Image format:
+' WORD width-1, WORD height-1, WORD planes, then the data interleaved like the screen.
+^ blit_params%(0)=INT{work_ptr%}+1
+@ PROCEDURE shape_paint
+' Fills object shape shape_p% at offset ofs_x&,ofs_y& with colour y_centre&, pattern pattern_addr% and writing
+' mode line_pattern&: a rectangle when points 2 and 4 are zero, else a 4-point polygon.
+^ IF LONG{shape_p%+4}=0 AND LONG{shape_p%+12}=0
+@ PROCEDURE shape_bounds
+' Returns the bounding box of object shape shape_p% in rect_x1&,rect_ay&-box_x1&,rect_y1&.
+' Points 2 and 4 are counted only for polygon shapes.
+^ FOR ix&=0 TO 12 STEP 4
+@ PROCEDURE slider_thumb_h
+' Horizontal slider obj_ptr%: works out the thumb's x range knob_start&..knob_end& from the spec
+' (+0 min, +2 max, +8 position, +10 visible size).  With min = max the thumb fills the slider.
+^ IF INT{work_ptr%}=INT{work_ptr%+2}
+^ knob_end&=MIN(knob_end&,INT{obj_ptr%+16})
+' Keep the thumb inside the slider and at least one pixel wide.
+@ PROCEDURE slider_thumb_v
+' Vertical slider obj_ptr%: the thumb's y range knob_start&..knob_end&, as slider_thumb_h.
+^ IF INT{work_ptr%}=INT{work_ptr%+2}
+@ PROCEDURE tree_find
+' Finds tree header dialog_id& between tree_first% and tree_end%; returns its address in obj_ptr%
+' (tree_end% when not found).  Header: +0 id, +2 size of the tree in bytes.
+^ obj_ptr%=tree_first%
+@ PROCEDURE obj_find
+' Finds object obj_num& of tree dialog_id& and returns its address in obj_ptr%.  Objects are 28 bytes from
+' header+20: +0 number, +3 type, +5 draw type, +6 parent, +8 shape (4 points), +24 spec offset.
+^ tree_find(dialog_id&,obj_ptr%)
+@ PROCEDURE radio_find_selected
+' Finds the selected radio button (type 2, spec +10 = group group_id&, spec +8 set) in tree dialog_id&.
+' Returns its address in obj_ptr%, or 0 when no button of the group is selected.
+^ tree_find(dialog_id&,obj_ptr%)
+@ PROCEDURE slider_value_query
+' Returns spec +8 (slider position) and +10 (size) of object obj_num& in tree dialog_id&.
+^ obj_find(dialog_id&,obj_num&,work_ptr%)
+@ PROCEDURE obj_text_query
+' Returns the text of object obj_num& in tree dialog_id& (spec +14 length, +16 text), trailing spaces cut.
+^ obj_find(dialog_id&,obj_num&,obj_found%)
+@ PROCEDURE obj_abs_pos
+' Absolute position object_x&,object_y& of the object at work_ptr% (the caller's variable, obj_num& is not
+' used) in a dialog at origin_x&,origin_y&, adding the offsets of every parent object.
+^ IF INT{work_ptr%+6}
+@ PROCEDURE radio_others_off
+' Draws every other selected button of radio group group_id& in tree dialog_id& (dialog at origin_x&,origin_y&)
+' in its normal look and clears its selected flag.  work_ptr% is the button being selected now.
+^ tree_find(dialog_id&,obj_ptr%)
+^ IF INT{obj_ptr%+6}
+' Absolute position through the parent chain.
+^ obj_draw_normal(obj_ptr%+8
+@ PROCEDURE radio_set
+' Selects radio button obj_num& of tree dialog_id& (group group_id&) and clears the other buttons of the group.
+' Only the flags change; nothing is redrawn.
+^ obj_find(dialog_id&,obj_num&,work_ptr%)
+^ CARD{rsc_data%+LONG{work_ptr%+24}+8}=-1
+@ PROCEDURE slider_setup
+' Sets slider obj_num& of tree dialog_id&: spec +0 min, +2 max, +4 step down, +6 step up (arrow clicks),
+' +8 position, +10 visible size.
+^ obj_find(dialog_id&,obj_num&,work_ptr%)
+@ PROCEDURE slider_set_pos
+' Sets position slider_value& and size slider_size& of slider obj_num& in tree dialog_id&.
+^ obj_find(dialog_id&,obj_num&,work_ptr%)
+@ FUNCTION rect_hit
+' TRUE when point ix&,y_or_j& lies in rectangle shape obj_ptr%.  For polygon shapes it returns
+' without a value, which gives 0.
+^ IF LONG{obj_ptr%+4}=0 AND LONG{obj_ptr%+12}=0
+@ FUNCTION obj_hit
+' TRUE when the mouse is inside clickable object obj_ptr% (type below 128) of a dialog at origin_x&,origin_y&.
+' It tests the caller's click_x&,click_y& instead of ix&,y_or_j& (callers pass the same values) and
+' uses the caller's dialog_id& as the tree id.
+^ IF BYTE{obj_ptr%+3}<128
+^ IF INT{obj_ptr%+6}
+' Add the offsets of the parent objects.
+@ PROCEDURE filesel_run
+' File selector.  mask_spec$ = filter list ("*.AVR|*.SPL|..."), path_dir$ = folder (updated), fname$ =
+' file name (updated), ok_flag! = TRUE when a file was chosen.  With fsel_type&=1 it calls the GEM file
+' selector and redraws the main screen, else it runs Sound Lab's own selector (tree 1) with a path
+' remembered per drive, a filter popup (tree 2) and the title set by filesel_title_set.
+^ IF fsel_type&=1
+^ IF path_dir$=""
+' No folder yet: current drive (GEMDOS 25 Dgetdrv) and folder.
+^ obj_find(1,37,obj_found%)
+' Title text from tree 1 object 37 (spec +12, 32 characters).
+^ selector_call(
+' fsel_exinput on AES 1.04 and later, else fsel_input.
+^ saved_flag!=zoom_enabled!
+' Redraw the main screen and its panels without zoom effects.
+^ IF active_dialog&=4
+' active_dialog& and obj_num& belong to the calling dialog_run: show the main screen button pressed again.
+^ SELECT active_dialog&
+' Called from the echo dialog (tree 14): redraw it over the main screen.
+^ zoom_enabled!=saved_flag!
+^ IF path_dir$=""
+' Own selector: start in the folder last used on this drive, else the drive's current folder.
+^ IF filesel_picked_obj&>0
+' Clear the file picked last time.
+^ filesel_filter$=mask_spec$
+^ radio_find_selected(2,1,obj_found%)
+^ IF mask_spec$<>filesel_prev_filter$
+' A new filter list: select its entry (object 3) in the popup and re-read the directory.
+^ IF INT{obj_found%}>4
+' Same list as last time: keep the filter picked then (4 = *.*, 5..12 = user filters).
+^ fname_pad_83(fname$)
+' File name in 8+4 layout into the name field (object 34).
+^ cursor_top&=-2-mono!
+^ IF filesel_drive&<2
+' Floppy drive: force a media change, then read the directory.
+^ dialog_run(1,choice&)
+^ obj_text_query(1,34,fname$)
+^ IF choice&=1
+! button 1 = OK
+^ ~FRE(0)
+@ PROCEDURE filesel_title_set
+' Sets the title of the next file selector (tree 1 object 37, 32 characters padded with spaces).
+^ work_str$=work_str$+SPACE$(32)
+@ PROCEDURE filesel_obj_action
+' User-object handler of the own file selector (trees 1-3), for drawing and for clicks.
+' obj_num& = object, origin_x&,origin_y& = dialog origin.  Objects: 2 drive_popup, 3 re-read, 4 filter
+' popup, 5 parent folder, 6 path line, 7..30 the 24 list slots, 31/33 scroll up/down, 32 list
+' slider, 41 filter text, 60 path, list and drive letter.
+^ SELECT obj_num&
+^ filesel_path_draw(path_dir$)
+' Object 60: path line, directory read, whole list, drive letter.
+^ obj_find(1,32,obj_found%)
+' List slot clicked: entry number = slot - 7 + scroll position (list slider spec +8).
+^ IF filesel_entry_count&>PRED(obj_num&+INT{obj_found%})-6
+^ IF BYTE{ADD((obj_num&+INT{obj_found%}-7)*16,filesel_list_addr%)}=62
+' A ">" entry is a folder: open it.
+^ obj_find(1,34,work_long%)
+' A file: copy its name into the name field (object 34) and redraw it.
+^ filesel_picked_obj&=0
+' Click below the last entry: nothing picked.
+^ IF LEN(path_dir$)>3
+' Object 5: go up to the parent folder.
+^ cursor_top&=-2
+' Object 4: filter popup; take the filter chosen in tree 2 (3 = caller's list, 4 = *.*).
+^ SELECT INT{obj_found%}
+^ IF mask_spec$<>work_text$
+^ filesel_listed$=""
+! forces the directory to be read again
+^ filesel_listed$=""
+' Object 3: re-read the directory.
+^ drive_popup
+^ filelist_scroll_up
+^ IF filesel_picked_obj&>0
+' Object 32 (list slider): drop the pick and align the scroll position to a whole row of 3.
+^ filelist_scroll_down
+^ obj_found%=@font_find(3)
+' Object 6 (path line): cut the path after the folder under the mouse pointer.
+^ pointer_hide
+' Object 41: the caller's filter list, at most 21 characters, with a shadow.
+^ cursor_top&=0
+@ PROCEDURE filesel_refresh
+' Re-reads the directory path_dir$ (when not already listed) and redraws the path line and the list.
+' Uses the caller's obj_found%, origin_x& and origin_y&.
+^ IF filesel_picked_obj&>0
+^ filesel_path_draw(path_dir$)
+@ PROCEDURE filesel_init
+' Sets up the own file selector: drive_paths$() = last path per drive A..P, a 6400-byte list buffer
+' (400 entries of 16 bytes), the current drive, and empty filters.
+^ FOR ix&=0 TO 15
+' Does nothing: the loop only skips B: when one floppy is connected (_nflops, $4A6).
+^ DIM filesel_list|(6399)
+^ filesel_drive&=GEMDOS(25)
+! Dgetdrv
+@ PROCEDURE filesel_key
+' File selector keys.  Alt+A..Alt+P (128 + the letters' scan codes) switch drive when the drive
+' exists; the current drive's key re-reads it.  F1..F10 (128 + $3B..$44) pick a filter:
+' F1 the caller's list, F2 *.*, F3..F10 the user filters (popup objects 5..12, text in 13..20).
+^ key_inp&=INSTR(work_text$,CHR$(key_code&))
+^ SELECT key_code&
+^ IF (mask_spec$<>work_text$) AND (mask_spec$<>"")
+' New filter: select its popup entry and re-read the directory.
+^ drive_map&=BIOS(10)
+' Drvmap; with one floppy (_nflops = 1) B: is removed.
+^ IF sel_index&<>-1 AND sel_index&<>filesel_drive&
+' Another drive: save this drive's path, take the other's (or its current folder), redraw.
+^ IF sel_index&<>-1
+' Same drive: re-read it.
+@ PROCEDURE filesel_dir_scan
+' Reads folder path_dir$ into the list buffer filesel_list_addr%: 16 bytes per entry, ">" + name for folders and
+' " " + name for files that match filter mask_spec$, sorted with folders first, at most 400 entries.
+' A missing path is cut back folder by folder.  Sets filesel_entry_count& (entries), the list slider and filesel_listed$.
+^ IF path_dir$<>filesel_listed$
+^ pointer_busy(1)
+! busy pointer
+^ dta_addr%=GEMDOS(47)
+! Fgetdta
+^ fs_status&=FSFIRST(path_dir$+"*.*",-1)
+^ WHILE fs_status&=-34
+' Path not found (EPTHNF): go up one folder.
+^ attr_byte|=BYTE{dta_addr%+21}
+' DTA +21 attributes, +30 name.
+^ IF BTST(attr_byte|,4)
+' Folder (not . or ..): stored with CHR$(7) so it sorts before the files.
+^ IF (BTST(attr_byte|,3))=FALSE
+' File (not the volume label) matching the filter.
+^ fs_status&=GEMDOS(79)
+! Fsnext
+^ IF list_bytes&=6400
+! the buffer is full
+^ IF list_bytes&>1
+' Selection sort of the 16-byte entries.
+^ FOR ix&=0 TO SUB(list_bytes&,16) STEP 16
+' Mark folders with ">".
+^ filesel_entry_count&=list_bytes& DIV 16
+^ obj_find(1,32,obj_found%)
+' List slider (object 32): size = rows of 3 entries, position 0.
+@ PROCEDURE filesel_list_draw
+' Draws the file list rows range_start&..range_end& (0, 3 .. 21; 3 entries per row, 8 rows) from the scroll
+' position.  Slot objects 7..30 get draw type 17 when they hold an entry, 16 when empty.
+' A full redraw (0 to 23) clears the area first and unselects every slot.
+^ obj_find(1,32,obj_found%)
+^ ADD obj_found%,8
+! scroll position
+^ IF range_start&=0 AND range_end&=23
+^ FOR counter&=0 TO 23 STEP 3
+^ IF filesel_entry_count&>counter&+pix_width&+INT{obj_found%}
+^ IF redraw_all!<>FALSE
+@ PROCEDURE filesel_path_draw
+' Draws path path_dir$ on the path line of the file selector, cut to 364 pixels, with a shadow.
+^ WHILE @pixel_width_of(font_ptr%,path_dir$)>364
+@ PROCEDURE filesel_drive_draw
+' Draws the current drive letter (filesel_drive&) centred in the drive box, moved by ix&,y_or_j&.
+^ IF mono!
+
+@ PROCEDURE drive_popup
+' Drive button of the file selector: pops up a panel of 16 drive buttons A-P (4 per row) next to the
+' dialog at origin_x&,origin_y&.  Drives missing from the BIOS drive map are drawn greyed and cannot be picked.
+' The button under the pointer is drawn pressed while the button is held; on release the panel is removed
+' and, if another drive was chosen, the current path is stored for the old drive, the new drive's last
+' path (or its current GEMDOS directory) becomes path_dir$, the list is re-read and the drive label redrawn.
+^ GET 273+origin_x&,SUCC(origin_y&)
+' Save the screen under the panel, then draw the panel with its shadow edges (mono: 2x height).
+^ font_ptr%=@font_find(3)
+! font 3 = the Sound Lab font
+^ drive_map&=BIOS(10)
+! BIOS Drvmap: bit n set = drive n present
+^ IF DPEEK(1190)=1
+' _nflops ($4A6) = 1: drive B is only the second face of A, so take it out of the map.
+^ FOR counter&=0 TO 15
+' Draw the 16 buttons: shadow, face and the drive letter centred on it.
+^ ix&=ix&+24
+' Next button; after four buttons start a new row.
+^ sel_index&=-1
+' Track the pointer until the button is released.  sel_index& = drive drawn pressed (-1 none).
+^ pointer_state(ix&,y_or_j&,k&)
+' Turn the pointer position into a grid offset; the buttons are 24 wide and 12 (mono 24) high.
+^ counter&=(y_or_j& DIV 12)*4+(ix& DIV 24)
+! drive number under the pointer
+^ IF sel_index&>=0
+' Redraw the previous drive as a raised button (image moved back up-left, shadow redrawn).
+^ IF BTST(drive_map&,counter&)
+' A present drive: draw it pressed by moving its image 4 pixels down-right.
+^ image_blit(273+origin_x&,origin_y&+1,V:saved_bg$)
+' Button released: put back the screen under the panel.
+^ IF sel_index&<>-1 AND sel_index&<>filesel_drive&
+' A different drive was chosen: switch the selector to its stored path and re-read the directory.
+@ PROCEDURE filelist_scroll_up
+' File selector up arrow (object 31): the 8 rows x 3 columns file list moves down one row on screen
+' with RC_COPY, the freed top row is cleared and its three names are drawn (filesel_list_draw(0,2)).
+' The selected file slot filesel_picked_obj& moves down a row with it (+3); when it leaves the list it is cleared.
+^ RC_COPY XBIOS(3),origin_x&+9,origin_y&+58
+! mono: rows are 16 pixels
+^ RC_COPY XBIOS(3),origin_x&+9,origin_y&+29
+! colour: rows are 8 pixels
+^ IF filesel_picked_obj&>0
+' Clear the selected state of the old slot, then select the slot one row lower.
+@ PROCEDURE filelist_scroll_down
+' File selector down arrow (object 33): the file list moves up one row on screen, the freed bottom row is
+' cleared and its three names are drawn (filesel_list_draw(21,23)).  The selected slot moves up a row (-3).
+' The clearing ARECTs use V:pattern_val%, a variable never set at this level, so the pattern is 0; in replace
+' mode with colour 0 that still clears the row.
+^ IF filesel_picked_obj&>0
+' Clear the selected state of the old slot, then select the slot one row higher.
+@ PROCEDURE fname_field_dot_remove
+' For a filename edit field (type 7) holding "NAME    .EXT" (text at +16, length at +14): takes the "."
+' at position 8 out so the text is 11 characters, and moves the cursor cursor_pos& back past the dot.
+' fname_field_dot_insert undoes this after the edit.  Other field types are left alone.
+^ CARD{work_ptr%+14}=11
+! field length without the dot
+@ PROCEDURE fname_field_dot_insert
+' For a filename edit field (type 7): opens a gap at position 8 again (length 12) and puts a "." there
+' unless the extension is blank, then moves the cursor cursor_pos& forward over the dot.
+^ IF BYTE{work_ptr%+24}<>32
+! "." (46) only if an extension follows
+@ PROCEDURE fname_pad_83
+' Pads a filename to the fixed 12-character "NAME    .EXT" layout used in the file list and the edit
+' field: name padded to 8 characters, then the extension with its dot padded to 4.  fname_arg$ is VAR.
+@ PROCEDURE strip_spaces
+' Removes every space from the VAR string fname_arg$ (turns the padded 8.3 layout back into a filename).
+@ FUNCTION wildcard_match
+' Wildcard test: returns TRUE if filename fname$ matches one of the patterns in pattern_list$, separated by "|".
+' Pattern characters: "*" any run up to the next pattern character, "?" any one character, "#" a run of
+' digits, anything else must be equal.  A name without a dot gets one when the pattern has a dot.
+' A pattern fails if it is not used up, unless what is left is a final "*" or "#".
+^ FOR ix&=1 TO LEN(pattern_list$)
+' Take the next pattern work_text$ up to the next "|" (ix& jumps to that "|").
+^ ok_flag!=TRUE
+' Compare the name character by character; counter& is the position in the pattern, pat_char| its character.
+^ IF pat_char|=42
+' "*": skip name characters until one equals the pattern character after the "*", then go past both.
+^ IF pat_char|=35
+' "#": a non-digit ends the digit run; the same name character is tried against the next pattern char.
+^ IF pat_char|=63
+' "?": matches any one character.
+^ IF pat_char|=fname_char|
+' Literal character: must be equal, otherwise this pattern fails.
+^ IF counter&<LEN(work_text$) OR
+' Pattern not used up (except a last "*" or "#"): no match.
+@ PROCEDURE font_convert_intel
+' Prepares a GEM font in memory (font_hdr%) stored in Intel byte order: swaps the bytes of every word from the
+' start of the header up to the character data (header, horizontal offset and character offset tables),
+' then turns the hor_table (+68), off_table (+72) and dat_table (+76) offsets into absolute pointers.
+' With dialog_id&>0 the font is linked into the system font chain as font id dialog_id&.
+^ conv_len&=PEEK(76+font_hdr%)+SHL(PEEK(77+font_hdr%),8)
+! dat_table offset read in Intel order = bytes to swap
+@ PROCEDURE font_link
+' Under GEM (own_pointer! FALSE) appends font header font_hdr% to the end of the system font chain (next_font
+' pointer at +84) and gives it font id dialog_id&.  Without GEM the font is used directly (font_find).
+@ PROCEDURE font_chain_last
+' Sets font_last% to the last font header of the system font chain (the one whose next_font at +84 is 0).
+@ PROCEDURE font_chain_first
+' Sets font_chain% to the first system font header for the current resolution.
+' Without GEM: runs Line-A init ($A000, move.l a1,d0, rts) to get the font header table and takes the
+' 8x8 font (+4) or, in mono, the 8x16 font (+8).  Under GEM: the font pointer in the Line-A variable at
+' -452, moved on to the next font in mono.
+^ linea_code$=MKL$(-1610604535)+"Nu"
+! $A000 $2009 $4E75 as code
+^ font_chain%=LONG{C:base_ptr%()+4-4*mono!}
+! 8x8 font, 8x16 in mono
+^ font_chain%=LONG{L~A-452}
+! GEM: current font pointer from the Line-A variables
+@ PROCEDURE font_unlink
+' Selects font 1, then under GEM takes font header base_ptr% out of the system font chain by pointing its
+' predecessor's next_font (+84) at the font that follows it.
+@ PROCEDURE font_restore_intel
+' Undoes font_convert_intel at exit: unlinks the font, turns its table pointers back into offsets and swaps the
+' bytes of the words back to Intel order.
+@ FUNCTION pixel_width_of
+' Returns the width in pixels of string txt$ in font font_ptr%.  A value below 3 means a fixed 8-pixel
+' font; otherwise each character's width comes from the font's off_table (+72): next offset minus this
+' one, indexed from the first character code (low byte of the word at +36).
+@ FUNCTION font_find
+' Returns the font header pointer for font id dialog_id& (also left in font_chain%).  Without GEM ids below 3 give
+' the Line-A system font and any other id the Sound Lab font font_main%.  Under GEM the system font chain is
+' walked for the id; if it is not there the last font of the chain is returned.
+@ PROCEDURE mnu_dispatch
+' Runs a menu choice.  mnu_path$ is the menu path ("1 ..." Desk menu, "2 ..." File/Disk menu).  The LOCAL
+' zoom_x1&..zoom_y2& give the centre of the screen as the start rectangle of the dialog zoom box; the menu
+' procedures called here see them.
+@ PROCEDURE mnu_item_disable
+' Disables the menu item named by path mnu_path$: sets bit 6 (disabled) and bit 1 (light text) of the flag
+' byte at +9 of its record.
+@ PROCEDURE mnu_item_rect
+' Sets the rectangle of the menu item named by path mnu_path$: x, y, width, height at record +0..+6.
+' A negative value leaves that field as it is.  In mono y and height are doubled.
+@ PROCEDURE mnu_sub_rect
+' Sets the box of the submenu of the menu item named by path mnu_path$ (x, y, width, height, relative to the
+' item).  Skips the item's text (or image) to reach the submenu header, which starts with its length word.
+' Only y uses -1 as "keep"; the others use any negative value.
+^ IF BTST(BYTE{base_ptr%+11},2)
+' Image item: skip the image data; text item: skip the null-terminated text (padded to even).
+@ PROCEDURE mnu_build
+' Builds the menu bar data mnu_data$ from the DATA lines and sets the screen and menu metrics.
+' Each menu record: +0 x, +2 y, +4 width, +6 height, +8 font id (bit 7 = separator line), +9 flags
+' (bit 6 disabled, bit 5 centred, low bits text effects), +10 high nibble fill colour, low nibble text
+' colour, +11 bits 3-7 text height, bit 2 image item, bit 1 has a submenu, bit 0 outline highlight;
+' then the null-terminated text padded to even.  A record with a submenu is followed by the submenu header
+' (length, x, y, width, height) and the submenu's records.
+^ DIM pen_map&(15)
+' pen_map&() maps colour numbers 0-15 to VDI pen indexes.
+^ scr_max_x&=319
+' Screen limits, submenu shadow size and the mono text offset from the resolution (XBIOS Getrez).
+^ item_attr$=MKL$(16781104)
+' Default attributes $01001030: font 1, no flags, fill 1, text colour 0, text height 6.
+' mnu_item_h& = item height, menubar_height& = menu bar height (doubled in mono).
+^ sep_pattern&=21845
+! $5555 dotted line for separators
+^ mnu_shadows!=TRUE
+! submenus get drop shadows
+^ menubar_width&=16
+' Read the titles: each title is placed after the previous one at x menubar_width&, y 1, and its menu items are
+' read by mnu_list_build.  An empty string ends the menu bar.
+^ IF LEFT$(item_header$,8)=(MKL$(0)+MKL$(0))
+' No explicit position: x, y 1, text width, bar height - 1.
+^ menubar_width&=0
+' Walk all title records and set menubar_width&/menubar_height& to the right and bottom edge of the bar.
+^ IF BTST(origin_y&,2)
+' Bug: an image item's length is read from the first record (V:mnu_data$+12), not from this one.
+' No item uses an image, so it has no effect.
+@ PROCEDURE mnu_list_build
+' Reads the items of one menu from DATA until an empty string and appends them as a submenu to the record
+' string work_str$ (VAR): submenu header (length, x subm_x&, y subm_y&, widest width subm_width&, total height
+' subm_height&) followed by the item records.  A "*" makes the items that follow (to the next empty string) a
+' submenu of the previous item, built by a recursive call.  Items stack downwards with height mnu_item_h&
+' (separators 3, mono 5); "^n" adds n pixels of space above an item.
+^ IF item_text$="*"
+' Submenu of the previous item: build it onto prev_record$ and carry on reading this menu.
+^ IF LEFT$(item_header$,8)=(MKL$(0)+MKL$(0))
+' No explicit position: place the item below the previous ones.
+^ IF INT{V:item_header$+4}=0
+' No explicit width: use the text width in the item's font.
+^ y_or_j&=0
+' Second pass: give every item without a width the widest width, and put every submenu 32 pixels in from
+' the right edge of its item.
+^ MID$(work_str$,12,1)=
+' Mark the parent record as having a submenu (bit 1 of +11) and append the submenu header and records.
+@ PROCEDURE mnu_item_find
+' Finds the menu record named by path mnu_path$ ("2 7 3": title 2, item 7, submenu item 3) and returns its
+' address in addr% (VAR), or 0 if it is not there.  Each number skips records in the current level;
+' a record with a submenu narrows the search to that submenu for the next number.
+^ WHILE ix&<y_or_j& AND counter&<range_end&
+' Skip y_or_j&-1 records, each with its text (or image) and any submenu.
+^ IF BTST(BYTE{addr%+11},1)
+' The record has a submenu: the next number searches its records only.
+@ PROCEDURE mnu_item_parse
+' Parses the prefixes of a menu DATA string item_text$ (VAR) into the record header item_header$ (owned by the
+' caller): "%n" sets the default font to n and reads the next string; "*" followed by 24 hex digits
+' gives the whole 12-byte header; "^n" sets the space above the item (item_gap&); "-text" is a disabled
+' item; "-" alone is a separator line; a first character above $80 adds its low 6 bits to the flags.
+^ IF LEFT$(item_text$)="%"
+! "%n": default font for the following items
+^ IF LEFT$(item_text$)="*"
+! "*" + 24 hex digits: explicit 12-byte header
+^ IF LEFT$(item_text$)="^"
+! "^n": n pixels of space above the item
+^ IF (LEFT$(item_text$)="-") AND
+' "-text": disabled (bit 6) and light text (bit 1).  "-": separator (+8 bit 7), disabled.
+@ PROCEDURE menubar_poll
+' Menu bar handler, called from the dialog loop.  When the pointer is on the menu bar and a button is
+' down (or menus drop on touch, menu_click_opt! FALSE): saves the bar area, draws the bar, tracks the menus
+' with mnu_track, runs the choice, empties the keyboard buffer and puts the bar area back.
+^ mnu_track(0,LEN(mnu_data$),0,0,menubar_width&,menubar_height&,0,0)
+! track from the menu bar level
+^ WHILE BIOS(1,2)
+' BIOS Bconstat/Bconin on the console: throw away keys pressed during the menu.
+@ PROCEDURE menubar_draw
+' Draws the menu bar: clears it, draws the line under it (dotted $AAAA5555 in mono) and all title records.
+@ PROCEDURE mnu_records_draw
+' Draws the menu records of mnu_data$ from offset obj_ofs& for slider_size& bytes, at origin ix&,y_or_j&.
+' num_val& non-zero greys the text (effect 2) of the whole run, as for a disabled title's menu.
+' Per record: background fill if its fill colour is not 0, then a dotted line (separator), the image
+' (image item) or the text in the record's font, colour, effects and height, centred if flag bit 5.
+^ wrmode_set(2)
+! transparent mode
+^ IF BTST(BYTE{rec_ptr%+8},7)
+' Separator: a dotted line across the item.
+^ IF BTST(rec_flags&,2)
+' Image item: the length is at +12 and the GET image data at +14.
+^ item_height&=BYTE{rec_ptr%+11} DIV 8
+' Text item: set font, then colour, effects and height.
+^ IF BTST(rec_flags&,2)
+' Step over the record's text or image, and over its submenu if it has one.
+' Bug: as in mnu_build the image length comes from the first record; no image items exist.
+@ PROCEDURE mnu_track
+' Tracks the pointer over a menu level: records range_start&..range_end& of mnu_data$, drawn at rect_x1&,rect_ay&, area up
+' to rect_x2&,y_bottom&; sel_index& = depth (0 = menu bar), num_val& = level greyed.  The item under the pointer is
+' highlighted (XOR box, or outline if flag bit 0); an item with a submenu opens it (background saved in
+' subm_bg$, frame, optional shadow) and the pointer inside it recurses one level deeper.
+' The menu bar level stays until the button is released; then mnu_choice$ gets the path of the item under the
+' pointer.  ms_b&=-1 ends all levels.
+^ DO WHILE ms_x&>=PRED(rect_x1&)
+' GFA gives AND priority over OR: the menu bar level (sel_index&=0) loops whatever the pointer position.
+^ mnu_hit_test(ms_x&-rect_x1&,ms_y&-rect_ay&,range_start&,range_end&,cur_rec&)
+' cur_rec& = record under the pointer; when it changes the old one is unhighlighted and the new one lit.
+^ IF old_rec&>=0
+' Unhighlight the old item: close its submenu by putting back the saved background.
+^ IF cur_rec&>=0
+' Highlight the new item.
+^ IF BTST(BYTE{cur_rec&+V:mnu_data$+11},1)
+' The new item has a submenu: find its header, save the screen under it, draw the frame and clear it.
+^ IF mnu_shadows!
+' Drop shadow along the right and bottom edges, kept inside the parent menu's area.
+^ mnu_records_draw(origin_x&,origin_y&,
+' Draw the submenu items, greyed if the item or its level is disabled.
+^ IF subm_hdr&>=0
+' Pointer inside the open submenu: track it one level deeper.
+^ IF parent_rec%=0
+! never true: V:mnu_data$ is added, so cur_rec&=-1 gives V:mnu_data$-1
+^ IF ms_b&=0 AND prev_button&=1
+' Button released: end tracking at every level and build the choice path.  An item with a submenu is no
+' choice unless flag bit 7 of +9 is set, so tracking carries on.
+^ IF old_rec&>=0
+' Leaving this level: unhighlight the last item and close its submenu.
+@ PROCEDURE mnu_hit_test
+' Hit test: walks the records from offset range_start& to range_end& and returns in cur_rec& (VAR) the offset of the
+' first one containing point ix&,y_or_j&, or -1.  A record counts if it is enabled and its level is not
+' greyed (num_val& of the calling mnu_track), or if it has a submenu.
+^ IF (BTST(BYTE{rec_ptr%+9},6))=FALSE AND num_val&=0 OR
+' num_val& here is the caller's parameter (GFA locals are visible to called procedures).
+@ PROCEDURE mnu_path_build
+' Builds the menu path of record target_rec%: walks all records counting them per level (one byte per level
+' in mnu_path$), with a stack of submenu end offsets in nest_stack$ to step back out of a level.  Returns the
+' numbers as text separated by spaces ("2 7 3") in mnu_path$ (VAR), or "" if the record is not found.
+^ WHILE counter&=CVI(RIGHT$(nest_stack$,2))
+' End of a submenu reached: drop back to the parent level.
+^ MID$(mnu_path$,LEN(mnu_path$),1)=
+! count this record at the current level
+^ IF BTST(rec_flags&,1)
+' The record has a submenu: open a new level and push the submenu's end offset.
+@ FUNCTION path_number_pop
+' Returns the first number of the path string mnu_path$ (VAR) and removes it and the space after it.
+@ PROCEDURE frame_draw
+' Draws the outline of rectangle rect_x1&,rect_ay&-rect_x2&,y_bottom& in colour y_centre&, graphics mode mode_param&,
+' line pattern line_pattern&: two vertical lines with ALINE and two horizontal lines with HLINE.
+@ PROCEDURE channel_table_init
+' DIMs the file tables for channels 0-99: chan_handles&() GEMDOS handle, chan_pos%() file position.
+@ FUNCTION fopen_channel
+' Opens file fname_z$ on channel channel&.  Mode access_mode$: "I", "O", "U", "A", or "N" for a new file.
+' "N": if the file exists, the file-exists option exists_option& (2 = ask with an alert) chooses Erase (Fdelete),
+' Rename (old file renamed to .BAK) or Cancel (-36); then the file is created (Fcreate, Fclose) and opened
+' as "O".  Every GEMDOS call repeats while dos_error_alert answers Retry (-999).
+' Returns 0 and stores the handle, or the GEMDOS error.  last_file_op& is set but never read.
+' Bug: Fopen gets INSTR("IOUA",access_mode$) = 1-4, one above GEMDOS's 0 read / 1 write / 2 read-write.
+^ IF exists_option&=2
+' Ask: alert 19 "A file with that name already exists." Erase / Rename / Cancel.
+^ dos_result&=GEMDOS(65,L:V:fname_z$)
+! Fdelete
+^ bak_fname$=LEFT$(fname_z$,INSTR(fname_z$,CHR$(0))-4)+"BAK"+CHR$(0)
+' Rename: delete an old .BAK file, then Frename the file to .BAK (assumes a 3-letter extension).
+^ dos_result&=GEMDOS(86,0,L:V:fname_z$,L:V:bak_fname$)
+! Frename
+^ dos_result&=-36
+! Cancel: EACCDN
+^ dos_result&=GEMDOS(60,L:V:fname_z$,0)
+! Fcreate, normal attributes
+^ dos_result&=GEMDOS(62,dos_result&)
+! Fclose
+^ access_mode$=CHR$(79)
+! now open it as "O"
+^ dos_result&=GEMDOS(61,L:V:fname_z$,INSTR("IOUA",access_mode$))
+! Fopen
+@ FUNCTION fread_channel
+' Reads count% bytes from channel channel& to address addr% (GEMDOS Fread), repeating on Retry.
+' Returns 0 and moves the stored position on by count%, or the GEMDOS error.
+^ io_count%=GEMDOS(63,chan_handles&(channel&),L:count%,L:addr%)
+! Fread
+@ FUNCTION fwrite_channel
+' Writes count% bytes from address addr% to channel channel& (GEMDOS Fwrite), repeating on Retry.
+' Returns 0 and moves the stored position on by count%, or the GEMDOS error.
+^ io_count%=GEMDOS(64,chan_handles&(channel&),L:count%,L:addr%)
+! Fwrite
+@ FUNCTION fclose_channel
+' Closes channel channel& (GEMDOS Fclose), repeating on Retry; returns the GEMDOS result.
+@ FUNCTION fsize_of
+' Returns the length of file path_z$ from the DTA after Fsfirst (attributes $27: read-only, hidden,
+' system, archive), or the GEMDOS error.  Uses the DTA from Fgetdta.
+^ base_ptr%=GEMDOS(47)
+! Fgetdta
+^ RETURN LPEEK(26+base_ptr%)
+! d_length
+@ FUNCTION fread_byte
+' Reads one byte from channel channel& and returns it, or the error.  Never called.
+@ FUNCTION fread_word
+' Reads one word from channel channel& and returns it, or the error.  Never called.
+@ FUNCTION fseek_abs
+' Moves channel channel& to byte fpos_seek% from the start of the file (GEMDOS Fseek mode 0), repeating on
+' Retry.  Returns 0 and stores the position, or the GEMDOS error.
+@ FUNCTION fseek_rel
+' Moves channel channel& on by fpos_seek% bytes (GEMDOS Fseek mode 1), repeating on Retry.
+' Returns 0 and adds to the stored position, or the GEMDOS error.
+@ FUNCTION fexists
+' Returns -1 if file fname_z$ exists (Fsfirst with all attributes), else 0.  No error alert.
+' Also shows the mouse and resets the clip rectangle, as callers expect after an alert or dialog.
+^ dta_addr%=GEMDOS(47)
+! Fgetdta, not used further
+@ PROCEDURE dos_error_alert
+' Shows a Retry/Cancel alert (alert 21) for GEMDOS error gem_error& (VAR): -1 general error, -4/-10/-11/-16
+' CRC, write, read and bad sector errors, -13 write-protected, -14 media change, -33 file not found,
+' -34 path not found, -35 no handles left, -36 access denied, -64 range error, anything else by number.
+' Retry sets gem_error& to -999, which makes the caller repeat the GEMDOS call.
+' too_many_files! is set for -35 but never used.
+^ pointer_busy(0)
+! arrow pointer for the alert
+@ PROCEDURE basic_err_report
+' ON ERROR handler (set at the start of the program): reports the GFA BASIC error number with the author's
+' address, in an alert if alerts can be shown (dlgs_ready!), otherwise as text on a cleared screen waiting for
+' a key.  Then restores the system if it was changed (sys_changed!, sys_restore) and ends the program.
+@ FUNCTION thousands_commas$
+' Returns number num_value% as a string with a comma before every group of three digits ("1,234,567").
+
